@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-
-def _weekly_signal_dates(panel: pd.DataFrame) -> list[pd.Timestamp]:
-    calendar = pd.DataFrame({"timestamp": sorted(panel["timestamp"].drop_duplicates())})
-    calendar["rebalance_period"] = calendar["timestamp"].dt.to_period("W-FRI")
-    return calendar.groupby("rebalance_period")["timestamp"].max().sort_values().tolist()
+from marketlab.rebalance import next_effective_dates, weekly_signal_dates
 
 
 def generate_weights(
@@ -28,14 +24,10 @@ def generate_weights(
     )
 
     symbols = sorted(working["symbol"].unique())
-    unique_dates = pd.Index(sorted(working["timestamp"].drop_duplicates()))
     rows: list[dict[str, object]] = []
 
-    for signal_date in _weekly_signal_dates(working):
-        next_dates = unique_dates[unique_dates > signal_date]
-        if next_dates.empty:
-            continue
-        effective_date = next_dates.min()
+    effective_dates = next_effective_dates(working, weekly_signal_dates(working))
+    for signal_date, effective_date in effective_dates.items():
         signal_slice = (
             working.loc[working["timestamp"] == signal_date, ["symbol", "fast_ma", "slow_ma"]]
             .set_index("symbol")
