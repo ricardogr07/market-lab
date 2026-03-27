@@ -155,6 +155,28 @@ def test_trailing_week_without_full_horizon_is_dropped(
     assert len(labeled) == 6
 
 
+def test_missing_symbol_on_signal_date_is_dropped_for_global_rebalance_calendar(
+    featured_panel: pd.DataFrame,
+) -> None:
+    partial_panel = featured_panel.loc[
+        ~(
+            (featured_panel["symbol"] == "BBB")
+            & (featured_panel["timestamp"] == pd.Timestamp("2024-01-18"))
+        )
+    ].copy()
+
+    snapshots = build_weekly_snapshots(partial_panel, feature_columns=["feature_a", "feature_b"])
+
+    assert not (
+        (snapshots["symbol"] == "BBB")
+        & (snapshots["signal_date"] == pd.Timestamp("2024-01-18"))
+    ).any()
+    assert (
+        (snapshots["symbol"] == "AAA")
+        & (snapshots["signal_date"] == pd.Timestamp("2024-01-18"))
+    ).any()
+
+
 def test_missing_symbol_on_exit_date_is_dropped_explicitly(
     featured_panel: pd.DataFrame,
 ) -> None:
