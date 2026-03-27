@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from marketlab.config import load_config
 from marketlab.log import configure_logging
-from marketlab.pipeline import backtest, prepare_data, run_experiment
+from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,11 +40,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "train-models":
-        print(
-            "train-models is reserved for Sprint 2 and is not implemented yet.",
-            file=sys.stderr,
-        )
-        return 2
+        artifacts = train_models(config)
+        print(artifacts.run_dir)
+        return 0
 
     parser.error(f"Unsupported command: {args.command}")
     return 1
