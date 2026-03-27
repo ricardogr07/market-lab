@@ -12,11 +12,14 @@ from marketlab.backtest.metrics import compute_strategy_metrics
 from marketlab.config import ExperimentConfig
 from marketlab.data.market import load_symbol_frames
 from marketlab.data.panel import build_market_panel, load_panel_csv, save_panel_csv
+from marketlab.evaluation import build_walk_forward_folds, folds_to_frame
 from marketlab.features.engineering import add_feature_set
+from marketlab.models import train_direction_models_on_folds
 from marketlab.reports.markdown import write_markdown_report
 from marketlab.reports.plots import plot_cumulative_returns, plot_drawdown
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
+from marketlab.targets.weekly import build_weekly_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +33,16 @@ class ExperimentArtifacts:
     report_path: Path | None
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
+
+
+@dataclass(slots=True)
+class TrainModelsArtifacts:
+    run_dir: Path
+    panel_path: Path
+    folds_path: Path
+    model_manifest_path: Path
+    metrics_path: Path | None
+    predictions_path: Path | None
 
 
 def prepare_data(config: ExperimentConfig) -> tuple[pd.DataFrame, Path]:
@@ -94,6 +107,60 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.Dat
     performance = pd.concat(performance_frames, ignore_index=True)
     metrics = compute_strategy_metrics(performance)
     return performance, metrics
+
+
+def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
+    if not config.models:
+        raise RuntimeError("No models are configured for train-models.")
+
+    panel, panel_path = prepare_data(config)
+    modeling_dataset = build_weekly_modeling_dataset(panel, config)
+    if modeling_dataset.empty:
+        raise RuntimeError("Weekly modeling dataset is empty.")
+
+    folds = build_walk_forward_folds(
+        modeling_dataset=modeling_dataset,
+        walk_forward=config.evaluation.walk_forward,
+        frequency=config.portfolio.ranking.rebalance_frequency,
+    )
+    if not folds:
+        raise RuntimeError("No walk-forward folds are available for train-models.")
+
+    run_dir = _run_dir(config)
+
+    folds_path = run_dir / "folds.csv"
+    folds_to_frame(folds).to_csv(folds_path, index=False)
+
+    training_outputs = train_direction_models_on_folds(
+        modeling_dataset=modeling_dataset,
+        folds=folds,
+        model_specs=config.models,
+        target_type=config.target.type,
+        run_dir=run_dir,
+        save_predictions=config.artifacts.save_predictions,
+    )
+
+    model_manifest_path = run_dir / "model_manifest.csv"
+    training_outputs.manifest.to_csv(model_manifest_path, index=False)
+
+    metrics_path: Path | None = None
+    if config.artifacts.save_metrics_csv:
+        metrics_path = run_dir / "model_metrics.csv"
+        training_outputs.metrics.to_csv(metrics_path, index=False)
+
+    predictions_path: Path | None = None
+    if config.artifacts.save_predictions and training_outputs.predictions is not None:
+        predictions_path = run_dir / "predictions.csv"
+        training_outputs.predictions.to_csv(predictions_path, index=False)
+
+    return TrainModelsArtifacts(
+        run_dir=run_dir,
+        panel_path=panel_path,
+        folds_path=folds_path,
+        model_manifest_path=model_manifest_path,
+        metrics_path=metrics_path,
+        predictions_path=predictions_path,
+    )
 
 
 def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
