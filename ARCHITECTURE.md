@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a Sprint 1 research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation is intentionally narrow: fetch or reuse market data, normalize it into one canonical panel, engineer trailing features, run two baseline strategies, backtest them, and emit artifacts that are easy to inspect and compare.
+MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first Phase 2 foundations: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, two baseline strategies, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and freezes the working rules that should guide later iterations.
 
@@ -11,13 +11,14 @@ This document ties the current pieces together and freezes the working rules tha
 - In scope now:
   - canonical market panel preparation
   - trailing feature engineering
+  - weekly modeling dataset generation
+  - walk-forward fold generation
   - `buy_hold` and `sma` baselines
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
   - fixture-backed tests and an opt-in real-data E2E runner
 - Deferred to later sprints:
   - model training
-  - walk-forward evaluation
   - ranking strategy
   - CI, Docker, and broader packaging hardening
 
@@ -44,6 +45,9 @@ flowchart TD
     Pipeline --> Market[src/marketlab/data/market.py]
     Pipeline --> Panel[src/marketlab/data/panel.py]
     Pipeline --> Features[src/marketlab/features/engineering.py]
+    Features --> Targets[src/marketlab/targets/weekly.py]
+    Targets --> ModelingDataset[Weekly modeling dataset]
+    ModelingDataset --> Evaluation[src/marketlab/evaluation/walk_forward.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
     Pipeline --> Engine[src/marketlab/backtest/engine.py]
@@ -54,6 +58,7 @@ flowchart TD
     Market --> RawCache[Raw symbol CSV cache]
     Panel --> PreparedPanel[Prepared panel CSV]
     Engine --> Performance[PerformanceFrame]
+    Evaluation --> FoldDefs[WalkForwardFold metadata]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
     Plots --> PlotFiles[cumulative_returns.png and drawdown.png]
@@ -331,6 +336,35 @@ Best practice:
 - Only add trailing features in Sprint 1.
 - Do not introduce forward-looking features or label leakage.
 
+### `src/marketlab/rebalance.py`
+
+- Centralizes the shared weekly rebalance calendar.
+- Resolves the last available signal date in each `W-FRI` period.
+- Resolves the next effective trading date after each signal date.
+
+Best practice:
+- Keep weekly signal timing in one shared module so targets, evaluation, and strategies cannot drift.
+
+### `src/marketlab/targets/weekly.py`
+
+- Builds weekly modeling rows from the featured daily panel.
+- Copies only signal-date feature values into the weekly sample set.
+- Builds forward targets and drops rows whose label horizon is incomplete.
+
+Best practice:
+- Keep target generation label-safe and aligned to the existing Friday-close, next-open convention.
+- Treat `target_end_date` as part of the modeling dataset contract, not as derived throwaway metadata.
+
+### `src/marketlab/evaluation/walk_forward.py`
+
+- Builds reusable walk-forward folds from the weekly modeling dataset.
+- Enforces label-aware training windows by requiring `target_end_date <= test_start`.
+- Produces stable fold metadata and row slices for later model-training work.
+
+Best practice:
+- Keep evaluation logic independent from model wrappers and CLI orchestration.
+- Slice training rows by label availability, not just by signal date.
+
 ### `src/marketlab/strategies/buy_hold.py`
 
 - Emits one equal-weight allocation on the first available date.
@@ -396,11 +430,13 @@ Best practice:
 - Keep provider normalization inside the data layer.
 - Keep strategies responsible for weights, not return calculation.
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
+- Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `test_start`.
 - Treat no allocation as cash with zero return.
 
 ## Current Risks
 
 - `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
+- walk-forward folds exist, but they are not wired into `train-models` or `run-experiment` yet.
 - `run-experiment` is still equivalent to the baseline `backtest` path in Sprint 1.
 - `train-models` is still intentionally unimplemented.
 - Metric definitions are suitable for a baseline research scaffold, not yet a full institutional evaluation stack.
@@ -408,7 +444,7 @@ Best practice:
 ## Extension Rules For Sprint 2
 
 - Add model training and ranking behavior without breaking the existing panel, weights, or performance contracts.
-- Keep walk-forward evaluation in new orchestration code, not inside current baseline strategy modules.
+- Keep walk-forward evaluation in the evaluation layer, not inside current baseline strategy modules.
+- Reuse the fold engine and its `target_end_date <= test_start` rule rather than rebuilding train/test masks in model code.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
-
