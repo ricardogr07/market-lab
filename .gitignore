@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.tox/
+build/
+dist/
+pytest-cache-files-*/
+*.egg-info/
+artifacts/*
+!artifacts/.gitkeep

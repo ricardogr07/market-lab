@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marketlab"
+version = "0.1.0"
+description = "Sprint 1 research scaffold for rule-based MarketLab experiments."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "matplotlib>=3.8",
+  "pandas>=2.2",
+  "PyYAML>=6.0",
+  "yfinance>=0.2",
+  "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8.0",
+  "tox>=4.0",
+]
+
+[dependency-groups]
+dev = [
+  "build>=1.2",
+  "pytest>=8.0",
+  "tox>=4.0",
+]
+
+[project.scripts]
+marketlab = "marketlab.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest_tmp -p no:cacheprovider"
+markers = [
+  "real_data: opt-in tests that download real market data.",
+  "network: tests that depend on external network access.",
+]
