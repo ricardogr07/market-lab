@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first Phase 2 foundations: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, two baseline strategies, backtests, and reviewable artifacts.
+MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first Phase 2 ML foundations: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, two baseline strategies, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and freezes the working rules that should guide later iterations.
 
@@ -13,19 +13,22 @@ This document ties the current pieces together and freezes the working rules tha
   - trailing feature engineering
   - weekly modeling dataset generation
   - walk-forward fold generation
+  - model registry for configured estimators
+  - walk-forward `train-models` execution and artifact generation
   - `buy_hold` and `sma` baselines
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
   - fixture-backed tests and an opt-in real-data E2E runner
 - Deferred to later sprints:
-  - model training
   - ranking strategy
+  - ML integration into `run-experiment`
   - CI, Docker, and broader packaging hardening
 
 ## Canonical Local Entry Points
 
 - Local repo execution:
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
+  - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
 - Real-data E2E:
   - `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1`
 - Fast validation:
@@ -48,6 +51,7 @@ flowchart TD
     Features --> Targets[src/marketlab/targets/weekly.py]
     Targets --> ModelingDataset[Weekly modeling dataset]
     ModelingDataset --> Evaluation[src/marketlab/evaluation/walk_forward.py]
+    Pipeline --> Models[src/marketlab/models/registry.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
     Pipeline --> Engine[src/marketlab/backtest/engine.py]
@@ -57,14 +61,16 @@ flowchart TD
 
     Market --> RawCache[Raw symbol CSV cache]
     Panel --> PreparedPanel[Prepared panel CSV]
+    Evaluation --> FoldDefs[folds.csv]
+    Models --> ModelArtifacts[Per-fold model pickles]
+    Models --> PredictionArtifacts[predictions.csv and model_metrics.csv]
     Engine --> Performance[PerformanceFrame]
-    Evaluation --> FoldDefs[WalkForwardFold metadata]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
     Plots --> PlotFiles[cumulative_returns.png and drawdown.png]
 ```
 
-## Runtime Flow
+## Baseline Runtime Flow
 
 ```mermaid
 sequenceDiagram
@@ -108,6 +114,43 @@ sequenceDiagram
     P->>R: plot_cumulative_returns(...)
     P->>R: plot_drawdown(...)
     P-->>C: ExperimentArtifacts
+    C-->>U: run directory path
+```
+
+## Train-Models Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant L as run_marketlab.py
+    participant C as cli.py
+    participant CFG as config.py
+    participant P as pipeline.py
+    participant T as targets/weekly.py
+    participant E as evaluation/walk_forward.py
+    participant M as models/registry.py
+
+    U->>L: python scripts/run_marketlab.py train-models --config ...
+    L->>C: main(argv)
+    C->>CFG: load_config(path)
+    CFG-->>C: ExperimentConfig
+    C->>P: train_models(config)
+    P->>P: prepare_data(config)
+    P->>T: build_weekly_modeling_dataset(panel, config)
+    T-->>P: modeling dataset
+    P->>E: build_walk_forward_folds(dataset, walk_forward)
+    E-->>P: WalkForwardFold list
+
+    loop configured model x fold
+        P->>E: slice_fold_rows(dataset, fold)
+        E-->>P: train rows, test rows
+        P->>M: build_model_estimator(model_name, target_type)
+        M-->>P: estimator
+        P->>M: predict_direction_scores(estimator, test features)
+        M-->>P: normalized scores
+    end
+
+    P-->>C: TrainModelsArtifacts
     C-->>U: run directory path
 ```
 
@@ -211,6 +254,15 @@ classDiagram
       +drawdown_plot_path: Path
     }
 
+    class TrainModelsArtifacts {
+      +run_dir: Path
+      +panel_path: Path
+      +folds_path: Path
+      +model_manifest_path: Path
+      +metrics_path: Path
+      +predictions_path: Path
+    }
+
     ExperimentConfig *-- DataConfig
     ExperimentConfig *-- FeaturesConfig
     ExperimentConfig *-- TargetConfig
@@ -245,6 +297,22 @@ Required columns:
 - `adj_open`
 - `adj_high`
 - `adj_low`
+
+### Weekly Modeling Dataset
+
+Weekly modeling rows keyed by `symbol` and `signal_date`.
+
+Required columns:
+
+- `symbol`
+- `signal_date`
+- `effective_date`
+- `target_end_date`
+- feature columns derived only from signal-date information
+- `forward_return`
+- `target`
+
+`target_end_date` is part of the stable contract because walk-forward training depends on it to keep label availability explicit.
 
 ### WeightsFrame
 
@@ -299,12 +367,13 @@ Best practice:
 
 ### `src/marketlab/pipeline.py`
 
-- Orchestrates the end-to-end Sprint 1 workflow.
+- Orchestrates the end-to-end Sprint 1 workflow plus the Phase 2 `train-models` path.
 - Decides whether to reuse the prepared panel or rebuild it.
-- Adds the feature set, runs enabled baselines, computes metrics, and writes artifacts.
+- Runs enabled baselines for backtests and reports.
+- Builds modeling datasets, walk-forward folds, trained estimators, and training artifacts for `train-models`.
 
 Best practice:
-- Put workflow coordination here, not in strategies, reports, or CLI code.
+- Put workflow coordination here, not in strategies, reports, model registry, or CLI code.
 
 ### `src/marketlab/data/market.py`
 
@@ -333,7 +402,7 @@ Best practice:
 - Operates symbol-by-symbol on adjusted close data.
 
 Best practice:
-- Only add trailing features in Sprint 1.
+- Only add trailing features in Sprint 1 and early Phase 2.
 - Do not introduce forward-looking features or label leakage.
 
 ### `src/marketlab/rebalance.py`
@@ -359,11 +428,21 @@ Best practice:
 
 - Builds reusable walk-forward folds from the weekly modeling dataset.
 - Enforces label-aware training windows by requiring `target_end_date <= test_start`.
-- Produces stable fold metadata and row slices for later model-training work.
+- Produces stable fold metadata and row slices for model-training work.
 
 Best practice:
 - Keep evaluation logic independent from model wrappers and CLI orchestration.
 - Slice training rows by label availability, not just by signal date.
+
+### `src/marketlab/models/registry.py`
+
+- Maps configured model names to concrete scikit-learn estimators.
+- Keeps target-type validation at the model-entry seam.
+- Produces normalized direction scores from `predict_proba` for downstream ranking work.
+
+Best practice:
+- Keep the registry lightweight and explicit.
+- Avoid premature model-abstraction layers beyond construction and score extraction.
 
 ### `src/marketlab/strategies/buy_hold.py`
 
@@ -425,26 +504,28 @@ Best practice:
 - Use `python scripts/run_marketlab.py ...` for repo-local execution.
 - Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local smoke validation.
 - Keep `cli.py` thin and `pipeline.py` orchestration-focused.
-- Preserve the `MarketPanel`, `WeightsFrame`, and `PerformanceFrame` contracts.
+- Preserve the `MarketPanel`, weekly modeling dataset, `WeightsFrame`, and `PerformanceFrame` contracts.
 - Build features from trailing information only.
 - Keep provider normalization inside the data layer.
 - Keep strategies responsible for weights, not return calculation.
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `test_start`.
 - Treat no allocation as cash with zero return.
+- Keep `train-models` focused on model artifacts only until ranking integration lands.
 
 ## Current Risks
 
 - `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
-- walk-forward folds exist, but they are not wired into `train-models` or `run-experiment` yet.
-- `run-experiment` is still equivalent to the baseline `backtest` path in Sprint 1.
-- `train-models` is still intentionally unimplemented.
-- Metric definitions are suitable for a baseline research scaffold, not yet a full institutional evaluation stack.
+- `run-experiment` is still equivalent to the baseline `backtest` path.
+- ranking strategy and ML portfolio integration are still not implemented.
+- the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
+- metric definitions are suitable for a baseline research scaffold, not yet a full institutional evaluation stack.
 
-## Extension Rules For Sprint 2
+## Extension Rules For Phase 2
 
-- Add model training and ranking behavior without breaking the existing panel, weights, or performance contracts.
+- Add ranking behavior without breaking the existing panel, weekly modeling dataset, weights, or performance contracts.
 - Keep walk-forward evaluation in the evaluation layer, not inside current baseline strategy modules.
 - Reuse the fold engine and its `target_end_date <= test_start` rule rather than rebuilding train/test masks in model code.
+- Keep model construction in the registry and workflow orchestration in `pipeline.py`.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
