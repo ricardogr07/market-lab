@@ -1,0 +1,414 @@
+# MarketLab Architecture
+
+## Purpose
+
+MarketLab is a Sprint 1 research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation is intentionally narrow: fetch or reuse market data, normalize it into one canonical panel, engineer trailing features, run two baseline strategies, backtest them, and emit artifacts that are easy to inspect and compare.
+
+This document ties the current pieces together and freezes the working rules that should guide later iterations.
+
+## Scope
+
+- In scope now:
+  - canonical market panel preparation
+  - trailing feature engineering
+  - `buy_hold` and `sma` baselines
+  - daily backtest with turnover-based costs
+  - metrics, plots, and Markdown reporting
+  - fixture-backed tests and an opt-in real-data E2E runner
+- Deferred to later sprints:
+  - model training
+  - walk-forward evaluation
+  - ranking strategy
+  - CI, Docker, and broader packaging hardening
+
+## Canonical Local Entry Points
+
+- Local repo execution:
+  - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
+- Real-data E2E:
+  - `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1`
+- Fast validation:
+  - `python -m pytest -q --basetemp .pytest_tmp`
+
+The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a safe default for local source execution unless the environment is known to point at the current editable install. The launcher script exists to remove that ambiguity.
+
+## System Map
+
+```mermaid
+flowchart TD
+    User[User or automation] --> Launcher[scripts/run_marketlab.py]
+    Launcher --> CLI[src/marketlab/cli.py]
+    CLI --> Config[src/marketlab/config.py]
+    CLI --> Pipeline[src/marketlab/pipeline.py]
+
+    Pipeline --> Market[src/marketlab/data/market.py]
+    Pipeline --> Panel[src/marketlab/data/panel.py]
+    Pipeline --> Features[src/marketlab/features/engineering.py]
+    Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
+    Pipeline --> SMA[src/marketlab/strategies/sma.py]
+    Pipeline --> Engine[src/marketlab/backtest/engine.py]
+    Pipeline --> Metrics[src/marketlab/backtest/metrics.py]
+    Pipeline --> Markdown[src/marketlab/reports/markdown.py]
+    Pipeline --> Plots[src/marketlab/reports/plots.py]
+
+    Market --> RawCache[Raw symbol CSV cache]
+    Panel --> PreparedPanel[Prepared panel CSV]
+    Engine --> Performance[PerformanceFrame]
+    Metrics --> MetricsCsv[metrics.csv]
+    Markdown --> ReportMd[report.md]
+    Plots --> PlotFiles[cumulative_returns.png and drawdown.png]
+```
+
+## Runtime Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant L as run_marketlab.py
+    participant C as cli.py
+    participant CFG as config.py
+    participant P as pipeline.py
+    participant M as data/market.py
+    participant N as data/panel.py
+    participant S as strategies/*
+    participant B as backtest/*
+    participant R as reports/*
+
+    U->>L: python scripts/run_marketlab.py run-experiment --config ...
+    L->>C: main(argv)
+    C->>CFG: load_config(path)
+    CFG-->>C: ExperimentConfig
+    C->>P: run_experiment(config)
+    P->>P: prepare_data(config)
+
+    alt prepared panel exists
+        P->>N: load_panel_csv(path)
+        N-->>P: MarketPanel
+    else panel missing
+        P->>M: load_symbol_frames(config)
+        M-->>P: raw symbol frames
+        P->>N: build_market_panel(frames)
+        N-->>P: MarketPanel
+    end
+
+    P->>P: add_feature_set(panel)
+    P->>S: buy_hold.generate_weights()
+    P->>S: sma.generate_weights()
+    S-->>P: WeightsFrame(s)
+    P->>B: run_backtest(panel, weights, cost_bps)
+    B-->>P: PerformanceFrame
+    P->>B: compute_strategy_metrics(performance)
+    B-->>P: metrics table
+    P->>R: write_markdown_report(...)
+    P->>R: plot_cumulative_returns(...)
+    P->>R: plot_drawdown(...)
+    P-->>C: ExperimentArtifacts
+    C-->>U: run directory path
+```
+
+## Configuration Model
+
+```mermaid
+classDiagram
+    class ExperimentConfig {
+      +experiment_name: str
+      +data: DataConfig
+      +features: FeaturesConfig
+      +target: TargetConfig
+      +portfolio: PortfolioConfig
+      +baselines: BaselinesConfig
+      +models: list[ModelSpec]
+      +evaluation: EvaluationConfig
+      +artifacts: ArtifactsConfig
+      +cache_dir: Path
+      +prepared_panel_path: Path
+      +output_dir: Path
+      +resolve_path(value) Path
+    }
+
+    class DataConfig {
+      +symbols: list[str]
+      +start_date: str
+      +end_date: str
+      +interval: str
+      +cache_dir: str
+      +prepared_panel_filename: str
+    }
+
+    class FeaturesConfig {
+      +return_windows: list[int]
+      +ma_windows: list[int]
+      +vol_windows: list[int]
+      +momentum_window: int
+    }
+
+    class TargetConfig {
+      +horizon_days: int
+      +type: str
+    }
+
+    class PortfolioConfig {
+      +ranking: RankingConfig
+      +costs: CostsConfig
+    }
+
+    class RankingConfig {
+      +long_n: int
+      +short_n: int
+      +rebalance_frequency: str
+      +weighting: str
+    }
+
+    class CostsConfig {
+      +bps_per_trade: float
+    }
+
+    class BaselinesConfig {
+      +buy_hold: bool
+      +sma: SMAConfig
+    }
+
+    class SMAConfig {
+      +enabled: bool
+      +fast_window: int
+      +slow_window: int
+    }
+
+    class EvaluationConfig {
+      +walk_forward: WalkForwardConfig
+    }
+
+    class WalkForwardConfig {
+      +train_years: int
+      +test_months: int
+      +step_months: int
+    }
+
+    class ArtifactsConfig {
+      +output_dir: str
+      +save_predictions: bool
+      +save_metrics_csv: bool
+      +save_report_md: bool
+      +save_plots: bool
+    }
+
+    class ModelSpec {
+      +name: str
+    }
+
+    class ExperimentArtifacts {
+      +run_dir: Path
+      +panel_path: Path
+      +metrics_path: Path
+      +performance_path: Path
+      +report_path: Path
+      +cumulative_plot_path: Path
+      +drawdown_plot_path: Path
+    }
+
+    ExperimentConfig *-- DataConfig
+    ExperimentConfig *-- FeaturesConfig
+    ExperimentConfig *-- TargetConfig
+    ExperimentConfig *-- PortfolioConfig
+    ExperimentConfig *-- BaselinesConfig
+    ExperimentConfig *-- EvaluationConfig
+    ExperimentConfig *-- ArtifactsConfig
+    ExperimentConfig *-- ModelSpec
+    PortfolioConfig *-- RankingConfig
+    PortfolioConfig *-- CostsConfig
+    BaselinesConfig *-- SMAConfig
+    EvaluationConfig *-- WalkForwardConfig
+```
+
+## Frozen Data Contracts
+
+### MarketPanel
+
+Long-format pandas frame sorted by `symbol`, then `timestamp`.
+
+Required columns:
+
+- `symbol`
+- `timestamp`
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
+- `adj_close`
+- `adj_factor`
+- `adj_open`
+- `adj_high`
+- `adj_low`
+
+### WeightsFrame
+
+Columns:
+
+- `strategy`
+- `effective_date`
+- `symbol`
+- `weight`
+
+The effective date means the next market open when the rebalance becomes active. Strategies that rebalance must emit the full symbol set so zero weights are explicit.
+
+### PerformanceFrame
+
+Columns:
+
+- `date`
+- `strategy`
+- `gross_return`
+- `net_return`
+- `turnover`
+- `equity`
+
+## Module Responsibilities
+
+### `scripts/run_marketlab.py`
+
+- Canonical local launcher.
+- Prepends `src/` to `sys.path`.
+- Delegates immediately to `marketlab.cli.main`.
+- Exists only to remove ambiguity from editable installs, stale installs, or PATH differences.
+
+### `src/marketlab/cli.py`
+
+- Parses subcommands.
+- Loads the experiment config.
+- Dispatches to pipeline functions.
+- Prints either the prepared panel path or the run directory path.
+
+Best practice:
+- Keep this file thin.
+- Do not move orchestration logic into CLI handlers.
+
+### `src/marketlab/config.py`
+
+- Defines the dataclass tree for all current config sections.
+- Loads YAML and filters unknown keys out at section boundaries.
+- Resolves relative paths from repo root when the config lives under `configs/`.
+
+Best practice:
+- Keep config loading permissive enough for staged future sections, but keep runtime behavior strict at the domain layer.
+
+### `src/marketlab/pipeline.py`
+
+- Orchestrates the end-to-end Sprint 1 workflow.
+- Decides whether to reuse the prepared panel or rebuild it.
+- Adds the feature set, runs enabled baselines, computes metrics, and writes artifacts.
+
+Best practice:
+- Put workflow coordination here, not in strategies, reports, or CLI code.
+
+### `src/marketlab/data/market.py`
+
+- Loads raw symbol data from cache when available.
+- Downloads missing raw histories through `yfinance`.
+- Flattens provider column shapes before caching them.
+
+Best practice:
+- Keep the provider seam thin and isolated here.
+- Treat provider quirks as an ingestion concern, not a backtest concern.
+
+### `src/marketlab/data/panel.py`
+
+- Normalizes raw OHLCV frames into the canonical `MarketPanel`.
+- Computes adjusted OHLC columns from `adj_close / close`.
+- Validates uniqueness and sorted order.
+- Cleans the cached `yfinance` header-row artifact introduced by MultiIndex downloads.
+
+Best practice:
+- Protect the panel contract aggressively.
+- Make ingestion tolerant to provider shape issues, then make the normalized panel strict.
+
+### `src/marketlab/features/engineering.py`
+
+- Adds trailing returns, moving averages, price-to-MA ratios, MA spreads, rolling volatility, and momentum.
+- Operates symbol-by-symbol on adjusted close data.
+
+Best practice:
+- Only add trailing features in Sprint 1.
+- Do not introduce forward-looking features or label leakage.
+
+### `src/marketlab/strategies/buy_hold.py`
+
+- Emits one equal-weight allocation on the first available date.
+
+### `src/marketlab/strategies/sma.py`
+
+- Builds weekly signal dates from the last close in each `W-FRI` period.
+- Applies the rebalance on the next market open.
+- Emits explicit zero weights when no symbol passes the rule.
+
+Best practice:
+- Strategy modules should produce weights, not portfolio returns.
+- Keep strategy semantics isolated from execution semantics.
+
+### `src/marketlab/backtest/engine.py`
+
+- Joins weights to adjusted open and close data.
+- Splits return computation into overnight and intraday components.
+- Applies turnover-based trading costs.
+- Produces the canonical `PerformanceFrame`.
+
+Best practice:
+- Keep execution timing explicit.
+- Use adjusted open and close consistently so splits and dividends do not distort returns.
+
+### `src/marketlab/backtest/metrics.py`
+
+- Summarizes performance by strategy.
+- Computes cumulative return, annualized return, annualized volatility, sharpe-like ratio, max drawdown, hit rate, and turnover metrics.
+
+Best practice:
+- Treat this as a reporting summary layer, not a source of trading logic.
+
+### `src/marketlab/reports/markdown.py`
+
+- Produces a compact Markdown report for each run.
+
+### `src/marketlab/reports/plots.py`
+
+- Produces cumulative equity and drawdown charts.
+
+Best practice:
+- Report modules should only render artifacts from already-computed outputs.
+
+### `tests/`
+
+- Unit tests protect contracts and math.
+- Integration tests validate fixture-backed pipeline behavior.
+- Real-data smoke tests stay opt-in because provider behavior and network access are unstable by nature.
+
+### `.codex/skills/`
+
+- Stores repo-local MarketLab roles and internal tooling guidance.
+- Encodes conventions for planning, coding, QA, critical review, and market-domain review.
+
+## Best Practices
+
+- Use `python scripts/run_marketlab.py ...` for repo-local execution.
+- Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local smoke validation.
+- Keep `cli.py` thin and `pipeline.py` orchestration-focused.
+- Preserve the `MarketPanel`, `WeightsFrame`, and `PerformanceFrame` contracts.
+- Build features from trailing information only.
+- Keep provider normalization inside the data layer.
+- Keep strategies responsible for weights, not return calculation.
+- Keep backtest timing explicit: Friday-close signal, next-open execution.
+- Treat no allocation as cash with zero return.
+
+## Current Risks
+
+- `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
+- `run-experiment` is still equivalent to the baseline `backtest` path in Sprint 1.
+- `train-models` is still intentionally unimplemented.
+- Metric definitions are suitable for a baseline research scaffold, not yet a full institutional evaluation stack.
+
+## Extension Rules For Sprint 2
+
+- Add model training and ranking behavior without breaking the existing panel, weights, or performance contracts.
+- Keep walk-forward evaluation in new orchestration code, not inside current baseline strategy modules.
+- Do not redesign the current data layer just to support later model abstractions.
+- Preserve the local launcher and E2E runner as the default developer entrypoints.
+

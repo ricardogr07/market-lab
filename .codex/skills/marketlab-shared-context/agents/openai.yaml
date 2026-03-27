@@ -1,0 +1,4 @@
+interface:
+  display_name: "MarketLab Shared Context"
+  short_description: "Frozen MarketLab MVP reference pack"
+  default_prompt: "Use -shared-context to load the frozen MarketLab MVP rules and repo conventions."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MarketLab QA"
+  short_description: "Quality gate for MarketLab changes"
+  default_prompt: "Use -qa to validate MarketLab behavior, tests, and artifacts against acceptance criteria."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MarketLab Worker"
+  short_description: "Implementation role for MarketLab work"
+  default_prompt: "Use -worker to implement the current MarketLab task without crossing sprint boundaries."
