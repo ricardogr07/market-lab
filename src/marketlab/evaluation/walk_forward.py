@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import pandas as pd
 
@@ -153,3 +153,21 @@ def slice_fold_rows(
     train_rows = working.loc[train_mask].sort_values(sort_columns).reset_index(drop=True)
     test_rows = working.loc[test_mask].sort_values(sort_columns).reset_index(drop=True)
     return train_rows, test_rows
+
+
+def folds_to_frame(folds: list[WalkForwardFold]) -> pd.DataFrame:
+    columns = [
+        "fold_id",
+        "train_start",
+        "train_end",
+        "label_cutoff",
+        "test_start",
+        "test_end",
+        "train_rows",
+        "test_rows",
+    ]
+    if not folds:
+        return pd.DataFrame(columns=columns)
+
+    frame = pd.DataFrame([asdict(fold) for fold in folds])
+    return frame.loc[:, columns]
