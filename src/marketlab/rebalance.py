@@ -33,3 +33,22 @@ def next_effective_dates(
         index=pd.Index([signal_date for signal_date, _ in rows], name="signal_date"),
         name="effective_date",
     )
+
+
+def signal_effective_dates(
+    panel: pd.DataFrame,
+    frequency: str = "W-FRI",
+) -> pd.Series:
+    return next_effective_dates(panel, weekly_signal_dates(panel, frequency))
+
+
+def next_rebalance_effective_date(
+    panel: pd.DataFrame,
+    signal_date: pd.Timestamp,
+    frequency: str = "W-FRI",
+) -> pd.Timestamp | None:
+    effective_dates = signal_effective_dates(panel, frequency)
+    future_signal_dates = effective_dates.index[effective_dates.index > pd.Timestamp(signal_date)]
+    if future_signal_dates.empty:
+        return None
+    return pd.Timestamp(effective_dates.loc[future_signal_dates.min()])
