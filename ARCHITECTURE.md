@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first executable Phase 2 ML stack: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, backtests, and reviewable artifacts.
+MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first executable Phase 2 ML stack: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and freezes the working rules that should guide later iterations.
 
@@ -16,13 +16,13 @@ This document ties the current pieces together and freezes the working rules tha
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
   - score-to-weight ranking strategy for ML portfolios
+  - fold and model summary artifacts
   - `buy_hold` and `sma` baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
   - fixture-backed tests and an opt-in real-data E2E runner
 - Deferred to later sprints:
-  - richer model-comparison reporting
   - CI, Docker, and broader packaging hardening
 
 ## Canonical Local Entry Points
@@ -55,6 +55,7 @@ flowchart TD
     Pipeline --> Models[src/marketlab/models/training.py]
     Models --> Predictions[Fold predictions]
     Predictions --> Ranking[src/marketlab/strategies/ranking.py]
+    Pipeline --> Summary[src/marketlab/reports/summary.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
     BuyHold --> Engine[src/marketlab/backtest/engine.py]
@@ -62,6 +63,8 @@ flowchart TD
     Ranking --> Engine
     Engine --> Performance[PerformanceFrame]
     Pipeline --> Metrics[src/marketlab/backtest/metrics.py]
+    Summary --> ModelSummaryCsv[model_summary.csv]
+    Summary --> FoldSummaryCsv[fold_summary.csv]
     Pipeline --> Markdown[src/marketlab/reports/markdown.py]
     Pipeline --> Plots[src/marketlab/reports/plots.py]
 
@@ -89,6 +92,7 @@ sequenceDiagram
     participant T as targets/weekly.py
     participant E as evaluation/walk_forward.py
     participant RANK as strategies/ranking.py
+    participant SUM as reports/summary.py
     participant B as backtest/*
     participant R as reports/*
 
@@ -125,6 +129,8 @@ sequenceDiagram
     P->>P: rebase equity per strategy
     P->>B: compute_strategy_metrics(sliced performance)
     B-->>P: metrics table
+    P->>SUM: build_model_summary(...) and build_fold_summary(...)
+    SUM-->>P: summary tables
     P->>R: write_markdown_report(...)
     P->>R: plot_cumulative_returns(...)
     P->>R: plot_drawdown(...)
@@ -161,10 +167,11 @@ sequenceDiagram
         E-->>P: train rows, test rows
         P->>M: build_model_estimator(model_name, target_type)
         M-->>P: estimator
-        P->>M: predict_direction_scores(estimator, test features)
-        M-->>P: normalized scores
+    P->>M: predict_direction_scores(estimator, test features)
+    M-->>P: normalized scores
     end
 
+    P->>P: build_model_summary(...) and build_fold_summary(...)
     P-->>C: TrainModelsArtifacts
     C-->>U: run directory path
 ```
@@ -264,6 +271,8 @@ classDiagram
       +panel_path: Path
       +metrics_path: Path
       +performance_path: Path
+      +model_summary_path: Path
+      +fold_summary_path: Path
       +report_path: Path
       +cumulative_plot_path: Path
       +drawdown_plot_path: Path
@@ -276,6 +285,8 @@ classDiagram
       +model_manifest_path: Path
       +metrics_path: Path
       +predictions_path: Path
+      +model_summary_path: Path
+      +fold_summary_path: Path
     }
 
     ExperimentConfig *-- DataConfig
@@ -385,7 +396,7 @@ Best practice:
 - Orchestrates the Sprint 1 baseline workflow, the Phase 2 `train-models` artifact path, and the unified Phase 2 `run-experiment` comparison path.
 - Decides whether to reuse the prepared panel or rebuild it.
 - Runs enabled baselines for backtests and reports.
-- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, and experiment artifacts.
+- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, summary tables, and experiment artifacts.
 
 Best practice:
 - Put workflow coordination here, not in strategies, reports, model registry, or CLI code.
@@ -512,6 +523,15 @@ Best practice:
 - Derives the strategy list from the actual `PerformanceFrame`.
 - Switches scope text when ML strategies are present.
 
+### `src/marketlab/reports/summary.py`
+
+- Builds fold-level and model-level summary tables from existing training metrics and manifests.
+- Keeps the reporting summaries additive and derived from raw training outputs.
+
+Best practice:
+- Keep summary generation pure and deterministic.
+- Do not invent new metrics in the summary layer.
+
 ### `src/marketlab/reports/plots.py`
 
 - Produces cumulative equity and drawdown charts.
@@ -542,6 +562,7 @@ Best practice:
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `test_start`.
 - Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
+- Derive `model_summary.csv` and `fold_summary.csv` from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
 
@@ -549,7 +570,7 @@ Best practice:
 
 - `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
 - `run-experiment` now trains models in-process and may leave per-fold model pickles in experiment run directories as a side effect of reusing the training layer.
-- richer model-comparison reporting is still deferred beyond the current phase.
+- summary outputs are derived from the existing training artifacts, so metric changes propagate through both the raw CSVs and the report tables.
 - the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
 - metric definitions are suitable for a research scaffold, not yet a full institutional evaluation stack.
 
