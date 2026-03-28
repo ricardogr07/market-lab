@@ -20,7 +20,6 @@ from marketlab.evaluation.walk_forward import (
 )
 from marketlab.targets.weekly import build_weekly_modeling_dataset
 
-
 DEFAULT_SIGNAL_DATES = pd.date_range("2020-01-03", "2021-09-24", freq="W-FRI")
 
 

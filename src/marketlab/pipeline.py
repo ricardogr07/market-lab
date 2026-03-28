@@ -12,7 +12,11 @@ from marketlab.backtest.metrics import compute_strategy_metrics
 from marketlab.config import ExperimentConfig
 from marketlab.data.market import load_symbol_frames
 from marketlab.data.panel import build_market_panel, load_panel_csv, save_panel_csv
-from marketlab.evaluation import build_walk_forward_folds, folds_to_frame, slice_fold_rows
+from marketlab.evaluation import (
+    build_walk_forward_folds,
+    folds_to_frame,
+    slice_fold_rows,
+)
 from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date

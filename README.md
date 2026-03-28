@@ -73,3 +73,18 @@ If `artifacts/data/panel.csv` already exists, the pipeline uses it and does not 
 python -m pytest -q --basetemp .pytest_tmp
 powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1
 ```
+
+## Local CI Entry Points
+
+```bash
+python -m uv sync --group dev
+python -m uv run tox -e lint
+python -m uv run tox -e docs
+python -m uv run tox -e package
+python -m uv run tox -e py312
+python -m tox -e preflight
+```
+
+Use `python -m tox -e preflight` as the canonical local pre-push gate. It runs the same lint, docs, packaging, and pytest checks that Phase 3 CI expects, but through one local entrypoint after the dev dependencies are installed.
+
+The MkDocs site renders the current root Markdown docs through `mkdocs-include-markdown-plugin`, so the documentation build stays aligned with `README.md`, `ARCHITECTURE.md`, `Phase2-results.md`, and `PLAN.md`.

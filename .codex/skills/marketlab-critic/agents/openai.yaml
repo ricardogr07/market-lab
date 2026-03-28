@@ -1,4 +1,0 @@
-interface:
-  display_name: "MarketLab Critic"
-  short_description: "Architecture and leakage review role"
-  default_prompt: "Use -critic to challenge MarketLab architecture, leakage risks, and scope drift."

@@ -575,10 +575,10 @@ Best practice:
 - The Phase 2 smoke runner validates baseline backtest, training artifacts, experiment artifacts, and summary outputs on real data.
 - Real-data smoke tests stay opt-in because provider behavior and network access are unstable by nature.
 
-### `.codex/skills/`
+### User-Local Codex Skills
 
-- Stores repo-local MarketLab roles and internal tooling guidance.
-- Encodes conventions for planning, coding, QA, critical review, and market-domain review.
+- MarketLab role skills are expected to live in the developer's user-local Codex home, not in the repository.
+- Keep repo automation and public packaging independent from private Codex workflow assets.
 
 ## Best Practices
 

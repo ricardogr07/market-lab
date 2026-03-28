@@ -1,4 +1,0 @@
-interface:
-  display_name: "MarketLab Financial Expert"
-  short_description: "Market rules and metric semantics"
-  default_prompt: "Use -financial-expert to review MarketLab market-data rules, backtest conventions, and metrics."
