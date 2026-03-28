@@ -10,8 +10,9 @@ def _repo_src_path() -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     src_path = str(_repo_src_path())
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
+    if src_path in sys.path:
+        sys.path.remove(src_path)
+    sys.path.insert(0, src_path)
 
     from marketlab.cli import main as cli_main
 
