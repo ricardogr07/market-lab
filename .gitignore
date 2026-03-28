@@ -11,3 +11,4 @@ pytest-cache-files-*/
 *.egg-info/
 artifacts/*
 !artifacts/.gitkeep
+.pytest_*/
