@@ -1,4 +1,0 @@
-interface:
-  display_name: "MarketLab Orchestrator"
-  short_description: "Sprint and handoff planning role"
-  default_prompt: "Use -orchestrator to slice MarketLab work into ordered tasks with explicit handoffs."

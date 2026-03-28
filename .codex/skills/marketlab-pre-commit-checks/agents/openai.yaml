@@ -1,4 +1,0 @@
-interface:
-  display_name: "MarketLab Pre-Commit Checks"
-  short_description: "Run tox and uv validation safely"
-  default_prompt: "Use -pre-commit-checks to run the repo validation commands before making a MarketLab commit."
