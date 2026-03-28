@@ -1,0 +1,16 @@
+site_name: MarketLab
+site_description: Documentation site for the MarketLab research workflow
+docs_dir: docs
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Phase 2 Results: phase2-results.md
+  - Plan: plan.md
+plugins:
+  - search
+  - include-markdown:
+      rewrite_relative_urls: true
+      comments: false
+markdown_extensions:
+  - tables
+  - admonition
