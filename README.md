@@ -90,6 +90,15 @@ Use `python -m tox -e preflight` as the canonical local pre-push gate. It runs t
 
 The MkDocs site renders the current root Markdown docs through `mkdocs-include-markdown-plugin`, so the documentation build stays aligned with `README.md`, `ARCHITECTURE.md`, `Phase2-results.md`, and `PLAN.md`.
 
+## Contribution Workflow
+
+- Branch from a refreshed `master` instead of working directly on the default branch.
+- Keep changes in small intentional commits so review scope stays clear.
+- Run `python -m tox -e preflight` before pushing.
+- Open a pull request for review instead of pushing directly to `master`.
+- Treat the `Docker Runner` workflow as an optional manual smoke path, not as a required pre-push step.
+- Keep Codex skills and other personal automation assets in the user-local Codex home rather than in the public repository or package surface.
+
 ## Dockerized CLI
 
 ```bash
