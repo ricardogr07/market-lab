@@ -4,8 +4,6 @@ docs_dir: docs
 nav:
   - Overview: index.md
   - Architecture: architecture.md
-  - Phase 2 Results: phase2-results.md
-  - Plan: plan.md
 plugins:
   - search
   - include-markdown:
