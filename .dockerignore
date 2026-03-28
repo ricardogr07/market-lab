@@ -1,4 +1,5 @@
 .codex/
+.docker-config/
 .git/
 .github/
 .pytest_cache/
