@@ -21,7 +21,7 @@ This document ties the current pieces together and freezes the working rules tha
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
-  - fixture-backed tests and an opt-in real-data E2E runner
+  - fixture-backed tests and a Phase 2 real-data E2E runner that validates baseline, training, and experiment artifact sets
 - Deferred to later sprints:
   - CI, Docker, and broader packaging hardening
 
@@ -32,10 +32,28 @@ This document ties the current pieces together and freezes the working rules tha
   - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
 - Real-data E2E:
   - `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1`
+  - covers `prepare-data`, `backtest`, `train-models`, and `run-experiment` on the smoke config
 - Fast validation:
   - `python -m pytest -q --basetemp .pytest_tmp`
 
 The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a safe default for local source execution unless the environment is known to point at the current editable install. The launcher script exists to remove that ambiguity.
+
+## Validation Flow
+
+```mermaid
+flowchart TD
+    Runner[scripts/run-e2e.ps1] --> Pytest[optional pytest gate]
+    Runner --> Launcher[scripts/run_marketlab.py]
+    Launcher --> Prepare[prepare-data]
+    Launcher --> Backtest[backtest]
+    Launcher --> Train[train-models]
+    Launcher --> Experiment[run-experiment]
+
+    Prepare --> Panel[prepared panel cache]
+    Backtest --> BaselineArtifacts[metrics.csv performance.csv report.md plots]
+    Train --> TrainingArtifacts[folds.csv manifest metrics predictions summaries models/]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv report.md plots summaries optional models/]
+```
 
 ## System Map
 
@@ -271,11 +289,11 @@ classDiagram
       +panel_path: Path
       +metrics_path: Path
       +performance_path: Path
-      +model_summary_path: Path
-      +fold_summary_path: Path
-      +report_path: Path
-      +cumulative_plot_path: Path
-      +drawdown_plot_path: Path
+      +model_summary_path: Path | None
+      +fold_summary_path: Path | None
+      +report_path: Path | None
+      +cumulative_plot_path: Path | None
+      +drawdown_plot_path: Path | None
     }
 
     class TrainModelsArtifacts {
@@ -283,8 +301,8 @@ classDiagram
       +panel_path: Path
       +folds_path: Path
       +model_manifest_path: Path
-      +metrics_path: Path
-      +predictions_path: Path
+      +metrics_path: Path | None
+      +predictions_path: Path | None
       +model_summary_path: Path
       +fold_summary_path: Path
     }
@@ -370,6 +388,17 @@ Columns:
 - Prepends `src/` to `sys.path`.
 - Delegates immediately to `marketlab.cli.main`.
 - Exists only to remove ambiguity from editable installs, stale installs, or PATH differences.
+
+### `scripts/run-e2e.ps1`
+
+- Runs the full Phase 2 smoke validation path against the smoke config.
+- Optionally gates on fixture-backed pytest first.
+- Verifies artifact sets for `prepare-data`, `backtest`, `train-models`, and `run-experiment`.
+- Prints the resolved run directories used for the smoke review.
+
+Best practice:
+- Keep the smoke assertions aligned with the actual Phase 2 command surface.
+- Treat smoke results as validation evidence, not robust model-selection proof.
 
 ### `src/marketlab/cli.py`
 
@@ -543,6 +572,7 @@ Best practice:
 
 - Unit tests protect contracts and math.
 - Integration tests validate fixture-backed pipeline behavior.
+- The Phase 2 smoke runner validates baseline backtest, training artifacts, experiment artifacts, and summary outputs on real data.
 - Real-data smoke tests stay opt-in because provider behavior and network access are unstable by nature.
 
 ### `.codex/skills/`
@@ -553,7 +583,7 @@ Best practice:
 ## Best Practices
 
 - Use `python scripts/run_marketlab.py ...` for repo-local execution.
-- Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local smoke validation.
+- Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local Phase 2 smoke validation.
 - Keep `cli.py` thin and `pipeline.py` orchestration-focused.
 - Preserve the `MarketPanel`, weekly modeling dataset, `WeightsFrame`, and `PerformanceFrame` contracts.
 - Build features from trailing information only.
@@ -565,6 +595,7 @@ Best practice:
 - Derive `model_summary.csv` and `fold_summary.csv` from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
+- Use the smoke runner to validate the full Phase 2 artifact surface after runtime changes.
 
 ## Current Risks
 
@@ -583,3 +614,5 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
+
+
