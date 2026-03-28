@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            tox.ini
+            mkdocs.yml
+      - name: Sync development dependencies
+        run: uv sync --group dev
+      - name: Run lint checks
+        run: uv run tox -e lint
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            tox.ini
+            mkdocs.yml
+      - name: Sync development dependencies
+        run: uv sync --group dev
+      - name: Build documentation
+        run: uv run tox -e docs
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            tox.ini
+            mkdocs.yml
+      - name: Sync development dependencies
+        run: uv sync --group dev
+      - name: Build package artifacts
+        run: uv run tox -e package
+
+  tests-py312:
+    name: tests-py312
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            tox.ini
+            mkdocs.yml
+      - name: Sync development dependencies
+        run: uv sync --group dev
+      - name: Run pytest suite
+        run: uv run tox -e py312
