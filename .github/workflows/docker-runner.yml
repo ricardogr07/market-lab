@@ -1,0 +1,74 @@
+name: Docker Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: MarketLab command to run inside the Docker image
+        required: true
+        default: backtest
+        type: choice
+        options:
+          - backtest
+          - train-models
+          - run-experiment
+      config_path:
+        description: Repo-relative config path copied into the container image
+        required: true
+        default: configs/experiment.weekly_rank.smoke.yaml
+        type: string
+
+permissions:
+  contents: read
+
+concurrency: marketlab-docker-runner
+
+jobs:
+  docker-runner:
+    name: docker-runner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: marketlab-cli:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run selected MarketLab command
+        shell: bash
+        env:
+          MARKETLAB_COMMAND: ${{ inputs.command }}
+          MARKETLAB_CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+
+          container_name="marketlab-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "CONTAINER_NAME=${container_name}" >> "${GITHUB_ENV}"
+
+          docker create \
+            --name "${container_name}" \
+            marketlab-cli:ci \
+            "${MARKETLAB_COMMAND}" \
+            --config "${MARKETLAB_CONFIG_PATH}" \
+            >/dev/null
+
+          set +e
+          docker start -a "${container_name}" 2>&1 | tee docker-run.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          resolved_run_dir="$(awk 'NF { last = $0 } END { print last }' docker-run.log | tr -d '\r')"
+          echo "RESOLVED_RUN_DIR=${resolved_run_dir}" >> "${GITHUB_ENV}"
+
+          exit "${status}"
