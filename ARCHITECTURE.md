@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first Phase 2 ML foundations: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, two baseline strategies, backtests, and reviewable artifacts.
+MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first executable Phase 2 ML stack: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and freezes the working rules that should guide later iterations.
 
@@ -15,13 +15,14 @@ This document ties the current pieces together and freezes the working rules tha
   - walk-forward fold generation
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
+  - score-to-weight ranking strategy for ML portfolios
   - `buy_hold` and `sma` baselines
+  - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
   - fixture-backed tests and an opt-in real-data E2E runner
 - Deferred to later sprints:
-  - ranking strategy
-  - ML integration into `run-experiment`
+  - richer model-comparison reporting
   - CI, Docker, and broader packaging hardening
 
 ## Canonical Local Entry Points
@@ -51,10 +52,15 @@ flowchart TD
     Features --> Targets[src/marketlab/targets/weekly.py]
     Targets --> ModelingDataset[Weekly modeling dataset]
     ModelingDataset --> Evaluation[src/marketlab/evaluation/walk_forward.py]
-    Pipeline --> Models[src/marketlab/models/registry.py]
+    Pipeline --> Models[src/marketlab/models/training.py]
+    Models --> Predictions[Fold predictions]
+    Predictions --> Ranking[src/marketlab/strategies/ranking.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
-    Pipeline --> Engine[src/marketlab/backtest/engine.py]
+    BuyHold --> Engine[src/marketlab/backtest/engine.py]
+    SMA --> Engine
+    Ranking --> Engine
+    Engine --> Performance[PerformanceFrame]
     Pipeline --> Metrics[src/marketlab/backtest/metrics.py]
     Pipeline --> Markdown[src/marketlab/reports/markdown.py]
     Pipeline --> Plots[src/marketlab/reports/plots.py]
@@ -63,14 +69,13 @@ flowchart TD
     Panel --> PreparedPanel[Prepared panel CSV]
     Evaluation --> FoldDefs[folds.csv]
     Models --> ModelArtifacts[Per-fold model pickles]
-    Models --> PredictionArtifacts[predictions.csv and model_metrics.csv]
-    Engine --> Performance[PerformanceFrame]
+    Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
     Plots --> PlotFiles[cumulative_returns.png and drawdown.png]
 ```
 
-## Baseline Runtime Flow
+## Run-Experiment Flow
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +86,9 @@ sequenceDiagram
     participant P as pipeline.py
     participant M as data/market.py
     participant N as data/panel.py
-    participant S as strategies/*
+    participant T as targets/weekly.py
+    participant E as evaluation/walk_forward.py
+    participant RANK as strategies/ranking.py
     participant B as backtest/*
     participant R as reports/*
 
@@ -102,13 +109,21 @@ sequenceDiagram
         N-->>P: MarketPanel
     end
 
-    P->>P: add_feature_set(panel)
-    P->>S: buy_hold.generate_weights()
-    P->>S: sma.generate_weights()
-    S-->>P: WeightsFrame(s)
-    P->>B: run_backtest(panel, weights, cost_bps)
-    B-->>P: PerformanceFrame
-    P->>B: compute_strategy_metrics(performance)
+    P->>P: run baseline strategies
+    P->>B: run_backtest(...) per baseline strategy
+    B-->>P: baseline PerformanceFrame rows
+    P->>T: build_weekly_modeling_dataset(panel, config)
+    T-->>P: modeling dataset
+    P->>E: build_walk_forward_folds(dataset, walk_forward)
+    E-->>P: WalkForwardFold list
+    P->>P: train_direction_models_on_folds(...)
+    P->>RANK: generate_weights(...) per model
+    RANK-->>P: WeightsFrame per ml_* strategy
+    P->>B: run_backtest(...) per ml_* strategy
+    B-->>P: ml PerformanceFrame rows
+    P->>P: slice to shared OOS daily window
+    P->>P: rebase equity per strategy
+    P->>B: compute_strategy_metrics(sliced performance)
     B-->>P: metrics table
     P->>R: write_markdown_report(...)
     P->>R: plot_cumulative_returns(...)
@@ -367,13 +382,14 @@ Best practice:
 
 ### `src/marketlab/pipeline.py`
 
-- Orchestrates the end-to-end Sprint 1 workflow plus the Phase 2 `train-models` path.
+- Orchestrates the Sprint 1 baseline workflow, the Phase 2 `train-models` artifact path, and the unified Phase 2 `run-experiment` comparison path.
 - Decides whether to reuse the prepared panel or rebuild it.
 - Runs enabled baselines for backtests and reports.
-- Builds modeling datasets, walk-forward folds, trained estimators, and training artifacts for `train-models`.
+- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, and experiment artifacts.
 
 Best practice:
 - Put workflow coordination here, not in strategies, reports, model registry, or CLI code.
+- Recompute metrics from the sliced OOS `PerformanceFrame`, not from the full-history backtest output.
 
 ### `src/marketlab/data/market.py`
 
@@ -410,6 +426,7 @@ Best practice:
 - Centralizes the shared weekly rebalance calendar.
 - Resolves the last available signal date in each `W-FRI` period.
 - Resolves the next effective trading date after each signal date.
+- Resolves the first future rebalance effective date after an existing signal date for fold-boundary flattening.
 
 Best practice:
 - Keep weekly signal timing in one shared module so targets, evaluation, and strategies cannot drift.
@@ -458,6 +475,17 @@ Best practice:
 - Strategy modules should produce weights, not portfolio returns.
 - Keep strategy semantics isolated from execution semantics.
 
+### `src/marketlab/strategies/ranking.py`
+
+- Turns one model's fold predictions into a canonical `WeightsFrame`.
+- Ranks longs from the highest scores and shorts from the lowest scores with `symbol` as the deterministic tie-breaker.
+- Emits full-symbol weight rows with explicit zeros for non-selected names.
+- Adds zero-weight boundary rows at the next rebalance `effective_date` when a later fold does not already begin there.
+
+Best practice:
+- Keep ranking prediction-only; do not derive scores from the panel in this layer.
+- Keep the exposure policy explicit: `+0.5` total long, `-0.5` total short, gross exposure `1.0`.
+
 ### `src/marketlab/backtest/engine.py`
 
 - Joins weights to adjusted open and close data.
@@ -468,6 +496,7 @@ Best practice:
 Best practice:
 - Keep execution timing explicit.
 - Use adjusted open and close consistently so splits and dividends do not distort returns.
+- Backtest one strategy at a time, then concatenate performance frames at the pipeline layer.
 
 ### `src/marketlab/backtest/metrics.py`
 
@@ -480,6 +509,8 @@ Best practice:
 ### `src/marketlab/reports/markdown.py`
 
 - Produces a compact Markdown report for each run.
+- Derives the strategy list from the actual `PerformanceFrame`.
+- Switches scope text when ML strategies are present.
 
 ### `src/marketlab/reports/plots.py`
 
@@ -510,22 +541,24 @@ Best practice:
 - Keep strategies responsible for weights, not return calculation.
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `test_start`.
+- Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
 - Treat no allocation as cash with zero return.
-- Keep `train-models` focused on model artifacts only until ranking integration lands.
+- Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
 
 ## Current Risks
 
 - `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
-- `run-experiment` is still equivalent to the baseline `backtest` path.
-- ranking strategy and ML portfolio integration are still not implemented.
+- `run-experiment` now trains models in-process and may leave per-fold model pickles in experiment run directories as a side effect of reusing the training layer.
+- richer model-comparison reporting is still deferred beyond the current phase.
 - the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
-- metric definitions are suitable for a baseline research scaffold, not yet a full institutional evaluation stack.
+- metric definitions are suitable for a research scaffold, not yet a full institutional evaluation stack.
 
 ## Extension Rules For Phase 2
 
-- Add ranking behavior without breaking the existing panel, weekly modeling dataset, weights, or performance contracts.
-- Keep walk-forward evaluation in the evaluation layer, not inside current baseline strategy modules.
+- Add richer reporting without breaking the existing panel, weekly modeling dataset, weights, performance, or shared OOS comparison contracts.
+- Keep walk-forward evaluation in the evaluation layer, not inside current strategy modules.
 - Reuse the fold engine and its `target_end_date <= test_start` rule rather than rebuilding train/test masks in model code.
 - Keep model construction in the registry and workflow orchestration in `pipeline.py`.
+- Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
