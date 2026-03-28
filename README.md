@@ -73,3 +73,16 @@ If `artifacts/data/panel.csv` already exists, the pipeline uses it and does not 
 python -m pytest -q --basetemp .pytest_tmp
 powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1
 ```
+
+## Local CI Entry Points
+
+```bash
+python -m uv sync --group dev
+python -m uv run tox -e lint
+python -m uv run tox -e docs
+python -m uv run tox -e package
+python -m uv run tox -e py312
+python -m uv run tox -e preflight
+```
+
+The MkDocs site renders the current root Markdown docs through `mkdocs-include-markdown-plugin`, so the documentation build stays aligned with `README.md`, `ARCHITECTURE.md`, `Phase2-results.md`, and `PLAN.md`.
