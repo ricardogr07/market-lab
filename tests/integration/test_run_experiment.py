@@ -174,9 +174,13 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert (run_dir / "report.md").exists()
     assert (run_dir / "cumulative_returns.png").exists()
     assert (run_dir / "drawdown.png").exists()
+    assert (run_dir / "model_summary.csv").exists()
+    assert (run_dir / "fold_summary.csv").exists()
 
     metrics = pd.read_csv(run_dir / "metrics.csv")
     performance = pd.read_csv(run_dir / "performance.csv", parse_dates=["date"])
+    model_summary = pd.read_csv(run_dir / "model_summary.csv")
+    fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
     expected_strategies = {
@@ -187,6 +191,8 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     }
     assert set(metrics["strategy"]) == expected_strategies
     assert set(performance["strategy"]) == expected_strategies
+    assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
+    assert not fold_summary.empty
 
     date_sequences = {
         strategy: tuple(frame["date"].tolist())
@@ -199,6 +205,10 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         expected_equity = (1.0 + strategy_frame["net_return"]).cumprod()
         assert strategy_frame["equity"].tolist() == pytest.approx(expected_equity.tolist())
 
+    assert "## Strategy Metrics" in report_text
+    assert "## Model Summary" in report_text
+    assert "## Fold Summary" in report_text
+    assert "## Headline Outcomes" in report_text
     assert "Phase 2 baseline plus ML experiment" in report_text
     assert "ml_logistic_regression" in report_text
 
@@ -220,3 +230,5 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
 
     assert set(metrics["strategy"]) == {"buy_hold", "sma"}
     assert set(performance["strategy"]) == {"buy_hold", "sma"}
+    assert not (run_dir / "model_summary.csv").exists()
+    assert not (run_dir / "fold_summary.csv").exists()

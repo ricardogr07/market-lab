@@ -104,7 +104,7 @@ def _write_config(tmp_path: Path, *, models: list[dict[str, str]]) -> Path:
     return config_path
 
 
-def test_train_models_writes_fold_metrics_manifest_and_predictions(tmp_path: Path) -> None:
+def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path,
         models=[
@@ -126,21 +126,31 @@ def test_train_models_writes_fold_metrics_manifest_and_predictions(tmp_path: Pat
     manifest_path = run_dir / "model_manifest.csv"
     metrics_path = run_dir / "model_metrics.csv"
     predictions_path = run_dir / "predictions.csv"
+    model_summary_path = run_dir / "model_summary.csv"
+    fold_summary_path = run_dir / "fold_summary.csv"
 
     assert folds_path.exists()
     assert manifest_path.exists()
     assert metrics_path.exists()
     assert predictions_path.exists()
+    assert model_summary_path.exists()
+    assert fold_summary_path.exists()
 
     folds = pd.read_csv(folds_path)
     manifest = pd.read_csv(manifest_path)
     metrics = pd.read_csv(metrics_path)
     predictions = pd.read_csv(predictions_path)
+    model_summary = pd.read_csv(model_summary_path)
+    fold_summary = pd.read_csv(fold_summary_path)
 
     assert not folds.empty
+    assert not model_summary.empty
+    assert not fold_summary.empty
     assert set(manifest["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(metrics["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(predictions["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(fold_summary["fold_id"]) == set(folds["fold_id"])
     assert predictions["score"].between(0.0, 1.0).all()
     assert predictions["predicted_target"].isin([0, 1]).all()
     assert predictions.groupby("model_name")["fold_id"].nunique().gt(0).all()
