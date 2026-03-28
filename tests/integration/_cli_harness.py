@@ -162,4 +162,3 @@ def latest_run_dir(run_root: Path) -> Path:
     run_dirs = sorted(path for path in run_root.iterdir() if path.is_dir())
     assert run_dirs, f"No run directories exist under {run_root}"
     return run_dirs[-1]
-
