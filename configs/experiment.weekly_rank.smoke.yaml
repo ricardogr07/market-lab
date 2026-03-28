@@ -2,10 +2,10 @@ experiment_name: weekly_rank_smoke
 
 data:
   symbols: [VOO, QQQ, SMH, XLV, IEMG]
-  start_date: "2024-01-01"
+  start_date: "2021-01-01"
   end_date: "2024-12-31"
   interval: "1d"
-  cache_dir: "artifacts/e2e-data"
+  cache_dir: "artifacts/e2e-data-phase2"
   prepared_panel_filename: "panel.csv"
 
 features:

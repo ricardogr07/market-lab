@@ -18,6 +18,17 @@ def _markdown_table(frame: pd.DataFrame) -> str:
     return "\n".join([header, separator, *rows])
 
 
+def _scope_lines(performance: pd.DataFrame) -> list[str]:
+    strategy_names = performance["strategy"].drop_duplicates().tolist()
+    has_ml_strategy = any(strategy.startswith("ml_") for strategy in strategy_names)
+    if has_ml_strategy:
+        return [
+            "- Phase 2 baseline plus ML experiment",
+            "- Performance is sliced to the shared walk-forward OOS window",
+        ]
+    return ["- Sprint 1 baseline pipeline"]
+
+
 def write_markdown_report(
     config: ExperimentConfig,
     metrics: pd.DataFrame,
@@ -30,6 +41,10 @@ def write_markdown_report(
     date_min = performance["date"].min().date().isoformat()
     date_max = performance["date"].max().date().isoformat()
     metrics_table = _markdown_table(metrics.round(6))
+    strategy_lines = [
+        f"- `{strategy}`"
+        for strategy in performance["strategy"].drop_duplicates().tolist()
+    ]
 
     content = "\n".join(
         [
@@ -37,15 +52,14 @@ def write_markdown_report(
             "",
             "## Scope",
             "",
-            "- Sprint 1 baseline pipeline",
+            *_scope_lines(performance),
             f"- Symbols: {', '.join(config.data.symbols)}",
             f"- Window: {date_min} to {date_max}",
             f"- Cost model: {config.portfolio.costs.bps_per_trade} bps per unit turnover",
             "",
             "## Strategies",
             "",
-            "- `buy_hold`",
-            "- `sma`",
+            *strategy_lines,
             "",
             "## Metrics",
             "",
