@@ -3,105 +3,116 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
-import yaml
+from tests.integration import _cli_harness
 
-from marketlab.cli import main
 from marketlab.data.panel import save_panel_csv
 
+assert_command_ok = _cli_harness.assert_command_ok
+build_synthetic_panel = _cli_harness.build_synthetic_panel
+latest_run_dir = _cli_harness.latest_run_dir
+write_yaml_config = _cli_harness.write_yaml_config
+MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
+FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
+run_marketlab_cli = getattr(
+    _cli_harness,
+    "run_marketlab_cli",
+    _cli_harness.run_launcher_command,
+)
+stdout_path = getattr(
+    _cli_harness,
+    "stdout_path",
+    _cli_harness.printed_path,
+)
 
-def _build_synthetic_panel() -> pd.DataFrame:
-    trading_dates = pd.bdate_range("2020-01-01", "2022-12-30")
-    rows: list[dict[str, object]] = []
-
-    for symbol_index, (symbol, base_price, amplitude) in enumerate(
-        (
-            ("AAA", 100.0, 0.45),
-            ("BBB", 130.0, 0.40),
-            ("CCC", 160.0, 0.35),
-        )
-    ):
-        close_price = base_price
-        for row_index, timestamp in enumerate(trading_dates):
-            week_ordinal = timestamp.to_period("W-FRI").ordinal + symbol_index
-            direction = 1.0 if week_ordinal % 2 == 0 else -1.0
-            open_price = close_price
-            close_price = max(5.0, open_price + (amplitude * direction))
-            high_price = max(open_price, close_price) + 0.2
-            low_price = min(open_price, close_price) - 0.2
-
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "timestamp": timestamp,
-                    "open": round(open_price, 4),
-                    "high": round(high_price, 4),
-                    "low": round(low_price, 4),
-                    "close": round(close_price, 4),
-                    "volume": 1_000_000 + (symbol_index * 10_000) + row_index,
-                    "adj_close": round(close_price, 4),
-                    "adj_factor": 1.0,
-                    "adj_open": round(open_price, 4),
-                    "adj_high": round(high_price, 4),
-                    "adj_low": round(low_price, 4),
-                }
-            )
-
-    return pd.DataFrame(rows).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+MODEL_METRICS_COLUMNS = [
+    "model_name",
+    "fold_id",
+    "train_start",
+    "train_end",
+    "label_cutoff",
+    "test_start",
+    "test_end",
+    "train_rows",
+    "test_rows",
+    "accuracy",
+    "target_rate",
+    "prediction_rate",
+    "roc_auc",
+    "log_loss",
+]
+PREDICTIONS_COLUMNS = [
+    "model_name",
+    "fold_id",
+    "symbol",
+    "signal_date",
+    "effective_date",
+    "target_end_date",
+    "forward_return",
+    "target",
+    "score",
+    "predicted_target",
+]
 
 
 def _write_config(tmp_path: Path, *, models: list[dict[str, str]]) -> Path:
     cache_dir = tmp_path / "cache"
-    runs_dir = tmp_path / "runs"
-    panel_path = cache_dir / "panel.csv"
+    save_panel_csv(
+        build_synthetic_panel(
+            (
+                ("AAA", 100.0, 0.45),
+                ("BBB", 130.0, 0.40),
+                ("CCC", 160.0, 0.35),
+            ),
+            start_date="2020-01-01",
+            end_date="2022-12-30",
+        ),
+        cache_dir / "panel.csv",
+    )
 
-    save_panel_csv(_build_synthetic_panel(), panel_path)
-
-    config = {
-        "experiment_name": "integration_train_models",
-        "data": {
-            "symbols": ["AAA", "BBB", "CCC"],
-            "start_date": "2020-01-01",
-            "end_date": "2022-12-30",
-            "interval": "1d",
-            "cache_dir": str(cache_dir),
-            "prepared_panel_filename": "panel.csv",
+    return write_yaml_config(
+        tmp_path / "train_models.yaml",
+        {
+            "experiment_name": "integration_train_models",
+            "data": {
+                "symbols": ["AAA", "BBB", "CCC"],
+                "start_date": "2020-01-01",
+                "end_date": "2022-12-30",
+                "interval": "1d",
+                "cache_dir": str(cache_dir),
+                "prepared_panel_filename": "panel.csv",
+            },
+            "features": {
+                "return_windows": [5, 10],
+                "ma_windows": [5, 10],
+                "vol_windows": [5],
+                "momentum_window": 10,
+            },
+            "target": {
+                "horizon_days": 5,
+                "type": "direction",
+            },
+            "portfolio": {
+                "ranking": {
+                    "rebalance_frequency": "W-FRI",
+                }
+            },
+            "models": models,
+            "evaluation": {
+                "walk_forward": {
+                    "train_years": 1,
+                    "test_months": 2,
+                    "step_months": 2,
+                }
+            },
+            "artifacts": {
+                "output_dir": str(tmp_path / "runs"),
+                "save_predictions": True,
+                "save_metrics_csv": True,
+                "save_report_md": False,
+                "save_plots": False,
+            },
         },
-        "features": {
-            "return_windows": [5, 10],
-            "ma_windows": [5, 10],
-            "vol_windows": [5],
-            "momentum_window": 10,
-        },
-        "target": {
-            "horizon_days": 5,
-            "type": "direction",
-        },
-        "portfolio": {
-            "ranking": {
-                "rebalance_frequency": "W-FRI",
-            }
-        },
-        "models": models,
-        "evaluation": {
-            "walk_forward": {
-                "train_years": 1,
-                "test_months": 2,
-                "step_months": 2,
-            }
-        },
-        "artifacts": {
-            "output_dir": str(runs_dir),
-            "save_predictions": True,
-            "save_metrics_csv": True,
-            "save_report_md": False,
-            "save_plots": False,
-        },
-    }
-
-    config_path = tmp_path / "train_models.yaml"
-    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    return config_path
+    )
 
 
 def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp_path: Path) -> None:
@@ -113,36 +124,35 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
         ],
     )
 
-    result = main(["train-models", "--config", str(config_path)])
-
-    assert result == 0
+    result = run_marketlab_cli("train-models", config_path)
+    assert_command_ok(result)
 
     run_root = tmp_path / "runs" / "integration_train_models"
-    run_dirs = list(run_root.iterdir())
-    assert len(run_dirs) == 1
-    run_dir = run_dirs[0]
+    run_dir = latest_run_dir(run_root)
 
-    folds_path = run_dir / "folds.csv"
-    manifest_path = run_dir / "model_manifest.csv"
-    metrics_path = run_dir / "model_metrics.csv"
-    predictions_path = run_dir / "predictions.csv"
-    model_summary_path = run_dir / "model_summary.csv"
-    fold_summary_path = run_dir / "fold_summary.csv"
+    assert stdout_path(result) == run_dir.resolve()
+    assert (run_dir / "models").is_dir()
+    assert {path.name for path in run_dir.iterdir()} == {
+        "folds.csv",
+        "model_manifest.csv",
+        "model_metrics.csv",
+        "predictions.csv",
+        "model_summary.csv",
+        "fold_summary.csv",
+        "models",
+    }
 
-    assert folds_path.exists()
-    assert manifest_path.exists()
-    assert metrics_path.exists()
-    assert predictions_path.exists()
-    assert model_summary_path.exists()
-    assert fold_summary_path.exists()
+    folds = pd.read_csv(run_dir / "folds.csv")
+    manifest = pd.read_csv(run_dir / "model_manifest.csv")
+    metrics = pd.read_csv(run_dir / "model_metrics.csv")
+    predictions = pd.read_csv(run_dir / "predictions.csv")
+    model_summary = pd.read_csv(run_dir / "model_summary.csv")
+    fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
 
-    folds = pd.read_csv(folds_path)
-    manifest = pd.read_csv(manifest_path)
-    metrics = pd.read_csv(metrics_path)
-    predictions = pd.read_csv(predictions_path)
-    model_summary = pd.read_csv(model_summary_path)
-    fold_summary = pd.read_csv(fold_summary_path)
-
+    assert list(metrics.columns) == MODEL_METRICS_COLUMNS
+    assert list(predictions.columns) == PREDICTIONS_COLUMNS
+    assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
+    assert list(fold_summary.columns) == FOLD_SUMMARY_COLUMNS
     assert not folds.empty
     assert not model_summary.empty
     assert not fold_summary.empty
@@ -165,5 +175,8 @@ def test_train_models_surfaces_unsupported_model_name(tmp_path: Path) -> None:
         models=[{"name": "not_real"}],
     )
 
-    with pytest.raises(ValueError, match="Unsupported model 'not_real'"):
-        main(["train-models", "--config", str(config_path)])
+    result = run_marketlab_cli("train-models", config_path)
+
+    assert result.returncode != 0
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    assert "Unsupported model 'not_real'" in combined_output
