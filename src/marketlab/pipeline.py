@@ -18,6 +18,7 @@ from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
 from marketlab.reports.markdown import write_markdown_report
 from marketlab.reports.plots import plot_cumulative_returns, plot_drawdown
+from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
 from marketlab.strategies.ranking import generate_weights as ranking_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
@@ -35,6 +36,8 @@ class ExperimentArtifacts:
     report_path: Path | None
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
+    fold_summary_path: Path | None
+    model_summary_path: Path | None
 
 
 @dataclass(slots=True)
@@ -45,6 +48,8 @@ class TrainModelsArtifacts:
     model_manifest_path: Path
     metrics_path: Path | None
     predictions_path: Path | None
+    fold_summary_path: Path
+    model_summary_path: Path
 
 
 def prepare_data(config: ExperimentConfig) -> tuple[pd.DataFrame, Path]:
@@ -73,6 +78,8 @@ def _persist_experiment_outputs(
     panel_path: Path,
     performance: pd.DataFrame,
     run_dir: Path | None = None,
+    model_summary: pd.DataFrame | None = None,
+    fold_summary: pd.DataFrame | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
@@ -82,6 +89,16 @@ def _persist_experiment_outputs(
     metrics.to_csv(metrics_path, index=False)
     performance.to_csv(performance_path, index=False)
 
+    model_summary_path: Path | None = None
+    if model_summary is not None:
+        model_summary_path = artifact_run_dir / "model_summary.csv"
+        model_summary.to_csv(model_summary_path, index=False)
+
+    fold_summary_path: Path | None = None
+    if fold_summary is not None:
+        fold_summary_path = artifact_run_dir / "fold_summary.csv"
+        fold_summary.to_csv(fold_summary_path, index=False)
+
     report_path: Path | None = None
     if config.artifacts.save_report_md:
         report_path = write_markdown_report(
@@ -89,6 +106,8 @@ def _persist_experiment_outputs(
             metrics=metrics,
             performance=performance,
             path=artifact_run_dir / "report.md",
+            model_summary=model_summary,
+            fold_summary=fold_summary,
         )
 
     cumulative_plot_path: Path | None = None
@@ -111,6 +130,8 @@ def _persist_experiment_outputs(
         report_path=report_path,
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
+        fold_summary_path=fold_summary_path,
+        model_summary_path=model_summary_path,
     )
 
 
@@ -280,6 +301,19 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         predictions_path = run_dir / "predictions.csv"
         training_outputs.predictions.to_csv(predictions_path, index=False)
 
+    model_summary = build_model_summary(
+        model_metrics=training_outputs.metrics,
+        model_manifest=training_outputs.manifest,
+    )
+    fold_summary = build_fold_summary(
+        model_metrics=training_outputs.metrics,
+        model_manifest=training_outputs.manifest,
+    )
+    model_summary_path = run_dir / "model_summary.csv"
+    fold_summary_path = run_dir / "fold_summary.csv"
+    model_summary.to_csv(model_summary_path, index=False)
+    fold_summary.to_csv(fold_summary_path, index=False)
+
     return TrainModelsArtifacts(
         run_dir=run_dir,
         panel_path=panel_path,
@@ -287,6 +321,8 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         model_manifest_path=model_manifest_path,
         metrics_path=metrics_path,
         predictions_path=predictions_path,
+        fold_summary_path=fold_summary_path,
+        model_summary_path=model_summary_path,
     )
 
 
@@ -351,10 +387,20 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         ignore_index=True,
     )
     oos_performance = _slice_and_rebase_performance(combined_performance, oos_dates)
+    model_summary = build_model_summary(
+        model_metrics=training_outputs.metrics,
+        model_manifest=training_outputs.manifest,
+    )
+    fold_summary = build_fold_summary(
+        model_metrics=training_outputs.metrics,
+        model_manifest=training_outputs.manifest,
+    )
 
     return _persist_experiment_outputs(
         config=config,
         panel_path=panel_path,
         performance=oos_performance,
         run_dir=run_dir,
+        model_summary=model_summary,
+        fold_summary=fold_summary,
     )
