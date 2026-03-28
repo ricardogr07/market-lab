@@ -4,9 +4,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.uv-cache/
 .tox/
+.tox-ci/
+.tox-phase3/
 build/
 dist/
+site/
 pytest-cache-files-*/
 *.egg-info/
 artifacts/*

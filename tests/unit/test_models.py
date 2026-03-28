@@ -9,7 +9,6 @@ from marketlab.models import (
     supported_model_names,
 )
 
-
 FEATURES = pd.DataFrame(
     {
         "feature_a": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],

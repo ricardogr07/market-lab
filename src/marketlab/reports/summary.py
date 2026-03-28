@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-
 MODEL_SUMMARY_COLUMNS = [
     "model_name",
     "estimator_label",

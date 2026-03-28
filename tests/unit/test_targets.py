@@ -20,7 +20,6 @@ from marketlab.targets.weekly import (
     build_weekly_snapshots,
 )
 
-
 TRADING_DATES = pd.to_datetime(
     [
         "2024-01-02",
