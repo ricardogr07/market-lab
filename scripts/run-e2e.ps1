@@ -29,6 +29,17 @@ function Assert-PathExists {
     }
 }
 
+function Assert-OptionalPathExists {
+    param(
+        [string]$PathValue,
+        [string]$Description
+    )
+
+    if (Test-Path -LiteralPath $PathValue) {
+        Write-Host "$Description found: $PathValue"
+    }
+}
+
 function Get-CommandOutputPath {
     param(
         [string[]]$OutputLines,
@@ -101,24 +112,43 @@ try {
 
     Start-Sleep -Seconds 1
 
-    Write-Host "Running full Sprint 1 experiment flow..."
+    Write-Host "Running Phase 2 train-models flow..."
+    $trainModelsOutput = & python $LauncherPath train-models --config $ConfigFullPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "train-models failed."
+        exit 45
+    }
+
+    $trainModelsRunDir = Get-CommandOutputPath -OutputLines @($trainModelsOutput) -Description "train-models" -ExitCode 46
+    Assert-PathExists -PathValue $trainModelsRunDir -Description "Train-models run directory" -ExitCode 47
+
+    foreach ($artifact in @("folds.csv", "model_manifest.csv", "model_metrics.csv", "predictions.csv", "model_summary.csv", "fold_summary.csv")) {
+        Assert-PathExists -PathValue (Join-Path $trainModelsRunDir $artifact) -Description "Train-models artifact $artifact" -ExitCode 48
+    }
+    Assert-PathExists -PathValue (Join-Path $trainModelsRunDir "models") -Description "Train-models models directory" -ExitCode 49
+
+    Start-Sleep -Seconds 1
+
+    Write-Host "Running full Phase 2 experiment flow..."
     $experimentOutput = & python $LauncherPath run-experiment --config $ConfigFullPath
     if ($LASTEXITCODE -ne 0) {
         Write-Error "run-experiment failed."
-        exit 50
+        exit 60
     }
 
-    $experimentRunDir = Get-CommandOutputPath -OutputLines @($experimentOutput) -Description "run-experiment" -ExitCode 51
-    Assert-PathExists -PathValue $experimentRunDir -Description "Run-experiment directory" -ExitCode 52
+    $experimentRunDir = Get-CommandOutputPath -OutputLines @($experimentOutput) -Description "run-experiment" -ExitCode 61
+    Assert-PathExists -PathValue $experimentRunDir -Description "Run-experiment directory" -ExitCode 62
 
-    foreach ($artifact in @("metrics.csv", "performance.csv", "report.md", "cumulative_returns.png", "drawdown.png")) {
-        Assert-PathExists -PathValue (Join-Path $experimentRunDir $artifact) -Description "Run-experiment artifact $artifact" -ExitCode 53
+    foreach ($artifact in @("metrics.csv", "performance.csv", "report.md", "cumulative_returns.png", "drawdown.png", "model_summary.csv", "fold_summary.csv")) {
+        Assert-PathExists -PathValue (Join-Path $experimentRunDir $artifact) -Description "Run-experiment artifact $artifact" -ExitCode 63
     }
+    Assert-OptionalPathExists -PathValue (Join-Path $experimentRunDir "models") -Description "Run-experiment models directory"
 
-    Assert-PathExists -PathValue $runRoot -Description "Configured run root" -ExitCode 54
+    Assert-PathExists -PathValue $runRoot -Description "Configured run root" -ExitCode 64
 
-    Write-Host "Real-data E2E completed successfully."
+    Write-Host "Phase 2 real-data E2E completed successfully."
     Write-Host "Backtest run: $backtestRunDir"
+    Write-Host "Train-models run: $trainModelsRunDir"
     Write-Host "Run-experiment run: $experimentRunDir"
     exit 0
 }
