@@ -21,15 +21,25 @@ This document ties the current pieces together and freezes the working rules tha
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, plots, and Markdown reporting
+  - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
+  - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
   - fixture-backed tests and a Phase 2 real-data E2E runner that validates baseline, training, and experiment artifact sets
 - Deferred to later sprints:
-  - CI, Docker, and broader packaging hardening
+  - scheduled Docker automation for recurring runs
+  - release automation and broader packaging hardening
 
 ## Canonical Local Entry Points
 
 - Local repo execution:
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
   - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
+- Local Docker validation:
+  - `docker build -t marketlab-cli .`
+  - `docker run --rm marketlab-cli --help`
+- Manual GitHub Actions Docker automation:
+  - `.github/workflows/docker-runner.yml`
+  - `workflow_dispatch` only
+  - defaults to `backtest` on `configs/experiment.weekly_rank.smoke.yaml`
 - Real-data E2E:
   - `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1`
   - covers `prepare-data`, `backtest`, `train-models`, and `run-experiment` on the smoke config
@@ -37,6 +47,8 @@ This document ties the current pieces together and freezes the working rules tha
   - `python -m pytest -q --basetemp .pytest_tmp`
 
 The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a safe default for local source execution unless the environment is known to point at the current editable install. The launcher script exists to remove that ambiguity.
+
+The Docker image deliberately uses the installed `marketlab` console script instead of the repo-local launcher. That split keeps local development pointed at the source tree while the container validates the packaged CLI path.
 
 ## Validation Flow
 
@@ -55,12 +67,29 @@ flowchart TD
     Experiment --> ExperimentArtifacts[metrics.csv performance.csv report.md plots summaries optional models/]
 ```
 
+## Automation Split
+
+```mermaid
+flowchart TD
+    PRCI[Required PR CI] --> Tox[lint docs package py312 integration]
+    Manual[Docker Runner workflow_dispatch] --> Build[Dockerfile build]
+    Build --> InstalledCli[installed marketlab entrypoint]
+    InstalledCli --> SmokeConfig[historical smoke config]
+    InstalledCli --> DockerArtifacts[/app/artifacts upload]
+```
+
+The required CI path stays offline and deterministic through tox. The Docker runner is separate, manual, and allowed to exercise the historical real-data smoke config without becoming a required PR gate.
+
 ## System Map
 
 ```mermaid
 flowchart TD
     User[User or automation] --> Launcher[scripts/run_marketlab.py]
+    User --> DockerWorkflow[.github/workflows/docker-runner.yml]
     Launcher --> CLI[src/marketlab/cli.py]
+    DockerWorkflow --> DockerImage[Dockerfile]
+    DockerImage --> InstalledCLI[marketlab console script]
+    InstalledCLI --> CLI
     CLI --> Config[src/marketlab/config.py]
     CLI --> Pipeline[src/marketlab/pipeline.py]
 
@@ -400,6 +429,27 @@ Best practice:
 - Keep the smoke assertions aligned with the actual Phase 2 command surface.
 - Treat smoke results as validation evidence, not robust model-selection proof.
 
+### `Dockerfile`
+
+- Builds a packaged MarketLab CLI image from the repository source.
+- Installs the package into a Python 3.12 runtime image.
+- Copies checked-in `configs/` into `/app/configs`.
+- Runs as a non-root user with writable `/app/artifacts`.
+
+Best practice:
+- Keep Docker as an execution wrapper around the installed package, not as a second source-tree launcher.
+- Preserve the repo-local launcher for development and the installed CLI for container automation.
+
+### `.github/workflows/docker-runner.yml`
+
+- Manually dispatches a Dockerized MarketLab run for `backtest`, `train-models`, or `run-experiment`.
+- Builds the image, runs the selected command, captures the resolved run directory, and uploads copied artifacts.
+- Keeps the workflow outside the required PR CI check set.
+
+Best practice:
+- Treat this workflow as manual historical smoke automation, not as a rolling live-market schedule.
+- Keep required PR CI deterministic and offline; use the Docker runner when a packaged execution path or real-data smoke replay is the goal.
+
 ### `src/marketlab/cli.py`
 
 - Parses subcommands.
@@ -583,7 +633,9 @@ Best practice:
 ## Best Practices
 
 - Use `python scripts/run_marketlab.py ...` for repo-local execution.
+- Use the Docker image to validate the installed `marketlab` CLI path, not to replace the repo-local launcher during development.
 - Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local Phase 2 smoke validation.
+- Treat `.github/workflows/docker-runner.yml` as manual historical smoke automation, not as a required CI or rolling production schedule.
 - Keep `cli.py` thin and `pipeline.py` orchestration-focused.
 - Preserve the `MarketPanel`, weekly modeling dataset, `WeightsFrame`, and `PerformanceFrame` contracts.
 - Build features from trailing information only.

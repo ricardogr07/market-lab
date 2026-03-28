@@ -89,3 +89,24 @@ python -m tox -e preflight
 Use `python -m tox -e preflight` as the canonical local pre-push gate. It runs the same lint, docs, packaging, unit-test, and offline integration checks that Phase 3 CI expects through one local entrypoint after the dev dependencies are installed.
 
 The MkDocs site renders the current root Markdown docs through `mkdocs-include-markdown-plugin`, so the documentation build stays aligned with `README.md`, `ARCHITECTURE.md`, `Phase2-results.md`, and `PLAN.md`.
+
+## Dockerized CLI
+
+```bash
+docker build -t marketlab-cli .
+docker run --rm marketlab-cli --help
+docker run --rm marketlab-cli backtest --config configs/experiment.weekly_rank.smoke.yaml
+```
+
+The container uses the installed `marketlab` console script as its entrypoint. Keep using `python scripts/run_marketlab.py ...` for local source-tree development; the Docker image exists to validate the installed package path and to support manual GitHub Actions runs.
+
+## Manual Docker Runner Workflow
+
+GitHub Actions now includes a manual workflow named `Docker Runner` with these inputs:
+
+- `command`: `backtest`, `train-models`, or `run-experiment`
+- `config_path`: repo-relative config path inside the image, defaulting to `configs/experiment.weekly_rank.smoke.yaml`
+
+The workflow defaults to `backtest`, builds the Docker image, runs the selected command inside the container, writes the resolved run directory into the job summary, and uploads the copied `artifacts/` tree as an Actions artifact.
+
+This workflow is not part of the required PR CI checks. It is a manual historical real-data smoke runner around the checked-in smoke config, not a rolling weekly market automation job.
