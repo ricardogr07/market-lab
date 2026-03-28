@@ -72,3 +72,53 @@ jobs:
           echo "RESOLVED_RUN_DIR=${resolved_run_dir}" >> "${GITHUB_ENV}"
 
           exit "${status}"
+
+      - name: Summarize Docker run
+        if: ${{ always() }}
+        shell: bash
+        env:
+          MARKETLAB_COMMAND: ${{ inputs.command }}
+          MARKETLAB_CONFIG_PATH: ${{ inputs.config_path }}
+          RESOLVED_RUN_DIR: ${{ env.RESOLVED_RUN_DIR }}
+        run: |
+          {
+            echo "## Docker Runner"
+            echo
+            echo "- Command: \`${MARKETLAB_COMMAND}\`"
+            echo "- Config: \`${MARKETLAB_CONFIG_PATH}\`"
+            if [ -n "${RESOLVED_RUN_DIR:-}" ]; then
+              echo "- Resolved run directory: \`${RESOLVED_RUN_DIR}\`"
+            else
+              echo "- Resolved run directory: unavailable"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Copy Docker artifacts to runner
+        if: ${{ always() && env.CONTAINER_NAME != '' }}
+        shell: bash
+        env:
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
+        run: |
+          mkdir -p docker-artifacts
+
+          if docker cp "${CONTAINER_NAME}:/app/artifacts/." docker-artifacts; then
+            echo "Copied /app/artifacts to docker-artifacts"
+          else
+            echo "No artifacts copied from /app/artifacts"
+          fi
+
+      - name: Upload Docker runner artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-runner-${{ inputs.command }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docker-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove Docker container
+        if: ${{ always() && env.CONTAINER_NAME != '' }}
+        shell: bash
+        env:
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
+        run: docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
