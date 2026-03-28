@@ -1,6 +1,6 @@
 # MarketLab
 
-MarketLab is a package-first research lab for reproducible market experiments. The current implementation now includes a working Phase 2 ML MVP on top of the frozen Sprint 1 scaffold: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, baseline-plus-ML experiments, and reviewable artifact summaries.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, shared out-of-sample experiments, and reviewable artifact summaries.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the system map, data contracts, execution flow, and extension rules.
 

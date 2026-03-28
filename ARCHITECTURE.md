@@ -2,9 +2,9 @@
 
 ## Purpose
 
-MarketLab is a research scaffold for reproducible market experiments over a fixed ETF universe. The current implementation covers the frozen Sprint 1 runtime path plus the first executable Phase 2 ML stack: canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, backtests, and reviewable artifacts.
 
-This document ties the current pieces together and freezes the working rules that should guide later iterations.
+This document ties the current pieces together and records the working rules that should guide later iterations.
 
 ## Scope
 
@@ -472,7 +472,7 @@ Best practice:
 
 ### `src/marketlab/pipeline.py`
 
-- Orchestrates the Sprint 1 baseline workflow, the Phase 2 `train-models` artifact path, and the unified Phase 2 `run-experiment` comparison path.
+- Orchestrates the baseline backtest workflow, the `train-models` artifact path, and the unified `run-experiment` comparison path.
 - Decides whether to reuse the prepared panel or rebuild it.
 - Runs enabled baselines for backtests and reports.
 - Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, summary tables, and experiment artifacts.
@@ -508,7 +508,7 @@ Best practice:
 - Operates symbol-by-symbol on adjusted close data.
 
 Best practice:
-- Only add trailing features in Sprint 1 and early Phase 2.
+- Only add trailing features unless a future phase deliberately expands the feature contract.
 - Do not introduce forward-looking features or label leakage.
 
 ### `src/marketlab/rebalance.py`
@@ -657,7 +657,7 @@ Best practice:
 - the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
 - metric definitions are suitable for a research scaffold, not yet a full institutional evaluation stack.
 
-## Extension Rules For Phase 2
+## Extension Rules
 
 - Add richer reporting without breaking the existing panel, weekly modeling dataset, weights, performance, or shared OOS comparison contracts.
 - Keep walk-forward evaluation in the evaluation layer, not inside current strategy modules.

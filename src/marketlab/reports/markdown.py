@@ -26,7 +26,7 @@ def _scope_lines(performance: pd.DataFrame) -> list[str]:
             "- Phase 2 baseline plus ML experiment",
             "- Performance is sliced to the shared walk-forward OOS window",
         ]
-    return ["- Sprint 1 baseline pipeline"]
+    return ["- Baseline-only experiment"]
 
 
 def _headline_lines(
@@ -116,3 +116,4 @@ def write_markdown_report(
 
     output_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
     return output_path
+
