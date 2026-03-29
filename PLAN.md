@@ -1,55 +1,108 @@
-# Phase 2 Exit Review
+# Project Status
 
-## Outcome
+## Current Outcome
 
-Phase 2 is complete as a working ML MVP on top of the frozen Sprint 1 scaffold.
+Phases 1 through 3 are complete.
 
-Delivered capabilities:
+MarketLab is now a public research MVP with:
 
-- weekly supervised modeling rows from the canonical market panel
-- walk-forward train/test folds
-- `train-models` with per-fold estimators, predictions, and summary artifacts
-- rank-based ML weights derived from model scores
-- `run-experiment` with baseline and ML strategies on the same shared out-of-sample window
-- reviewable reporting with strategy, model, and fold summaries
+- an installable Python package on PyPI
+- a packaged CLI with bundled example configs
+- reproducible local and CI validation
+- a Dockerized manual runner workflow
+- release automation and a monthly-batched release path
 
-The repository now supports a small, reproducible research workflow instead of a Sprint 1-only baseline scaffold.
+The repository now supports a small, reviewable end-to-end research workflow rather than a local-only scaffold.
 
-## Delivered PRs
+## Delivered By Phase
 
-- PR 1: weekly targets and modeling dataset
-- PR 2: walk-forward fold engine
-- PR 3: model registry and `train-models`
-- PR 4: ranking strategy and ML backtest integration
-- PR 5: reporting, artifact summaries, and phase wrap-up
+### Phase 1
 
-## Validation Evidence
+- canonical market panel preparation from raw market data
+- baseline feature engineering and weekly target scaffolding
+- baseline strategies and backtest engine
+- initial metrics, plots, and markdown reporting
 
-Phase 2 was validated with:
+### Phase 2
 
-- unit tests for panel, features, targets, walk-forward folds, ranking, and summary logic
-- integration tests for `train-models`, `run-experiment`, and baseline-only `backtest`
-- an opt-in real-data E2E smoke flow using the repository launcher
-- packaging and local pre-commit checks where the scope required them
+- weekly supervised modeling dataset
+- walk-forward fold generation and train/test slicing
+- configurable model registry and `train-models`
+- rank-based ML portfolio weights from model scores
+- shared out-of-sample comparison between baseline and ML strategies
+- reviewable model, fold, and strategy artifacts
 
-The important invariant is that the baseline behavior still works and the ML path stays on the same shared OOS comparison window.
+### Phase 3
 
-## Residual Risks
+- GitHub Actions validation for lint, docs, package, tests, and integration
+- local tox preflight gate
+- offline CLI integration coverage
+- Dockerized CLI image and manual GitHub Actions runner
+- packaging hardening and public repository readiness
+- deeper analytics artifacts and reporting
+- release automation with Release PR batching and PyPI publish path
+- installed-package CLI bootstrap with bundled config templates
 
-- `yfinance` remains an unstable external dependency.
-- The model registry is still classifier-oriented and assumes `target.type="direction"`.
-- `train-models` and `run-experiment` may leave per-fold model pickles in run directories as a side effect of reusing the training layer.
-- The reporting layer is suitable for the first ML MVP, not for a full institutional analytics stack.
+## Current MVP Capabilities
 
-## Phase 3 Handoff
+- `marketlab prepare-data --config ...`
+- `marketlab backtest --config ...`
+- `marketlab train-models --config ...`
+- `marketlab run-experiment --config ...`
+- `marketlab list-configs`
+- `marketlab write-config --name ... --output ...`
 
-Phase 3 should focus on:
+Current workflow surface:
 
-- CI
-- Docker
-- broader packaging hardening
-- larger universe or multi-config expansion
-- deeper analytics and reporting beyond the current CSV summaries and Markdown report
-- any deployment or productization work outside the current research scaffold
+- repo-local source execution through `python scripts/run_marketlab.py ...`
+- installed-package execution through the packaged `marketlab` CLI
+- baseline and ML strategy comparison on the same shared out-of-sample window
+- CSV, plot, and markdown reporting artifacts
+- packaged release and publish automation
 
-Phase 2 should not be reopened unless a regression breaks one of the frozen contracts or the shared OOS comparison behavior.
+## Current Boundaries
+
+MarketLab is a research-oriented MVP, not production trading infrastructure.
+
+Current constraints:
+
+- classifier-oriented modeling only, with `target.type="direction"`
+- small weekly ETF-focused research surface by default
+- simple walk-forward fold policy
+- one rank-based ML portfolio construction path
+- lightweight analytics suitable for research review, not institutional reporting
+- `yfinance` remains an unstable external dependency for raw market data acquisition
+
+## Phase 4 Direction
+
+Phase 4 should focus on evaluation rigor first, then strategy research, then lightweight model expansion.
+
+Priority areas:
+
+1. stronger walk-forward guardrails and skipped-fold diagnostics
+2. ranking-aware model evaluation beyond ROC AUC and accuracy
+3. calibration and score-quality diagnostics
+4. improved strategy construction such as long-only and confidence-gated ranking variants
+5. broader sklearn-only model comparison baselines
+
+This next phase should stay lightweight on dependencies and preserve the current reproducible research posture.
+
+## Deferred / Optional
+
+- stricter branch/ruleset hardening can wait
+- wiki polish is optional and deferred
+- sponsors are already in place
+- cron-based Docker automation is optional follow-on work, not an MVP requirement
+
+## Phase 4 Issue Seeds
+
+The next issue/project track should be created around:
+
+1. Refresh repo plan through Phase 3 and seed the Phase 4 roadmap
+2. Add walk-forward guardrails and skipped-fold diagnostics
+3. Add ranking-aware model evaluation metrics and artifacts
+4. Add calibration and threshold diagnostics to model reporting
+5. Add long-only and confidence-gated ranking strategy modes
+6. Add lightweight model expansion for comparison baselines
+7. Publish a Phase 4 results review and refresh the roadmap
+8. Epic issue: Phase 4: evaluation rigor and strategy research
