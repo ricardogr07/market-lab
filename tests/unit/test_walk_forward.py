@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -11,9 +11,17 @@ from marketlab.config import (
     RankingConfig,
     TargetConfig,
     WalkForwardConfig,
+    load_config,
 )
 from marketlab.data.panel import load_panel_csv
 from marketlab.evaluation.walk_forward import (
+    DIAGNOSTIC_COLUMNS,
+    SKIP_REASON_INCOMPLETE_TEST_WINDOW,
+    SKIP_REASON_INSUFFICIENT_TEST_POSITIVE_RATE,
+    SKIP_REASON_INSUFFICIENT_TEST_ROWS,
+    SKIP_REASON_INSUFFICIENT_TRAIN_POSITIVE_RATE,
+    SKIP_REASON_INSUFFICIENT_TRAIN_ROWS,
+    build_walk_forward_diagnostics,
     build_walk_forward_folds,
     folds_to_frame,
     slice_fold_rows,
@@ -59,6 +67,25 @@ def test_walk_forward_first_fold_uses_expected_boundaries() -> None:
     assert first_fold.label_cutoff == pd.Timestamp("2021-01-08")
     assert first_fold.test_start == pd.Timestamp("2021-01-08")
     assert first_fold.test_end == pd.Timestamp("2021-04-02")
+
+
+def test_walk_forward_embargo_adjusts_label_cutoff_and_training_range() -> None:
+    dataset = _build_modeling_dataset()
+    fold = build_walk_forward_folds(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            embargo_periods=1,
+        ),
+    )[0]
+    train_rows, _ = slice_fold_rows(dataset, fold)
+
+    assert fold.label_cutoff == pd.Timestamp("2021-01-01")
+    assert fold.train_end == pd.Timestamp("2020-12-25")
+    assert train_rows["signal_date"].max() < fold.label_cutoff
+    assert train_rows["target_end_date"].max() <= fold.label_cutoff
 
 
 def test_walk_forward_uses_label_cutoff_not_just_signal_date() -> None:
@@ -115,7 +142,7 @@ def test_walk_forward_returns_no_folds_without_enough_history() -> None:
     assert folds == []
 
 
-def test_walk_forward_drops_trailing_partial_test_window() -> None:
+def test_walk_forward_diagnostics_include_trailing_partial_candidate() -> None:
     signal_dates = pd.date_range("2020-01-03", "2021-05-21", freq="W-FRI")
     dataset = _build_modeling_dataset(signal_dates)
 
@@ -123,9 +150,85 @@ def test_walk_forward_drops_trailing_partial_test_window() -> None:
         dataset,
         WalkForwardConfig(train_years=1, test_months=3, step_months=3),
     )
+    diagnostics = build_walk_forward_diagnostics(
+        dataset,
+        WalkForwardConfig(train_years=1, test_months=3, step_months=3),
+    )
 
     assert len(folds) == 1
     assert folds[0].test_start == pd.Timestamp("2021-01-08")
+    assert diagnostics.columns.tolist() == DIAGNOSTIC_COLUMNS
+    assert diagnostics["candidate_id"].tolist() == [1, 2]
+    assert diagnostics["status"].tolist() == ["used", "skipped"]
+    assert diagnostics.loc[0, "fold_id"] == 1
+    assert pd.isna(diagnostics.loc[1, "fold_id"])
+    assert diagnostics.loc[1, "skip_reasons"] == SKIP_REASON_INCOMPLETE_TEST_WINDOW
+
+
+def test_walk_forward_min_train_rows_guardrail_skips_fold() -> None:
+    dataset = _build_modeling_dataset()
+    diagnostics = build_walk_forward_diagnostics(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            min_train_rows=200,
+        ),
+    )
+
+    assert build_walk_forward_folds(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            min_train_rows=200,
+        ),
+    ) == []
+    assert SKIP_REASON_INSUFFICIENT_TRAIN_ROWS in diagnostics.loc[0, "skip_reasons"].split(";")
+
+
+def test_walk_forward_min_test_rows_guardrail_skips_fold() -> None:
+    dataset = _build_modeling_dataset()
+    diagnostics = build_walk_forward_diagnostics(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            min_test_rows=30,
+        ),
+    )
+
+    assert build_walk_forward_folds(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            min_test_rows=30,
+        ),
+    ) == []
+    assert SKIP_REASON_INSUFFICIENT_TEST_ROWS in diagnostics.loc[0, "skip_reasons"].split(";")
+
+
+def test_walk_forward_positive_rate_guardrails_skip_fold() -> None:
+    dataset = _build_modeling_dataset()
+    diagnostics = build_walk_forward_diagnostics(
+        dataset,
+        WalkForwardConfig(
+            train_years=1,
+            test_months=3,
+            step_months=3,
+            min_train_positive_rate=0.75,
+            min_test_positive_rate=0.75,
+        ),
+    )
+
+    reasons = diagnostics.loc[0, "skip_reasons"].split(";")
+    assert SKIP_REASON_INSUFFICIENT_TRAIN_POSITIVE_RATE in reasons
+    assert SKIP_REASON_INSUFFICIENT_TEST_POSITIVE_RATE in reasons
 
 
 def test_walk_forward_tolerates_unsorted_input_rows() -> None:
@@ -172,6 +275,42 @@ def test_slice_fold_rows_and_metadata_frame_are_consistent() -> None:
     assert frame.loc[0, "fold_id"] == fold.fold_id
     assert frame.loc[0, "train_rows"] == fold.train_rows
     assert frame.loc[0, "test_rows"] == fold.test_rows
+
+
+def test_walk_forward_config_loads_guardrail_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "guardrails.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "experiment_name: guardrail_test",
+                "evaluation:",
+                "  walk_forward:",
+                "    train_years: 2",
+                "    test_months: 1",
+                "    step_months: 1",
+                "    min_train_rows: 123",
+                "    min_test_rows: 45",
+                "    min_train_positive_rate: 0.1",
+                "    min_test_positive_rate: 0.2",
+                "    embargo_periods: 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.evaluation.walk_forward == WalkForwardConfig(
+        train_years=2,
+        test_months=1,
+        step_months=1,
+        min_train_rows=123,
+        min_test_rows=45,
+        min_train_positive_rate=0.1,
+        min_test_positive_rate=0.2,
+        embargo_periods=1,
+    )
 
 
 def test_walk_forward_repo_fixture_gracefully_returns_zero_folds_for_short_history() -> None:
