@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +75,11 @@ class WalkForwardConfig:
     train_years: int = 3
     test_months: int = 3
     step_months: int = 3
+    min_train_rows: int = 0
+    min_test_rows: int = 0
+    min_train_positive_rate: float = 0.0
+    min_test_positive_rate: float = 0.0
+    embargo_periods: int = 0
 
 
 @dataclass(slots=True)
@@ -179,3 +184,4 @@ def load_config(path: str | Path) -> ExperimentConfig:
         base_dir=_config_base_dir(config_path),
     )
     return config
+

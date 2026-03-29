@@ -44,11 +44,16 @@ evaluation:
     train_years: 3
     test_months: 3
     step_months: 3
-
+    min_train_rows: 100
+    min_test_rows: 20
+    min_train_positive_rate: 0.05
+    min_test_positive_rate: 0.05
+    embargo_periods: 1
 artifacts:
   output_dir: "artifacts/e2e-runs"
   save_predictions: true
   save_metrics_csv: true
   save_report_md: true
   save_plots: true
+
 
