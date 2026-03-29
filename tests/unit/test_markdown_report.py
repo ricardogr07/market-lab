@@ -129,3 +129,27 @@ def test_write_markdown_report_walk_forward_diagnostics_section_uses_fold_diagno
     assert "- Skipped candidates: 1" in diagnostics_section
     assert "| candidate_id | test_start | test_end | skip_reasons | train_rows | test_rows | train_positive_rate | test_positive_rate |" in diagnostics_section
     assert "insufficient_train_rows;insufficient_test_positive_rate" in diagnostics_section
+
+
+def test_write_markdown_report_adds_ranking_aware_model_headline(tmp_path: Path) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+    model_summary = pd.DataFrame(
+        {
+            "model_name": ["random_forest", "logistic_regression"],
+            "mean_roc_auc": [0.54, 0.57],
+            "mean_top_bottom_spread": [0.03, 0.01],
+        }
+    )
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / 'report.md',
+        model_summary=model_summary,
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+
+    assert "- Best model by mean ROC AUC: `logistic_regression` (0.570000)" in report_text
+    assert "- Best model by mean top-bottom spread: `random_forest` (0.030000)" in report_text

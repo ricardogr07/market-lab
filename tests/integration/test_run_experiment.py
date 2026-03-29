@@ -12,6 +12,7 @@ EXPECTED_METRICS_COLUMNS = _cli_harness.EXPECTED_METRICS_COLUMNS
 MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
 FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
 FOLD_DIAGNOSTICS_COLUMNS = _cli_harness.FOLD_DIAGNOSTICS_COLUMNS
+RANKING_DIAGNOSTICS_COLUMNS = _cli_harness.RANKING_DIAGNOSTICS_COLUMNS
 STRATEGY_SUMMARY_COLUMNS = _cli_harness.STRATEGY_SUMMARY_COLUMNS
 MONTHLY_RETURNS_COLUMNS = _cli_harness.MONTHLY_RETURNS_COLUMNS
 TURNOVER_COSTS_COLUMNS = _cli_harness.TURNOVER_COSTS_COLUMNS
@@ -183,6 +184,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "drawdown.png",
         "turnover.png",
         "fold_diagnostics.csv",
+        "ranking_diagnostics.csv",
         "model_summary.csv",
         "fold_summary.csv",
         "models",
@@ -194,6 +196,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
     turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv", parse_dates=["date"])
     fold_diagnostics = pd.read_csv(run_dir / "fold_diagnostics.csv")
+    ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
     model_summary = pd.read_csv(run_dir / "model_summary.csv")
     fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -210,6 +213,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
     assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
     assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
+    assert list(ranking_diagnostics.columns) == RANKING_DIAGNOSTICS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
     assert list(fold_summary.columns) == FOLD_SUMMARY_COLUMNS
     assert set(metrics["strategy"]) == expected_strategies
@@ -218,11 +222,14 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert set(monthly_returns["strategy"]) == expected_strategies
     assert set(turnover_costs["strategy"]) == expected_strategies
     assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(ranking_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
     assert not fold_diagnostics.empty
+    assert not ranking_diagnostics.empty
     assert not fold_summary.empty
     assert (run_dir / "models").is_dir()
     assert set(fold_diagnostics["status"]).issubset({"used", "skipped"})
     assert "used" in set(fold_diagnostics["status"])
+    assert set(ranking_diagnostics["bucket_status"]).issubset({"used", "underfilled"})
 
     date_sequences = {
         strategy: tuple(frame["date"].tolist())
@@ -247,6 +254,8 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert "ml_logistic_regression" in report_text
     assert "- Used candidates:" in report_text
     assert "- Skipped candidates:" in report_text
+    assert "- Best model by mean ROC AUC:" in report_text
+    assert "- Best model by mean top-bottom spread:" in report_text
 
 
 def test_run_experiment_writes_diagnostics_before_failing_on_zero_usable_folds(tmp_path: Path) -> None:
@@ -315,5 +324,6 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
     assert not (run_dir / "fold_diagnostics.csv").exists()
+    assert not (run_dir / "ranking_diagnostics.csv").exists()
     assert not (run_dir / "model_summary.csv").exists()
     assert not (run_dir / "fold_summary.csv").exists()
