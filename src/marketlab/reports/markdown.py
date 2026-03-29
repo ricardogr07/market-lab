@@ -62,6 +62,18 @@ def _headline_lines(
                 f"- Best model by mean ROC AUC: `{best_model['model_name']}` ({best_model['mean_roc_auc']:.6f})"
             )
 
+        ranked_spread = model_summary.dropna(subset=["mean_top_bottom_spread"]).sort_values(
+            ["mean_top_bottom_spread", "model_name"],
+            ascending=[False, True],
+        )
+        if ranked_spread.empty:
+            lines.append("- Best model by mean top-bottom spread: n/a")
+        else:
+            best_spread = ranked_spread.iloc[0]
+            lines.append(
+                f"- Best model by mean top-bottom spread: `{best_spread['model_name']}` ({best_spread['mean_top_bottom_spread']:.6f})"
+            )
+
     return lines
 
 
