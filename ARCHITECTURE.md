@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -12,7 +12,7 @@ This document ties the current pieces together and records the working rules tha
   - canonical market panel preparation
   - trailing feature engineering
   - weekly modeling dataset generation
-  - walk-forward fold generation
+  - walk-forward fold generation with additive guardrails, embargo controls, and skipped-fold diagnostics
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
   - score-to-weight ranking strategy for ML portfolios
@@ -75,8 +75,8 @@ flowchart TD
 
     Prepare --> Panel[prepared panel cache]
     Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots]
-    Train --> TrainingArtifacts[folds.csv manifest metrics predictions summaries models/]
-    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md plots summaries optional models/]
+    Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv manifest metrics predictions summaries models/]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md plots diagnostics summaries optional models/]
 ```
 
 ## Automation Split
@@ -137,6 +137,7 @@ flowchart TD
     Market --> RawCache[Raw symbol CSV cache]
     Panel --> PreparedPanel[Prepared panel CSV]
     Evaluation --> FoldDefs[folds.csv]
+    Evaluation --> FoldDiagnosticsCsv[fold_diagnostics.csv]
     Models --> ModelArtifacts[Per-fold model pickles]
     Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv]
     Metrics --> MetricsCsv[metrics.csv]
@@ -185,6 +186,8 @@ sequenceDiagram
     B-->>P: baseline PerformanceFrame rows
     P->>T: build_weekly_modeling_dataset(panel, config)
     T-->>P: modeling dataset
+    P->>E: build_walk_forward_diagnostics(dataset, walk_forward)
+    E-->>P: attempted fold diagnostics
     P->>E: build_walk_forward_folds(dataset, walk_forward)
     E-->>P: WalkForwardFold list
     P->>P: train_direction_models_on_folds(...)
@@ -322,6 +325,11 @@ classDiagram
       +train_years: int
       +test_months: int
       +step_months: int
+      +min_train_rows: int
+      +min_test_rows: int
+      +min_train_positive_rate: float
+      +min_test_positive_rate: float
+      +embargo_periods: int
     }
 
     class ArtifactsConfig {
@@ -345,6 +353,7 @@ classDiagram
       +monthly_returns_path: Path
       +turnover_costs_path: Path
       +model_summary_path: Path | None
+      +fold_diagnostics_path: Path | None
       +fold_summary_path: Path | None
       +report_path: Path | None
       +cumulative_plot_path: Path | None
@@ -356,6 +365,7 @@ classDiagram
       +run_dir: Path
       +panel_path: Path
       +folds_path: Path
+      +fold_diagnostics_path: Path
       +model_manifest_path: Path
       +metrics_path: Path | None
       +predictions_path: Path | None
@@ -531,7 +541,7 @@ Best practice:
 - Orchestrates the baseline backtest workflow, the `train-models` artifact path, and the unified `run-experiment` comparison path.
 - Decides whether to reuse the prepared panel or rebuild it.
 - Runs enabled baselines for backtests and reports.
-- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, summary tables, analytics tables, and experiment artifacts.
+- Builds modeling datasets, walk-forward folds, attempted-fold diagnostics, trained estimators, ML strategy weights, shared OOS slices, summary tables, analytics tables, and experiment artifacts.
 
 Best practice:
 - Put workflow coordination here, not in strategies, reports, model registry, or CLI code.
@@ -590,8 +600,9 @@ Best practice:
 ### `src/marketlab/evaluation/walk_forward.py`
 
 - Builds reusable walk-forward folds from the weekly modeling dataset.
-- Enforces label-aware training windows by requiring `target_end_date <= test_start`.
-- Produces stable fold metadata and row slices for model-training work.
+- Produces additive attempted-fold diagnostics with explicit skip reasons.
+- Enforces label-aware training windows by requiring `target_end_date <= label_cutoff`, including optional embargo handling.
+- Produces stable accepted-fold metadata and row slices for model-training work.
 
 Best practice:
 - Keep evaluation logic independent from model wrappers and CLI orchestration.
@@ -710,7 +721,7 @@ Best practice:
 - Keep provider normalization inside the data layer.
 - Keep strategies responsible for weights, not return calculation.
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
-- Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `test_start`.
+- Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `label_cutoff`, not just by `test_start`.
 - Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
 - Derive `model_summary.csv` and `fold_summary.csv` from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
@@ -730,7 +741,7 @@ Best practice:
 
 - Add richer reporting without breaking the existing panel, weekly modeling dataset, weights, performance, or shared OOS comparison contracts.
 - Keep walk-forward evaluation in the evaluation layer, not inside current strategy modules.
-- Reuse the fold engine and its `target_end_date <= test_start` rule rather than rebuilding train/test masks in model code.
+- Reuse the fold engine and its `target_end_date <= label_cutoff` rule rather than rebuilding train/test masks in model code.
 - Keep model construction in the registry and workflow orchestration in `pipeline.py`.
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.

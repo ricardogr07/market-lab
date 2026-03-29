@@ -19,8 +19,8 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 
 - `prepare-data`: build or reuse the cached prepared panel.
 - `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, analytics summaries, report, and plots.
-- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary CSVs.
-- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, and ML summary CSVs.
+- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary and diagnostics CSVs.
+- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ML summary CSVs, and fold diagnostics.
 
 ## Artifact Outputs
 
@@ -29,6 +29,7 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing:
 
 - `folds.csv`
+- `fold_diagnostics.csv`
 - `model_manifest.csv`
 - `model_metrics.csv`
 - `predictions.csv`
@@ -63,9 +64,24 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `cumulative_returns.png`
 - `drawdown.png`
 - `turnover.png`
+- `fold_diagnostics.csv`
 - `model_summary.csv`
 - `fold_summary.csv`
 - optional per-fold model pickles under `models/`
+
+## Walk-Forward Guardrails
+
+`evaluation.walk_forward` now supports these additive guardrail keys:
+
+- `min_train_rows`
+- `min_test_rows`
+- `min_train_positive_rate`
+- `min_test_positive_rate`
+- `embargo_periods`
+
+The shipped `weekly_rank` templates opt into a conservative preset, while code defaults remain backward-compatible for older configs.
+
+When `train-models` or `run-experiment` end up with zero usable folds, they still create the run directory, write `fold_diagnostics.csv`, and fail with an error that includes the diagnostics path. On successful ML experiment runs, `run-experiment` also includes a `Walk-Forward Diagnostics` section in `report.md`.
 
 ## Environment
 

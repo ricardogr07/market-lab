@@ -93,6 +93,44 @@ def _turnover_costs_table(turnover_costs: pd.DataFrame) -> str:
     return _markdown_table(summary.round(6))
 
 
+def _walk_forward_diagnostics_lines(fold_diagnostics: pd.DataFrame) -> list[str]:
+    used_count = int((fold_diagnostics["status"] == "used").sum())
+    skipped = fold_diagnostics.loc[fold_diagnostics["status"] == "skipped"].copy()
+    lines = [
+        f"- Used candidates: {used_count}",
+        f"- Skipped candidates: {len(skipped)}",
+    ]
+    if skipped.empty:
+        lines.append("- No candidate folds were skipped.")
+        return lines
+
+    skipped = skipped.loc[
+        :,
+        [
+            "candidate_id",
+            "test_start",
+            "test_end",
+            "skip_reasons",
+            "train_rows",
+            "test_rows",
+            "train_positive_rate",
+            "test_positive_rate",
+        ],
+    ].copy()
+    for column in ["train_positive_rate", "test_positive_rate"]:
+        skipped[column] = skipped[column].round(6)
+    lines.extend(["", _markdown_table(skipped)])
+    return lines
+
+
+def _display_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    numeric_columns = display.select_dtypes(include="number").columns
+    if len(numeric_columns) > 0:
+        display.loc[:, numeric_columns] = display.loc[:, numeric_columns].round(6)
+    return display
+
+
 def _section(title: str, body_lines: list[str]) -> list[str]:
     return [f"## {title}", "", *body_lines, ""]
 
@@ -107,13 +145,14 @@ def write_markdown_report(
     strategy_summary: pd.DataFrame | None = None,
     monthly_returns: pd.DataFrame | None = None,
     turnover_costs: pd.DataFrame | None = None,
+    fold_diagnostics: pd.DataFrame | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     date_min = performance["date"].min().date().isoformat()
     date_max = performance["date"].max().date().isoformat()
-    metrics_table = _markdown_table(metrics.round(6))
+    metrics_table = _markdown_table(_display_frame(metrics))
     strategy_lines = [
         f"- `{strategy}`"
         for strategy in performance["strategy"].drop_duplicates().tolist()
@@ -140,7 +179,7 @@ def write_markdown_report(
     content_lines.extend(_section("Strategy Metrics", [metrics_table]))
 
     if strategy_summary is not None and not strategy_summary.empty:
-        content_lines.extend(_section("Strategy Summary", [_markdown_table(strategy_summary.round(6))]))
+        content_lines.extend(_section("Strategy Summary", [_markdown_table(_display_frame(strategy_summary))]))
 
     if monthly_returns is not None and not monthly_returns.empty:
         content_lines.extend(_section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)]))
@@ -148,11 +187,19 @@ def write_markdown_report(
     if turnover_costs is not None and not turnover_costs.empty:
         content_lines.extend(_section("Turnover And Costs", [_turnover_costs_table(turnover_costs)]))
 
+    if fold_diagnostics is not None and not fold_diagnostics.empty:
+        content_lines.extend(
+            _section(
+                "Walk-Forward Diagnostics",
+                _walk_forward_diagnostics_lines(fold_diagnostics),
+            )
+        )
+
     if model_summary is not None and not model_summary.empty:
-        content_lines.extend(_section("Model Summary", [_markdown_table(model_summary.round(6))]))
+        content_lines.extend(_section("Model Summary", [_markdown_table(_display_frame(model_summary))]))
 
     if fold_summary is not None and not fold_summary.empty:
-        content_lines.extend(_section("Fold Summary", [_markdown_table(fold_summary.round(6))]))
+        content_lines.extend(_section("Fold Summary", [_markdown_table(_display_frame(fold_summary))]))
 
     output_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
     return output_path
