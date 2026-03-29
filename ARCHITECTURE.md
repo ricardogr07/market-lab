@@ -23,10 +23,11 @@ This document ties the current pieces together and records the working rules tha
   - metrics, strategy analytics CSVs, plots, and Markdown reporting
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
+  - release automation with a monthly-batching Release PR and a PyPI publish path
   - fixture-backed tests and a real-data E2E runner that validates baseline, training, experiment, and analytics artifact sets
 - Deferred to later sprints:
   - scheduled Docker automation for recurring runs
-  - release automation and broader packaging hardening
+  - broader packaging hardening beyond the current public-release path
 
 ## Canonical Local Entry Points
 
@@ -40,6 +41,10 @@ This document ties the current pieces together and records the working rules tha
   - `.github/workflows/docker-runner.yml`
   - `workflow_dispatch` only
   - defaults to `backtest` on `configs/experiment.weekly_rank.smoke.yaml`
+- Release automation:
+  - `.github/workflows/release.yml`
+  - updates one open Release PR on merges to `master`
+  - publishes only when that Release PR is merged
 - Real-data E2E:
   - `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1`
   - covers `prepare-data`, `backtest`, `train-models`, and `run-experiment` on the smoke config
@@ -76,9 +81,12 @@ flowchart TD
     Build --> InstalledCli[installed marketlab entrypoint]
     InstalledCli --> SmokeConfig[historical smoke config]
     InstalledCli --> DockerArtifacts[/app/artifacts upload]
+    Master[push to master] --> ReleasePlease[release-please job]
+    ReleasePlease --> ReleasePR[open Release PR]
+    ReleasePR -->|merge| Publish[build tag, GitHub release, PyPI publish]
 ```
 
-The required CI path stays offline and deterministic through tox. The Docker runner is separate, manual, and allowed to exercise the historical real-data smoke config without becoming a required PR gate.
+The required CI path stays offline and deterministic through tox. The Docker runner is separate, manual, and allowed to exercise the historical real-data smoke config without becoming a required PR gate. Release automation is also separate from required PR CI: normal merges update the open Release PR, and only the Release PR merge cuts a public release.
 
 ## System Map
 
@@ -462,6 +470,26 @@ Best practice:
 - Treat this workflow as manual historical smoke automation, not as a rolling live-market schedule.
 - Keep required PR CI deterministic and offline; use the Docker runner when a packaged execution path or real-data smoke replay is the goal.
 
+### `.github/workflows/release.yml`
+
+- Runs on pushes to `master`.
+- Uses release-please to keep one open Release PR updated with unreleased conventional commits.
+- Builds release distributions from the created tag, attaches them to the GitHub Release, and publishes them through PyPI Trusted Publishing when the Release PR is merged.
+
+Best practice:
+- Treat the Release PR as the monthly or feature-batch public release gate.
+- Allow `master` to move ahead of the last public release between release batches.
+- Keep repo settings such as the `pypi` environment and branch protection outside the workflow file itself.
+
+### `.github/release-please-config.json`
+
+- Defines the root-package release automation settings for the Python package.
+- Keeps the project on a single Release PR track with `v`-prefixed tags and changelog updates in `CHANGELOG.md`.
+
+Best practice:
+- Keep release-please configuration scoped to the root package unless the repo becomes multi-package later.
+- Let release-please own `CHANGELOG.md` and the release version files once the workflow is active.
+
 ### `src/marketlab/cli.py`
 
 - Parses subcommands.
@@ -659,6 +687,7 @@ Best practice:
 - Use the Docker image to validate the installed `marketlab` CLI path, not to replace the repo-local launcher during development.
 - Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local smoke validation of the current artifact surface.
 - Treat `.github/workflows/docker-runner.yml` as manual historical smoke automation, not as a required CI or rolling production schedule.
+- Treat `.github/workflows/release.yml` as a batching workflow: normal merges update the Release PR, and Release PR merge triggers the public release.
 - Keep `cli.py` thin and `pipeline.py` orchestration-focused.
 - Preserve the `MarketPanel`, weekly modeling dataset, `WeightsFrame`, and `PerformanceFrame` contracts.
 - Build features from trailing information only.
@@ -679,6 +708,7 @@ Best practice:
 - summary and analytics outputs are derived from the existing training/performance artifacts, so metric changes propagate through both the raw CSVs and the report tables.
 - the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
 - metric definitions are suitable for a research scaffold, not yet a full institutional evaluation stack.
+- the public publish path depends on external GitHub and PyPI setup, including the `pypi` environment and Trusted Publisher configuration.
 
 ## Extension Rules
 

@@ -117,6 +117,7 @@ The MkDocs site renders the current root Markdown docs through `mkdocs-include-m
 - Open a pull request for review instead of pushing directly to `master`.
 - Treat the `Docker Runner` workflow as an optional manual smoke path, not as a required pre-push step.
 - Keep Codex skills and other personal automation assets in the user-local Codex home rather than in the public repository or package surface.
+- Expect `master` to move ahead of the last public release between monthly release batches.
 
 ## Dockerized CLI
 
@@ -138,3 +139,25 @@ GitHub Actions now includes a manual workflow named `Docker Runner` with these i
 The workflow defaults to `backtest`, builds the Docker image, runs the selected command inside the container, writes the resolved run directory into the job summary, and uploads the copied `artifacts/` tree as an Actions artifact.
 
 This workflow is not part of the required PR CI checks. It is a manual historical real-data smoke runner around the checked-in smoke config, not a rolling weekly market automation job.
+
+## Release Automation
+
+GitHub Actions now includes a release workflow at `.github/workflows/release.yml`.
+
+- Normal feature PRs still merge to `master` in sequence.
+- Each merge to `master` updates the open Release PR managed by release-please.
+- The Release PR accumulates the unreleased monthly or feature batch over time.
+- Nothing is tagged or published when a normal feature PR lands on `master`.
+- The actual Git tag, GitHub Release, and PyPI publish path run only when you merge the Release PR.
+
+This means `master` can intentionally contain unreleased work while you continue merging feature PRs. The Release PR is the public-release gate.
+
+### Manual Prerequisites
+
+Before the first automated public release:
+
+- verify that the `marketlab` package name is available on PyPI
+- configure PyPI Trusted Publishing for this repository and the `pypi` environment
+- create the GitHub Actions environment named `pypi`
+
+The first automated public release target remains `v0.1.0`.
