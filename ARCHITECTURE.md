@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -17,6 +17,7 @@ This document ties the current pieces together and records the working rules tha
   - walk-forward `train-models` execution and artifact generation
   - score-to-weight ranking strategy for ML portfolios
   - fold and model summary artifacts
+  - ranking-aware model evaluation artifacts with downside diagnostics
   - `buy_hold` and `sma` baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
@@ -75,7 +76,7 @@ flowchart TD
 
     Prepare --> Panel[prepared panel cache]
     Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots]
-    Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv manifest metrics predictions summaries models/]
+    Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv ranking_diagnostics.csv manifest metrics predictions summaries models/]
     Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md plots diagnostics summaries optional models/]
 ```
 
@@ -139,7 +140,7 @@ flowchart TD
     Evaluation --> FoldDefs[folds.csv]
     Evaluation --> FoldDiagnosticsCsv[fold_diagnostics.csv]
     Models --> ModelArtifacts[Per-fold model pickles]
-    Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv]
+    Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv, ranking_diagnostics.csv]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
     Plots --> PlotFiles[cumulative_returns.png drawdown.png and turnover.png]
@@ -354,6 +355,7 @@ classDiagram
       +turnover_costs_path: Path
       +model_summary_path: Path | None
       +fold_diagnostics_path: Path | None
+      +ranking_diagnostics_path: Path | None
       +fold_summary_path: Path | None
       +report_path: Path | None
       +cumulative_plot_path: Path | None
@@ -366,6 +368,7 @@ classDiagram
       +panel_path: Path
       +folds_path: Path
       +fold_diagnostics_path: Path
+      +ranking_diagnostics_path: Path
       +model_manifest_path: Path
       +metrics_path: Path | None
       +predictions_path: Path | None
@@ -603,6 +606,7 @@ Best practice:
 - Produces additive attempted-fold diagnostics with explicit skip reasons.
 - Enforces label-aware training windows by requiring `target_end_date <= label_cutoff`, including optional embargo handling.
 - Produces stable accepted-fold metadata and row slices for model-training work.
+- Keeps fold acceptance separate from the later ranking-aware model evaluation layer.
 
 Best practice:
 - Keep evaluation logic independent from model wrappers and CLI orchestration.
@@ -613,6 +617,7 @@ Best practice:
 - Maps configured model names to concrete scikit-learn estimators.
 - Keeps target-type validation at the model-entry seam.
 - Produces normalized direction scores from `predict_proba` for downstream ranking work.
+- Exposes a pure evaluation helper layer that derives classification, ranking, and downside diagnostics without changing model fitting.
 
 Best practice:
 - Keep the registry lightweight and explicit.
@@ -679,11 +684,13 @@ Best practice:
 - Derives the strategy list from the actual `PerformanceFrame`.
 - Adds strategy summary, monthly net return, and turnover-and-cost sections when those analytics are available.
 - Switches scope text when ML strategies are present.
+- Reports both the best model by mean ROC AUC and the best model by mean top-bottom spread when model summaries are available.
 
 ### `src/marketlab/reports/summary.py`
 
 - Builds fold-level and model-level summary tables from existing training metrics and manifests.
 - Keeps the reporting summaries additive and derived from raw training outputs.
+- Preserves ROC AUC continuity while adding spread-based ranking winners and downside-oriented aggregates.
 
 Best practice:
 - Keep summary generation pure and deterministic.
@@ -723,7 +730,7 @@ Best practice:
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `label_cutoff`, not just by `test_start`.
 - Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
-- Derive `model_summary.csv` and `fold_summary.csv` from existing model metrics and manifests, not from new training state.
+- Derive `model_summary.csv`, `fold_summary.csv`, and ranking-aware winners from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
 - Use the smoke runner to validate the full current artifact surface after runtime changes.
