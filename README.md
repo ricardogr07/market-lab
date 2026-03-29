@@ -19,8 +19,8 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 
 - `prepare-data`: build or reuse the cached prepared panel.
 - `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, analytics summaries, report, and plots.
-- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary and diagnostics CSVs.
-- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ML summary CSVs, and fold diagnostics.
+- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary, ranking diagnostics, and walk-forward diagnostics CSVs.
+- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, and diagnostics artifacts.
 
 ## Artifact Outputs
 
@@ -33,6 +33,7 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `model_manifest.csv`
 - `model_metrics.csv`
 - `predictions.csv`
+- `ranking_diagnostics.csv`
 - `model_summary.csv`
 - `fold_summary.csv`
 - per-fold model pickles under `models/`
@@ -65,6 +66,7 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `drawdown.png`
 - `turnover.png`
 - `fold_diagnostics.csv`
+- `ranking_diagnostics.csv`
 - `model_summary.csv`
 - `fold_summary.csv`
 - optional per-fold model pickles under `models/`
@@ -82,6 +84,12 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 The shipped `weekly_rank` templates opt into a conservative preset, while code defaults remain backward-compatible for older configs.
 
 When `train-models` or `run-experiment` end up with zero usable folds, they still create the run directory, write `fold_diagnostics.csv`, and fail with an error that includes the diagnostics path. On successful ML experiment runs, `run-experiment` also includes a `Walk-Forward Diagnostics` section in `report.md`.
+
+## Ranking-Aware Evaluation
+
+Model evaluation now stays additive to the existing ROC AUC surface while reflecting the actual long-short ranking use case. `model_metrics.csv` keeps the existing classification fields and now also includes balanced classification metrics, Brier score, per-fold mean rank correlation, top/bottom bucket returns, top-bottom spread, spread hit rate, worst observed spread, and the count of usable ranking dates. `ranking_diagnostics.csv` stores one row per model, fold, and signal date so underfilled ranking dates are visible instead of being silently folded into the aggregates.
+
+`model_summary.csv` and `fold_summary.csv` still preserve the ROC AUC winner fields for continuity, and they now add spread-based summary fields plus a separate `best_model_by_top_bottom_spread` winner. The report headline mirrors that split by showing both the best model by mean ROC AUC and the best model by mean top-bottom spread. This PR is evaluation-only: it does not change how weights are generated or how ML strategies trade.
 
 ## Environment
 
