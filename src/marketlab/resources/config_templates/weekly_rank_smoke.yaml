@@ -1,0 +1,53 @@
+experiment_name: weekly_rank_smoke
+
+data:
+  symbols: [VOO, QQQ, SMH, XLV, IEMG]
+  start_date: "2021-01-01"
+  end_date: "2024-12-31"
+  interval: "1d"
+  cache_dir: "artifacts/e2e-data-phase2"
+  prepared_panel_filename: "panel.csv"
+
+features:
+  return_windows: [5, 10, 20, 40]
+  ma_windows: [10, 20, 50]
+  vol_windows: [10, 20]
+  momentum_window: 20
+
+target:
+  horizon_days: 5
+  type: "direction"
+
+portfolio:
+  ranking:
+    long_n: 2
+    short_n: 2
+    rebalance_frequency: "W-FRI"
+    weighting: "equal"
+  costs:
+    bps_per_trade: 10
+
+baselines:
+  buy_hold: true
+  sma:
+    enabled: true
+    fast_window: 20
+    slow_window: 50
+
+models:
+  - name: logistic_regression
+  - name: random_forest
+  - name: gradient_boosting
+
+evaluation:
+  walk_forward:
+    train_years: 3
+    test_months: 3
+    step_months: 3
+
+artifacts:
+  output_dir: "artifacts/e2e-runs"
+  save_predictions: true
+  save_metrics_csv: true
+  save_report_md: true
+  save_plots: true

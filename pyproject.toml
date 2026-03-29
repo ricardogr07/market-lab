@@ -58,6 +58,10 @@ marketlab = "marketlab.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.package-data]
+"marketlab.resources.config_templates" = ["*.yaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
