@@ -78,16 +78,19 @@ def _monthly_returns_table(monthly_returns: pd.DataFrame) -> str:
     return _markdown_table(pivot.round(6))
 
 
-def _turnover_costs_table(strategy_summary: pd.DataFrame) -> str:
-    columns = [
-        "strategy",
-        "avg_turnover",
-        "total_turnover",
-        "avg_cost_return",
-        "total_cost_return",
-        "cost_drag",
-    ]
-    return _markdown_table(strategy_summary.loc[:, columns].round(6))
+def _turnover_costs_table(turnover_costs: pd.DataFrame) -> str:
+    summary = (
+        turnover_costs.groupby("strategy", as_index=False)
+        .agg(
+            avg_turnover=("turnover", "mean"),
+            total_turnover=("turnover", "sum"),
+            avg_cost_return=("cost_return", "mean"),
+            total_cost_return=("cost_return", "sum"),
+        )
+        .sort_values("strategy")
+        .reset_index(drop=True)
+    )
+    return _markdown_table(summary.round(6))
 
 
 def _section(title: str, body_lines: list[str]) -> list[str]:
@@ -142,13 +145,8 @@ def write_markdown_report(
     if monthly_returns is not None and not monthly_returns.empty:
         content_lines.extend(_section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)]))
 
-    if (
-        strategy_summary is not None
-        and not strategy_summary.empty
-        and turnover_costs is not None
-        and not turnover_costs.empty
-    ):
-        content_lines.extend(_section("Turnover And Costs", [_turnover_costs_table(strategy_summary)]))
+    if turnover_costs is not None and not turnover_costs.empty:
+        content_lines.extend(_section("Turnover And Costs", [_turnover_costs_table(turnover_costs)]))
 
     if model_summary is not None and not model_summary.empty:
         content_lines.extend(_section("Model Summary", [_markdown_table(model_summary.round(6))]))
