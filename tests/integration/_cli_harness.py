@@ -33,6 +33,21 @@ MODEL_SUMMARY_COLUMNS = list(_MODEL_SUMMARY_COLUMNS)
 MONTHLY_RETURNS_COLUMNS = list(_MONTHLY_RETURNS_COLUMNS)
 STRATEGY_SUMMARY_COLUMNS = list(_STRATEGY_SUMMARY_COLUMNS)
 TURNOVER_COSTS_COLUMNS = list(_TURNOVER_COSTS_COLUMNS)
+FOLD_DIAGNOSTICS_COLUMNS = [
+    "candidate_id",
+    "fold_id",
+    "status",
+    "skip_reasons",
+    "train_start",
+    "train_end",
+    "label_cutoff",
+    "test_start",
+    "test_end",
+    "train_rows",
+    "test_rows",
+    "train_positive_rate",
+    "test_positive_rate",
+]
 
 EXPECTED_METRICS_COLUMNS = list(
     compute_strategy_metrics(

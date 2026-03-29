@@ -13,6 +13,7 @@ latest_run_dir = _cli_harness.latest_run_dir
 write_yaml_config = _cli_harness.write_yaml_config
 MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
 FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
+FOLD_DIAGNOSTICS_COLUMNS = _cli_harness.FOLD_DIAGNOSTICS_COLUMNS
 run_marketlab_cli = getattr(
     _cli_harness,
     "run_marketlab_cli",
@@ -54,7 +55,12 @@ PREDICTIONS_COLUMNS = [
 ]
 
 
-def _write_config(tmp_path: Path, *, models: list[dict[str, str]]) -> Path:
+def _write_config(
+    tmp_path: Path,
+    *,
+    models: list[dict[str, str]],
+    walk_forward: dict[str, int | float] | None = None,
+) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(
         build_synthetic_panel(
@@ -68,6 +74,14 @@ def _write_config(tmp_path: Path, *, models: list[dict[str, str]]) -> Path:
         ),
         cache_dir / "panel.csv",
     )
+
+    walk_forward_payload: dict[str, int | float] = {
+        "train_years": 1,
+        "test_months": 2,
+        "step_months": 2,
+    }
+    if walk_forward is not None:
+        walk_forward_payload.update(walk_forward)
 
     return write_yaml_config(
         tmp_path / "train_models.yaml",
@@ -98,11 +112,7 @@ def _write_config(tmp_path: Path, *, models: list[dict[str, str]]) -> Path:
             },
             "models": models,
             "evaluation": {
-                "walk_forward": {
-                    "train_years": 1,
-                    "test_months": 2,
-                    "step_months": 2,
-                }
+                "walk_forward": walk_forward_payload,
             },
             "artifacts": {
                 "output_dir": str(tmp_path / "runs"),
@@ -134,6 +144,7 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
     assert (run_dir / "models").is_dir()
     assert {path.name for path in run_dir.iterdir()} == {
         "folds.csv",
+        "fold_diagnostics.csv",
         "model_manifest.csv",
         "model_metrics.csv",
         "predictions.csv",
@@ -143,30 +154,62 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
     }
 
     folds = pd.read_csv(run_dir / "folds.csv")
+    fold_diagnostics = pd.read_csv(run_dir / "fold_diagnostics.csv")
     manifest = pd.read_csv(run_dir / "model_manifest.csv")
     metrics = pd.read_csv(run_dir / "model_metrics.csv")
     predictions = pd.read_csv(run_dir / "predictions.csv")
     model_summary = pd.read_csv(run_dir / "model_summary.csv")
     fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
 
+    assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
     assert list(metrics.columns) == MODEL_METRICS_COLUMNS
     assert list(predictions.columns) == PREDICTIONS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
     assert list(fold_summary.columns) == FOLD_SUMMARY_COLUMNS
     assert not folds.empty
+    assert not fold_diagnostics.empty
     assert not model_summary.empty
     assert not fold_summary.empty
+    assert set(fold_diagnostics["status"]).issubset({"used", "skipped"})
+    assert "used" in set(fold_diagnostics["status"])
     assert set(manifest["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(metrics["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(predictions["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(fold_summary["fold_id"]) == set(folds["fold_id"])
+    assert set(folds["fold_id"]) == set(
+        fold_diagnostics.loc[fold_diagnostics["status"] == "used", "fold_id"].dropna().astype(int)
+    )
     assert predictions["score"].between(0.0, 1.0).all()
     assert predictions["predicted_target"].isin([0, 1]).all()
     assert predictions.groupby("model_name")["fold_id"].nunique().gt(0).all()
 
     for relative_model_path in manifest["model_path"]:
         assert (run_dir / relative_model_path).exists()
+
+
+def test_train_models_writes_diagnostics_before_failing_on_zero_usable_folds(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        walk_forward={"min_train_rows": 1000},
+    )
+
+    result = run_marketlab_cli("train-models", config_path)
+
+    assert result.returncode != 0
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    run_root = tmp_path / "runs" / "integration_train_models"
+    run_dir = latest_run_dir(run_root)
+    diagnostics_path = (run_dir / "fold_diagnostics.csv").resolve()
+    fold_diagnostics = pd.read_csv(diagnostics_path)
+
+    assert "No walk-forward folds are available for train-models." in combined_output
+    assert str(diagnostics_path) in combined_output
+    assert diagnostics_path.exists()
+    assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
+    assert (fold_diagnostics["status"] == "skipped").all()
+    assert fold_diagnostics["fold_id"].isna().all()
 
 
 def test_train_models_surfaces_unsupported_model_name(tmp_path: Path) -> None:

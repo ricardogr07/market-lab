@@ -11,6 +11,7 @@ from marketlab.data.panel import save_panel_csv
 EXPECTED_METRICS_COLUMNS = _cli_harness.EXPECTED_METRICS_COLUMNS
 MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
 FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
+FOLD_DIAGNOSTICS_COLUMNS = _cli_harness.FOLD_DIAGNOSTICS_COLUMNS
 STRATEGY_SUMMARY_COLUMNS = _cli_harness.STRATEGY_SUMMARY_COLUMNS
 MONTHLY_RETURNS_COLUMNS = _cli_harness.MONTHLY_RETURNS_COLUMNS
 TURNOVER_COSTS_COLUMNS = _cli_harness.TURNOVER_COSTS_COLUMNS
@@ -40,7 +41,11 @@ PERFORMANCE_COLUMNS = [
 ]
 
 
-def _write_run_experiment_config(tmp_path: Path) -> Path:
+def _write_run_experiment_config(
+    tmp_path: Path,
+    *,
+    walk_forward: dict[str, int | float] | None = None,
+) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(
         build_synthetic_panel(
@@ -55,6 +60,14 @@ def _write_run_experiment_config(tmp_path: Path) -> Path:
         ),
         cache_dir / "panel.csv",
     )
+
+    walk_forward_payload: dict[str, int | float] = {
+        "train_years": 1,
+        "test_months": 2,
+        "step_months": 2,
+    }
+    if walk_forward is not None:
+        walk_forward_payload.update(walk_forward)
 
     return write_yaml_config(
         tmp_path / "integration.yaml",
@@ -96,11 +109,7 @@ def _write_run_experiment_config(tmp_path: Path) -> Path:
                 {"name": "random_forest"},
             ],
             "evaluation": {
-                "walk_forward": {
-                    "train_years": 1,
-                    "test_months": 2,
-                    "step_months": 2,
-                }
+                "walk_forward": walk_forward_payload,
             },
             "artifacts": {
                 "output_dir": str(tmp_path / "runs"),
@@ -173,6 +182,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "cumulative_returns.png",
         "drawdown.png",
         "turnover.png",
+        "fold_diagnostics.csv",
         "model_summary.csv",
         "fold_summary.csv",
         "models",
@@ -183,6 +193,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv", parse_dates=["start_date", "end_date"])
     monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
     turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv", parse_dates=["date"])
+    fold_diagnostics = pd.read_csv(run_dir / "fold_diagnostics.csv")
     model_summary = pd.read_csv(run_dir / "model_summary.csv")
     fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -198,6 +209,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert list(strategy_summary.columns) == STRATEGY_SUMMARY_COLUMNS
     assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
     assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
+    assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
     assert list(fold_summary.columns) == FOLD_SUMMARY_COLUMNS
     assert set(metrics["strategy"]) == expected_strategies
@@ -206,8 +218,11 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert set(monthly_returns["strategy"]) == expected_strategies
     assert set(turnover_costs["strategy"]) == expected_strategies
     assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
+    assert not fold_diagnostics.empty
     assert not fold_summary.empty
     assert (run_dir / "models").is_dir()
+    assert set(fold_diagnostics["status"]).issubset({"used", "skipped"})
+    assert "used" in set(fold_diagnostics["status"])
 
     date_sequences = {
         strategy: tuple(frame["date"].tolist())
@@ -224,11 +239,37 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert "## Strategy Summary" in report_text
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
+    assert "## Walk-Forward Diagnostics" in report_text
     assert "## Model Summary" in report_text
     assert "## Fold Summary" in report_text
     assert "## Headline Outcomes" in report_text
     assert "Phase 2 baseline plus ML experiment" in report_text
     assert "ml_logistic_regression" in report_text
+    assert "- Used candidates:" in report_text
+    assert "- Skipped candidates:" in report_text
+
+
+def test_run_experiment_writes_diagnostics_before_failing_on_zero_usable_folds(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        walk_forward={"min_train_rows": 5000},
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+
+    assert result.returncode != 0
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    diagnostics_path = (run_dir / "fold_diagnostics.csv").resolve()
+    fold_diagnostics = pd.read_csv(diagnostics_path)
+
+    assert "No walk-forward folds are available for run-experiment." in combined_output
+    assert str(diagnostics_path) in combined_output
+    assert diagnostics_path.exists()
+    assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
+    assert (fold_diagnostics["status"] == "skipped").all()
+    assert fold_diagnostics["fold_id"].isna().all()
 
 
 def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
@@ -273,5 +314,6 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert "## Strategy Summary" in report_text
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
+    assert not (run_dir / "fold_diagnostics.csv").exists()
     assert not (run_dir / "model_summary.csv").exists()
     assert not (run_dir / "fold_summary.csv").exists()

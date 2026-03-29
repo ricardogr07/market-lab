@@ -17,6 +17,7 @@ from marketlab.evaluation import (
     folds_to_frame,
     slice_fold_rows,
 )
+from marketlab.evaluation.walk_forward import build_walk_forward_diagnostics
 from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
@@ -53,6 +54,7 @@ class ExperimentArtifacts:
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
     turnover_plot_path: Path | None
+    fold_diagnostics_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
 
@@ -62,6 +64,7 @@ class TrainModelsArtifacts:
     run_dir: Path
     panel_path: Path
     folds_path: Path
+    fold_diagnostics_path: Path
     model_manifest_path: Path
     metrics_path: Path | None
     predictions_path: Path | None
@@ -90,6 +93,12 @@ def _run_dir(config: ExperimentConfig) -> Path:
     return run_dir
 
 
+def _write_fold_diagnostics(run_dir: Path, fold_diagnostics: pd.DataFrame) -> Path:
+    diagnostics_path = run_dir / "fold_diagnostics.csv"
+    fold_diagnostics.to_csv(diagnostics_path, index=False)
+    return diagnostics_path
+
+
 def _persist_experiment_outputs(
     config: ExperimentConfig,
     panel_path: Path,
@@ -97,6 +106,8 @@ def _persist_experiment_outputs(
     run_dir: Path | None = None,
     model_summary: pd.DataFrame | None = None,
     fold_summary: pd.DataFrame | None = None,
+    fold_diagnostics: pd.DataFrame | None = None,
+    fold_diagnostics_path: Path | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
@@ -114,6 +125,13 @@ def _persist_experiment_outputs(
     strategy_summary.to_csv(strategy_summary_path, index=False)
     monthly_returns.to_csv(monthly_returns_path, index=False)
     turnover_costs.to_csv(turnover_costs_path, index=False)
+
+    persisted_fold_diagnostics_path = fold_diagnostics_path
+    if fold_diagnostics is not None and persisted_fold_diagnostics_path is None:
+        persisted_fold_diagnostics_path = _write_fold_diagnostics(
+            artifact_run_dir,
+            fold_diagnostics,
+        )
 
     model_summary_path: Path | None = None
     if model_summary is not None:
@@ -137,6 +155,7 @@ def _persist_experiment_outputs(
             strategy_summary=strategy_summary,
             monthly_returns=monthly_returns,
             turnover_costs=turnover_costs,
+            fold_diagnostics=fold_diagnostics,
         )
 
     cumulative_plot_path: Path | None = None
@@ -168,6 +187,7 @@ def _persist_experiment_outputs(
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
         turnover_plot_path=turnover_plot_path,
+        fold_diagnostics_path=persisted_fold_diagnostics_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
     )
@@ -304,15 +324,22 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
     if modeling_dataset.empty:
         raise RuntimeError("Weekly modeling dataset is empty.")
 
+    run_dir = _run_dir(config)
+    fold_diagnostics = build_walk_forward_diagnostics(
+        modeling_dataset=modeling_dataset,
+        walk_forward=config.evaluation.walk_forward,
+        frequency=config.portfolio.ranking.rebalance_frequency,
+    )
+    fold_diagnostics_path = _write_fold_diagnostics(run_dir, fold_diagnostics)
     folds = build_walk_forward_folds(
         modeling_dataset=modeling_dataset,
         walk_forward=config.evaluation.walk_forward,
         frequency=config.portfolio.ranking.rebalance_frequency,
     )
     if not folds:
-        raise RuntimeError("No walk-forward folds are available for train-models.")
-
-    run_dir = _run_dir(config)
+        raise RuntimeError(
+            f"No walk-forward folds are available for train-models. See {fold_diagnostics_path}."
+        )
 
     folds_path = run_dir / "folds.csv"
     folds_to_frame(folds).to_csv(folds_path, index=False)
@@ -356,6 +383,7 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         run_dir=run_dir,
         panel_path=panel_path,
         folds_path=folds_path,
+        fold_diagnostics_path=fold_diagnostics_path,
         model_manifest_path=model_manifest_path,
         metrics_path=metrics_path,
         predictions_path=predictions_path,
@@ -389,15 +417,23 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     if modeling_dataset.empty:
         raise RuntimeError("Weekly modeling dataset is empty.")
 
+    run_dir = _run_dir(config)
+    fold_diagnostics = build_walk_forward_diagnostics(
+        modeling_dataset=modeling_dataset,
+        walk_forward=config.evaluation.walk_forward,
+        frequency=config.portfolio.ranking.rebalance_frequency,
+    )
+    fold_diagnostics_path = _write_fold_diagnostics(run_dir, fold_diagnostics)
     folds = build_walk_forward_folds(
         modeling_dataset=modeling_dataset,
         walk_forward=config.evaluation.walk_forward,
         frequency=config.portfolio.ranking.rebalance_frequency,
     )
     if not folds:
-        raise RuntimeError("No walk-forward folds are available for run-experiment.")
+        raise RuntimeError(
+            f"No walk-forward folds are available for run-experiment. See {fold_diagnostics_path}."
+        )
 
-    run_dir = _run_dir(config)
     training_outputs = train_direction_models_on_folds(
         modeling_dataset=modeling_dataset,
         folds=folds,
@@ -441,4 +477,6 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         run_dir=run_dir,
         model_summary=model_summary,
         fold_summary=fold_summary,
+        fold_diagnostics=fold_diagnostics,
+        fold_diagnostics_path=fold_diagnostics_path,
     )
