@@ -8,6 +8,15 @@ import pandas as pd
 import yaml
 
 from marketlab.backtest.metrics import compute_strategy_metrics
+from marketlab.reports.analytics import (
+    MONTHLY_RETURNS_COLUMNS as _MONTHLY_RETURNS_COLUMNS,
+)
+from marketlab.reports.analytics import (
+    STRATEGY_SUMMARY_COLUMNS as _STRATEGY_SUMMARY_COLUMNS,
+)
+from marketlab.reports.analytics import (
+    TURNOVER_COSTS_COLUMNS as _TURNOVER_COSTS_COLUMNS,
+)
 from marketlab.reports.summary import (
     FOLD_SUMMARY_COLUMNS as _FOLD_SUMMARY_COLUMNS,
 )
@@ -21,6 +30,9 @@ FIXTURE_PANEL_PATH = REPO_ROOT / "tests" / "fixtures" / "market_panel.csv"
 DEFAULT_FIXTURE_SYMBOLS = ["VOO", "QQQ", "SMH", "XLV", "IEMG"]
 FOLD_SUMMARY_COLUMNS = list(_FOLD_SUMMARY_COLUMNS)
 MODEL_SUMMARY_COLUMNS = list(_MODEL_SUMMARY_COLUMNS)
+MONTHLY_RETURNS_COLUMNS = list(_MONTHLY_RETURNS_COLUMNS)
+STRATEGY_SUMMARY_COLUMNS = list(_STRATEGY_SUMMARY_COLUMNS)
+TURNOVER_COSTS_COLUMNS = list(_TURNOVER_COSTS_COLUMNS)
 
 EXPECTED_METRICS_COLUMNS = list(
     compute_strategy_metrics(

@@ -11,6 +11,9 @@ from marketlab.data.panel import save_panel_csv
 EXPECTED_METRICS_COLUMNS = _cli_harness.EXPECTED_METRICS_COLUMNS
 MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
 FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
+STRATEGY_SUMMARY_COLUMNS = _cli_harness.STRATEGY_SUMMARY_COLUMNS
+MONTHLY_RETURNS_COLUMNS = _cli_harness.MONTHLY_RETURNS_COLUMNS
+TURNOVER_COSTS_COLUMNS = _cli_harness.TURNOVER_COSTS_COLUMNS
 assert_command_ok = _cli_harness.assert_command_ok
 build_synthetic_panel = _cli_harness.build_synthetic_panel
 latest_run_dir = _cli_harness.latest_run_dir
@@ -163,9 +166,13 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert {path.name for path in run_dir.iterdir()} == {
         "metrics.csv",
         "performance.csv",
+        "strategy_summary.csv",
+        "monthly_returns.csv",
+        "turnover_costs.csv",
         "report.md",
         "cumulative_returns.png",
         "drawdown.png",
+        "turnover.png",
         "model_summary.csv",
         "fold_summary.csv",
         "models",
@@ -173,6 +180,9 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
 
     metrics = pd.read_csv(run_dir / "metrics.csv")
     performance = pd.read_csv(run_dir / "performance.csv", parse_dates=["date"])
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv", parse_dates=["start_date", "end_date"])
+    monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
+    turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv", parse_dates=["date"])
     model_summary = pd.read_csv(run_dir / "model_summary.csv")
     fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -185,10 +195,16 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     }
     assert list(metrics.columns) == EXPECTED_METRICS_COLUMNS
     assert list(performance.columns) == PERFORMANCE_COLUMNS
+    assert list(strategy_summary.columns) == STRATEGY_SUMMARY_COLUMNS
+    assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
+    assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
     assert list(fold_summary.columns) == FOLD_SUMMARY_COLUMNS
     assert set(metrics["strategy"]) == expected_strategies
     assert set(performance["strategy"]) == expected_strategies
+    assert set(strategy_summary["strategy"]) == expected_strategies
+    assert set(monthly_returns["strategy"]) == expected_strategies
+    assert set(turnover_costs["strategy"]) == expected_strategies
     assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
     assert not fold_summary.empty
     assert (run_dir / "models").is_dir()
@@ -205,6 +221,9 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         assert strategy_frame["equity"].tolist() == pytest.approx(expected_equity.tolist())
 
     assert "## Strategy Metrics" in report_text
+    assert "## Strategy Summary" in report_text
+    assert "## Monthly Net Returns" in report_text
+    assert "## Turnover And Costs" in report_text
     assert "## Model Summary" in report_text
     assert "## Fold Summary" in report_text
     assert "## Headline Outcomes" in report_text
@@ -225,17 +244,34 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert {path.name for path in run_dir.iterdir()} == {
         "metrics.csv",
         "performance.csv",
+        "strategy_summary.csv",
+        "monthly_returns.csv",
+        "turnover_costs.csv",
         "report.md",
         "cumulative_returns.png",
         "drawdown.png",
+        "turnover.png",
     }
 
     metrics = pd.read_csv(run_dir / "metrics.csv")
     performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
+    turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
     assert list(metrics.columns) == EXPECTED_METRICS_COLUMNS
     assert list(performance.columns) == PERFORMANCE_COLUMNS
+    assert list(strategy_summary.columns) == STRATEGY_SUMMARY_COLUMNS
+    assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
+    assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
     assert set(metrics["strategy"]) == {"buy_hold", "sma"}
     assert set(performance["strategy"]) == {"buy_hold", "sma"}
+    assert set(strategy_summary["strategy"]) == {"buy_hold", "sma"}
+    assert set(monthly_returns["strategy"]) == {"buy_hold", "sma"}
+    assert set(turnover_costs["strategy"]) == {"buy_hold", "sma"}
+    assert "## Strategy Summary" in report_text
+    assert "## Monthly Net Returns" in report_text
+    assert "## Turnover And Costs" in report_text
     assert not (run_dir / "model_summary.csv").exists()
     assert not (run_dir / "fold_summary.csv").exists()
