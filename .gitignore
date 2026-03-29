@@ -8,7 +8,6 @@ __pycache__/
 .codex/
 .tox/
 .tox-ci/
-.tox-phase3/
 build/
 dist/
 site/
