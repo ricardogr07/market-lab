@@ -86,6 +86,19 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 
 If `artifacts/data/panel.csv` already exists, the pipeline uses it and does not attempt a network download.
 
+## Installed Package Quickstart
+
+If you install MarketLab from PyPI or a built wheel, use the packaged CLI bootstrap flow instead of the repo launcher:
+
+```bash
+marketlab --version
+marketlab list-configs
+marketlab write-config --name weekly_rank --output weekly_rank.yaml
+marketlab run-experiment --config weekly_rank.yaml
+```
+
+`list-configs` shows the bundled example templates, and `write-config` exports one of those templates into your working directory. That keeps the installed package self-contained without requiring a checkout of this repository.
+
 ## Local Validation
 
 ```bash

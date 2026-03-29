@@ -34,6 +34,11 @@ This document ties the current pieces together and records the working rules tha
 - Local repo execution:
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
   - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
+- Installed package bootstrap:
+  - `marketlab --version`
+  - `marketlab list-configs`
+  - `marketlab write-config --name weekly_rank --output weekly_rank.yaml`
+  - `marketlab run-experiment --config weekly_rank.yaml`
 - Local Docker validation:
   - `docker build -t marketlab-cli .`
   - `docker run --rm marketlab-cli --help`
@@ -52,6 +57,8 @@ This document ties the current pieces together and records the working rules tha
   - `python -m pytest -q --basetemp .pytest_tmp`
 
 The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a safe default for local source execution unless the environment is known to point at the current editable install. The launcher script exists to remove that ambiguity.
+
+The installed package uses bundled example config templates so a pip-installed user can bootstrap a working run config without needing the repository checkout. That keeps the distribution self-contained while preserving the repo-local launcher as the default development path.
 
 The Docker image deliberately uses the installed `marketlab` console script instead of the repo-local launcher. That split keeps local development pointed at the source tree while the container validates the packaged CLI path.
 
@@ -495,11 +502,20 @@ Best practice:
 - Parses subcommands.
 - Loads the experiment config.
 - Dispatches to pipeline functions.
-- Prints either the prepared panel path or the run directory path.
+- Prints either the prepared panel path, the run directory path, or an installed-package helper result.
 
 Best practice:
 - Keep this file thin.
 - Do not move orchestration logic into CLI handlers.
+
+### `src/marketlab/resources/*`
+
+- Packages bundled example config templates for installed-package use.
+- Provides the version fallback and config-template helpers used by the CLI.
+
+Best practice:
+- Keep the packaged templates aligned with the checked-in repo configs.
+- Treat the packaged resources as bootstrap helpers for installed users, not as a second config source of truth.
 
 ### `src/marketlab/config.py`
 
