@@ -55,6 +55,7 @@ class ExperimentArtifacts:
     drawdown_plot_path: Path | None
     turnover_plot_path: Path | None
     fold_diagnostics_path: Path | None
+    ranking_diagnostics_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
 
@@ -65,6 +66,7 @@ class TrainModelsArtifacts:
     panel_path: Path
     folds_path: Path
     fold_diagnostics_path: Path
+    ranking_diagnostics_path: Path
     model_manifest_path: Path
     metrics_path: Path | None
     predictions_path: Path | None
@@ -108,6 +110,8 @@ def _persist_experiment_outputs(
     fold_summary: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     fold_diagnostics_path: Path | None = None,
+    ranking_diagnostics: pd.DataFrame | None = None,
+    ranking_diagnostics_path: Path | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
@@ -132,6 +136,11 @@ def _persist_experiment_outputs(
             artifact_run_dir,
             fold_diagnostics,
         )
+
+    persisted_ranking_diagnostics_path = ranking_diagnostics_path
+    if ranking_diagnostics is not None and persisted_ranking_diagnostics_path is None:
+        persisted_ranking_diagnostics_path = artifact_run_dir / "ranking_diagnostics.csv"
+        ranking_diagnostics.to_csv(persisted_ranking_diagnostics_path, index=False)
 
     model_summary_path: Path | None = None
     if model_summary is not None:
@@ -188,6 +197,7 @@ def _persist_experiment_outputs(
         drawdown_plot_path=drawdown_plot_path,
         turnover_plot_path=turnover_plot_path,
         fold_diagnostics_path=persisted_fold_diagnostics_path,
+        ranking_diagnostics_path=persisted_ranking_diagnostics_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
     )
@@ -351,6 +361,8 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         target_type=config.target.type,
         run_dir=run_dir,
         save_predictions=config.artifacts.save_predictions,
+        long_n=config.portfolio.ranking.long_n,
+        short_n=config.portfolio.ranking.short_n,
     )
 
     model_manifest_path = run_dir / "model_manifest.csv"
@@ -360,6 +372,9 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
     if config.artifacts.save_metrics_csv:
         metrics_path = run_dir / "model_metrics.csv"
         training_outputs.metrics.to_csv(metrics_path, index=False)
+
+    ranking_diagnostics_path = run_dir / "ranking_diagnostics.csv"
+    training_outputs.ranking_diagnostics.to_csv(ranking_diagnostics_path, index=False)
 
     predictions_path: Path | None = None
     if config.artifacts.save_predictions and training_outputs.predictions is not None:
@@ -384,6 +399,7 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         panel_path=panel_path,
         folds_path=folds_path,
         fold_diagnostics_path=fold_diagnostics_path,
+        ranking_diagnostics_path=ranking_diagnostics_path,
         model_manifest_path=model_manifest_path,
         metrics_path=metrics_path,
         predictions_path=predictions_path,
@@ -441,6 +457,8 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         target_type=config.target.type,
         run_dir=run_dir,
         save_predictions=True,
+        long_n=config.portfolio.ranking.long_n,
+        short_n=config.portfolio.ranking.short_n,
     )
     if training_outputs.predictions is None or training_outputs.predictions.empty:
         raise RuntimeError("run-experiment requires fold predictions for ranking.")
@@ -479,4 +497,5 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         fold_summary=fold_summary,
         fold_diagnostics=fold_diagnostics,
         fold_diagnostics_path=fold_diagnostics_path,
+        ranking_diagnostics=training_outputs.ranking_diagnostics,
     )
