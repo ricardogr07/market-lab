@@ -106,7 +106,7 @@ try {
     $backtestRunDir = Get-CommandOutputPath -OutputLines @($backtestOutput) -Description "backtest" -ExitCode 41
     Assert-PathExists -PathValue $backtestRunDir -Description "Backtest run directory" -ExitCode 42
 
-    foreach ($artifact in @("metrics.csv", "performance.csv", "report.md", "cumulative_returns.png", "drawdown.png")) {
+    foreach ($artifact in @("metrics.csv", "performance.csv", "strategy_summary.csv", "monthly_returns.csv", "turnover_costs.csv", "report.md", "cumulative_returns.png", "drawdown.png", "turnover.png")) {
         Assert-PathExists -PathValue (Join-Path $backtestRunDir $artifact) -Description "Backtest artifact $artifact" -ExitCode 43
     }
 
@@ -129,7 +129,7 @@ try {
 
     Start-Sleep -Seconds 1
 
-    Write-Host "Running full Phase 2 experiment flow..."
+    Write-Host "Running full experiment flow..."
     $experimentOutput = & python $LauncherPath run-experiment --config $ConfigFullPath
     if ($LASTEXITCODE -ne 0) {
         Write-Error "run-experiment failed."
@@ -139,14 +139,14 @@ try {
     $experimentRunDir = Get-CommandOutputPath -OutputLines @($experimentOutput) -Description "run-experiment" -ExitCode 61
     Assert-PathExists -PathValue $experimentRunDir -Description "Run-experiment directory" -ExitCode 62
 
-    foreach ($artifact in @("metrics.csv", "performance.csv", "report.md", "cumulative_returns.png", "drawdown.png", "model_summary.csv", "fold_summary.csv")) {
+    foreach ($artifact in @("metrics.csv", "performance.csv", "strategy_summary.csv", "monthly_returns.csv", "turnover_costs.csv", "report.md", "cumulative_returns.png", "drawdown.png", "turnover.png", "model_summary.csv", "fold_summary.csv")) {
         Assert-PathExists -PathValue (Join-Path $experimentRunDir $artifact) -Description "Run-experiment artifact $artifact" -ExitCode 63
     }
     Assert-OptionalPathExists -PathValue (Join-Path $experimentRunDir "models") -Description "Run-experiment models directory"
 
     Assert-PathExists -PathValue $runRoot -Description "Configured run root" -ExitCode 64
 
-    Write-Host "Phase 2 real-data E2E completed successfully."
+    Write-Host "Real-data E2E completed successfully."
     Write-Host "Backtest run: $backtestRunDir"
     Write-Host "Train-models run: $trainModelsRunDir"
     Write-Host "Run-experiment run: $experimentRunDir"

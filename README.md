@@ -18,9 +18,9 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 ## What Each Command Does
 
 - `prepare-data`: build or reuse the cached prepared panel.
-- `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, metrics, report, and plots.
+- `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, analytics summaries, report, and plots.
 - `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary CSVs.
-- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs plus summary CSVs.
+- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, and ML summary CSVs.
 
 ## Artifact Outputs
 
@@ -36,17 +36,36 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `fold_summary.csv`
 - per-fold model pickles under `models/`
 
+### `backtest`
+
+Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing:
+
+- `metrics.csv`
+- `performance.csv`
+- `strategy_summary.csv`
+- `monthly_returns.csv`
+- `turnover_costs.csv`
+- `report.md`
+- `cumulative_returns.png`
+- `drawdown.png`
+- `turnover.png`
+
 ### `run-experiment`
 
 Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing:
 
 - `metrics.csv`
 - `performance.csv`
+- `strategy_summary.csv`
+- `monthly_returns.csv`
+- `turnover_costs.csv`
 - `report.md`
 - `cumulative_returns.png`
 - `drawdown.png`
+- `turnover.png`
 - `model_summary.csv`
 - `fold_summary.csv`
+- optional per-fold model pickles under `models/`
 
 ## Environment
 

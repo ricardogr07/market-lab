@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, a lightweight model registry, the `train-models` command, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -20,10 +20,10 @@ This document ties the current pieces together and records the working rules tha
   - `buy_hold` and `sma` baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
-  - metrics, plots, and Markdown reporting
+  - metrics, strategy analytics CSVs, plots, and Markdown reporting
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
-  - fixture-backed tests and a Phase 2 real-data E2E runner that validates baseline, training, and experiment artifact sets
+  - fixture-backed tests and a real-data E2E runner that validates baseline, training, experiment, and analytics artifact sets
 - Deferred to later sprints:
   - scheduled Docker automation for recurring runs
   - release automation and broader packaging hardening
@@ -62,9 +62,9 @@ flowchart TD
     Launcher --> Experiment[run-experiment]
 
     Prepare --> Panel[prepared panel cache]
-    Backtest --> BaselineArtifacts[metrics.csv performance.csv report.md plots]
+    Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots]
     Train --> TrainingArtifacts[folds.csv manifest metrics predictions summaries models/]
-    Experiment --> ExperimentArtifacts[metrics.csv performance.csv report.md plots summaries optional models/]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md plots summaries optional models/]
 ```
 
 ## Automation Split
@@ -103,6 +103,7 @@ flowchart TD
     Models --> Predictions[Fold predictions]
     Predictions --> Ranking[src/marketlab/strategies/ranking.py]
     Pipeline --> Summary[src/marketlab/reports/summary.py]
+    Pipeline --> Analytics[src/marketlab/reports/analytics.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
     BuyHold --> Engine[src/marketlab/backtest/engine.py]
@@ -112,6 +113,9 @@ flowchart TD
     Pipeline --> Metrics[src/marketlab/backtest/metrics.py]
     Summary --> ModelSummaryCsv[model_summary.csv]
     Summary --> FoldSummaryCsv[fold_summary.csv]
+    Analytics --> StrategySummaryCsv[strategy_summary.csv]
+    Analytics --> MonthlyReturnsCsv[monthly_returns.csv]
+    Analytics --> TurnoverCostsCsv[turnover_costs.csv]
     Pipeline --> Markdown[src/marketlab/reports/markdown.py]
     Pipeline --> Plots[src/marketlab/reports/plots.py]
 
@@ -122,7 +126,7 @@ flowchart TD
     Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
-    Plots --> PlotFiles[cumulative_returns.png and drawdown.png]
+    Plots --> PlotFiles[cumulative_returns.png drawdown.png and turnover.png]
 ```
 
 ## Run-Experiment Flow
@@ -140,6 +144,7 @@ sequenceDiagram
     participant E as evaluation/walk_forward.py
     participant RANK as strategies/ranking.py
     participant SUM as reports/summary.py
+    participant AN as reports/analytics.py
     participant B as backtest/*
     participant R as reports/*
 
@@ -178,9 +183,12 @@ sequenceDiagram
     B-->>P: metrics table
     P->>SUM: build_model_summary(...) and build_fold_summary(...)
     SUM-->>P: summary tables
+    P->>AN: build_strategy_summary(...) monthly returns turnover costs
+    AN-->>P: analytics tables
     P->>R: write_markdown_report(...)
     P->>R: plot_cumulative_returns(...)
     P->>R: plot_drawdown(...)
+    P->>R: plot_turnover(...)
     P-->>C: ExperimentArtifacts
     C-->>U: run directory path
 ```
@@ -318,11 +326,15 @@ classDiagram
       +panel_path: Path
       +metrics_path: Path
       +performance_path: Path
+      +strategy_summary_path: Path
+      +monthly_returns_path: Path
+      +turnover_costs_path: Path
       +model_summary_path: Path | None
       +fold_summary_path: Path | None
       +report_path: Path | None
       +cumulative_plot_path: Path | None
       +drawdown_plot_path: Path | None
+      +turnover_plot_path: Path | None
     }
 
     class TrainModelsArtifacts {
@@ -420,13 +432,13 @@ Columns:
 
 ### `scripts/run-e2e.ps1`
 
-- Runs the full Phase 2 smoke validation path against the smoke config.
+- Runs the current real-data smoke validation path against the smoke config.
 - Optionally gates on fixture-backed pytest first.
-- Verifies artifact sets for `prepare-data`, `backtest`, `train-models`, and `run-experiment`.
+- Verifies artifact sets for `prepare-data`, `backtest`, `train-models`, and `run-experiment`, including analytics outputs where applicable.
 - Prints the resolved run directories used for the smoke review.
 
 Best practice:
-- Keep the smoke assertions aligned with the actual Phase 2 command surface.
+- Keep the smoke assertions aligned with the current command artifact surface.
 - Treat smoke results as validation evidence, not robust model-selection proof.
 
 ### `Dockerfile`
@@ -475,7 +487,7 @@ Best practice:
 - Orchestrates the baseline backtest workflow, the `train-models` artifact path, and the unified `run-experiment` comparison path.
 - Decides whether to reuse the prepared panel or rebuild it.
 - Runs enabled baselines for backtests and reports.
-- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, summary tables, and experiment artifacts.
+- Builds modeling datasets, walk-forward folds, trained estimators, ML strategy weights, shared OOS slices, summary tables, analytics tables, and experiment artifacts.
 
 Best practice:
 - Put workflow coordination here, not in strategies, reports, model registry, or CLI code.
@@ -596,10 +608,21 @@ Best practice:
 Best practice:
 - Treat this as a reporting summary layer, not a source of trading logic.
 
+### `src/marketlab/reports/analytics.py`
+
+- Builds strategy-level analytics tables from the canonical `PerformanceFrame`.
+- Produces `strategy_summary.csv`, `monthly_returns.csv`, and `turnover_costs.csv`.
+- Keeps analytics derived and deterministic rather than introducing new backtest state.
+
+Best practice:
+- Keep analytics builders pure and schema-stable.
+- Derive analytics from the existing `PerformanceFrame`, not from alternate portfolio state.
+
 ### `src/marketlab/reports/markdown.py`
 
 - Produces a compact Markdown report for each run.
 - Derives the strategy list from the actual `PerformanceFrame`.
+- Adds strategy summary, monthly net return, and turnover-and-cost sections when those analytics are available.
 - Switches scope text when ML strategies are present.
 
 ### `src/marketlab/reports/summary.py`
@@ -613,7 +636,7 @@ Best practice:
 
 ### `src/marketlab/reports/plots.py`
 
-- Produces cumulative equity and drawdown charts.
+- Produces cumulative equity, drawdown, and turnover charts.
 
 Best practice:
 - Report modules should only render artifacts from already-computed outputs.
@@ -622,7 +645,7 @@ Best practice:
 
 - Unit tests protect contracts and math.
 - Integration tests validate fixture-backed pipeline behavior.
-- The Phase 2 smoke runner validates baseline backtest, training artifacts, experiment artifacts, and summary outputs on real data.
+- The real-data smoke runner validates baseline backtest, training artifacts, experiment artifacts, analytics outputs, and summary outputs on real data.
 - Real-data smoke tests stay opt-in because provider behavior and network access are unstable by nature.
 
 ### User-Local Codex Skills
@@ -634,7 +657,7 @@ Best practice:
 
 - Use `python scripts/run_marketlab.py ...` for repo-local execution.
 - Use the Docker image to validate the installed `marketlab` CLI path, not to replace the repo-local launcher during development.
-- Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local Phase 2 smoke validation.
+- Use `powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1` for full local smoke validation of the current artifact surface.
 - Treat `.github/workflows/docker-runner.yml` as manual historical smoke automation, not as a required CI or rolling production schedule.
 - Keep `cli.py` thin and `pipeline.py` orchestration-focused.
 - Preserve the `MarketPanel`, weekly modeling dataset, `WeightsFrame`, and `PerformanceFrame` contracts.
@@ -647,13 +670,13 @@ Best practice:
 - Derive `model_summary.csv` and `fold_summary.csv` from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
-- Use the smoke runner to validate the full Phase 2 artifact surface after runtime changes.
+- Use the smoke runner to validate the full current artifact surface after runtime changes.
 
 ## Current Risks
 
 - `yfinance` remains an unstable external dependency despite the new column-flattening and cached-header cleanup.
 - `run-experiment` now trains models in-process and may leave per-fold model pickles in experiment run directories as a side effect of reusing the training layer.
-- summary outputs are derived from the existing training artifacts, so metric changes propagate through both the raw CSVs and the report tables.
+- summary and analytics outputs are derived from the existing training/performance artifacts, so metric changes propagate through both the raw CSVs and the report tables.
 - the model registry currently assumes classifier-style `predict_proba` outputs and `target.type="direction"`.
 - metric definitions are suitable for a research scaffold, not yet a full institutional evaluation stack.
 
