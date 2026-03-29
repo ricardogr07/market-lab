@@ -65,6 +65,31 @@ def _headline_lines(
     return lines
 
 
+def _monthly_returns_table(monthly_returns: pd.DataFrame) -> str:
+    if monthly_returns.empty:
+        return "No monthly return rows were generated."
+
+    pivot = (
+        monthly_returns.loc[:, ["month", "strategy", "net_return"]]
+        .pivot(index="month", columns="strategy", values="net_return")
+        .reset_index()
+    )
+    pivot.columns.name = None
+    return _markdown_table(pivot.round(6))
+
+
+def _turnover_costs_table(strategy_summary: pd.DataFrame) -> str:
+    columns = [
+        "strategy",
+        "avg_turnover",
+        "total_turnover",
+        "avg_cost_return",
+        "total_cost_return",
+        "cost_drag",
+    ]
+    return _markdown_table(strategy_summary.loc[:, columns].round(6))
+
+
 def _section(title: str, body_lines: list[str]) -> list[str]:
     return [f"## {title}", "", *body_lines, ""]
 
@@ -76,6 +101,9 @@ def write_markdown_report(
     path: str | Path,
     model_summary: pd.DataFrame | None = None,
     fold_summary: pd.DataFrame | None = None,
+    strategy_summary: pd.DataFrame | None = None,
+    monthly_returns: pd.DataFrame | None = None,
+    turnover_costs: pd.DataFrame | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +136,20 @@ def write_markdown_report(
 
     content_lines.extend(_section("Strategy Metrics", [metrics_table]))
 
+    if strategy_summary is not None and not strategy_summary.empty:
+        content_lines.extend(_section("Strategy Summary", [_markdown_table(strategy_summary.round(6))]))
+
+    if monthly_returns is not None and not monthly_returns.empty:
+        content_lines.extend(_section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)]))
+
+    if (
+        strategy_summary is not None
+        and not strategy_summary.empty
+        and turnover_costs is not None
+        and not turnover_costs.empty
+    ):
+        content_lines.extend(_section("Turnover And Costs", [_turnover_costs_table(strategy_summary)]))
+
     if model_summary is not None and not model_summary.empty:
         content_lines.extend(_section("Model Summary", [_markdown_table(model_summary.round(6))]))
 
@@ -116,4 +158,3 @@ def write_markdown_report(
 
     output_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
     return output_path
-
