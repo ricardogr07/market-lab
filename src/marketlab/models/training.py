@@ -4,12 +4,17 @@ import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 
 from marketlab.config import ModelSpec
 from marketlab.evaluation.walk_forward import WalkForwardFold, slice_fold_rows
+from marketlab.models.evaluation import (
+    MODEL_METRICS_COLUMNS,
+    RANKING_DIAGNOSTICS_COLUMNS,
+    build_ranking_diagnostics,
+    classification_metrics,
+    summarize_ranking_diagnostics,
+)
 from marketlab.models.registry import build_model_estimator, predict_direction_scores
 
 MODELING_METADATA_COLUMNS = {
@@ -27,6 +32,7 @@ class TrainingOutputs:
     manifest: pd.DataFrame
     metrics: pd.DataFrame
     predictions: pd.DataFrame | None
+    ranking_diagnostics: pd.DataFrame
 
 
 def modeling_feature_columns(modeling_dataset: pd.DataFrame) -> list[str]:
@@ -38,28 +44,6 @@ def modeling_feature_columns(modeling_dataset: pd.DataFrame) -> list[str]:
     if not feature_columns:
         raise RuntimeError("Modeling dataset does not contain feature columns.")
     return feature_columns
-
-
-def _classification_metrics(
-    truth: pd.Series,
-    predicted: pd.Series,
-    scores: pd.Series,
-) -> dict[str, float]:
-    clipped_scores = np.clip(scores.to_numpy(dtype=float), 1e-9, 1 - 1e-9)
-    metrics: dict[str, float] = {
-        "accuracy": float(accuracy_score(truth, predicted)),
-        "target_rate": float(truth.mean()),
-        "prediction_rate": float(predicted.mean()),
-    }
-
-    if truth.nunique() > 1:
-        metrics["roc_auc"] = float(roc_auc_score(truth, scores))
-        metrics["log_loss"] = float(log_loss(truth, clipped_scores, labels=[0, 1]))
-    else:
-        metrics["roc_auc"] = float("nan")
-        metrics["log_loss"] = float("nan")
-
-    return metrics
 
 
 def _prediction_frame(
@@ -94,6 +78,9 @@ def train_direction_models_on_folds(
     target_type: str,
     run_dir: Path,
     save_predictions: bool,
+    *,
+    long_n: int,
+    short_n: int,
 ) -> TrainingOutputs:
     feature_columns = modeling_feature_columns(modeling_dataset)
     model_dir = run_dir / "models"
@@ -102,6 +89,7 @@ def train_direction_models_on_folds(
     manifest_rows: list[dict[str, object]] = []
     metrics_rows: list[dict[str, object]] = []
     prediction_frames: list[pd.DataFrame] = []
+    ranking_diagnostics_frames: list[pd.DataFrame] = []
 
     for spec in model_specs:
         for fold in folds:
@@ -148,6 +136,15 @@ def train_direction_models_on_folds(
                 }
             )
 
+            fold_ranking_diagnostics = build_ranking_diagnostics(
+                model_name=spec.name,
+                fold_id=fold.fold_id,
+                predictions=test_rows.assign(score=score_series.to_numpy()),
+                long_n=long_n,
+                short_n=short_n,
+            )
+            ranking_diagnostics_frames.append(fold_ranking_diagnostics)
+
             metrics_rows.append(
                 {
                     "model_name": spec.name,
@@ -159,11 +156,12 @@ def train_direction_models_on_folds(
                     "test_end": fold.test_end,
                     "train_rows": fold.train_rows,
                     "test_rows": fold.test_rows,
-                    **_classification_metrics(
+                    **classification_metrics(
                         truth=test_rows["target"].astype(int),
                         predicted=predicted_target,
                         scores=score_series,
                     ),
+                    **summarize_ranking_diagnostics(fold_ranking_diagnostics),
                 }
             )
 
@@ -181,9 +179,20 @@ def train_direction_models_on_folds(
     manifest = pd.DataFrame(manifest_rows).sort_values(["model_name", "fold_id"]).reset_index(
         drop=True
     )
-    metrics = pd.DataFrame(metrics_rows).sort_values(["model_name", "fold_id"]).reset_index(
-        drop=True
-    )
+    if metrics_rows:
+        metrics = pd.DataFrame(metrics_rows).loc[:, MODEL_METRICS_COLUMNS]
+        metrics = metrics.sort_values(["model_name", "fold_id"]).reset_index(drop=True)
+    else:
+        metrics = pd.DataFrame(columns=MODEL_METRICS_COLUMNS)
+
+    if ranking_diagnostics_frames:
+        ranking_diagnostics = pd.concat(ranking_diagnostics_frames, ignore_index=True)
+        ranking_diagnostics = ranking_diagnostics.loc[:, RANKING_DIAGNOSTICS_COLUMNS].sort_values(
+            ["model_name", "fold_id", "signal_date"]
+        ).reset_index(drop=True)
+    else:
+        ranking_diagnostics = pd.DataFrame(columns=RANKING_DIAGNOSTICS_COLUMNS)
+
     predictions = None
     if save_predictions:
         predictions = pd.concat(prediction_frames, ignore_index=True).sort_values(
@@ -194,4 +203,5 @@ def train_direction_models_on_folds(
         manifest=manifest,
         metrics=metrics,
         predictions=predictions,
+        ranking_diagnostics=ranking_diagnostics,
     )
