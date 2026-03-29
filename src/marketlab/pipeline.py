@@ -20,8 +20,17 @@ from marketlab.evaluation import (
 from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
+from marketlab.reports.analytics import (
+    build_monthly_returns,
+    build_strategy_summary,
+    build_turnover_costs,
+)
 from marketlab.reports.markdown import write_markdown_report
-from marketlab.reports.plots import plot_cumulative_returns, plot_drawdown
+from marketlab.reports.plots import (
+    plot_cumulative_returns,
+    plot_drawdown,
+    plot_turnover,
+)
 from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
 from marketlab.strategies.ranking import generate_weights as ranking_weights
@@ -37,9 +46,13 @@ class ExperimentArtifacts:
     panel_path: Path
     metrics_path: Path
     performance_path: Path
+    strategy_summary_path: Path
+    monthly_returns_path: Path
+    turnover_costs_path: Path
     report_path: Path | None
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
+    turnover_plot_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
 
@@ -87,11 +100,20 @@ def _persist_experiment_outputs(
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
+    strategy_summary = build_strategy_summary(performance)
+    monthly_returns = build_monthly_returns(performance)
+    turnover_costs = build_turnover_costs(performance)
 
     metrics_path = artifact_run_dir / "metrics.csv"
     performance_path = artifact_run_dir / "performance.csv"
+    strategy_summary_path = artifact_run_dir / "strategy_summary.csv"
+    monthly_returns_path = artifact_run_dir / "monthly_returns.csv"
+    turnover_costs_path = artifact_run_dir / "turnover_costs.csv"
     metrics.to_csv(metrics_path, index=False)
     performance.to_csv(performance_path, index=False)
+    strategy_summary.to_csv(strategy_summary_path, index=False)
+    monthly_returns.to_csv(monthly_returns_path, index=False)
+    turnover_costs.to_csv(turnover_costs_path, index=False)
 
     model_summary_path: Path | None = None
     if model_summary is not None:
@@ -112,10 +134,14 @@ def _persist_experiment_outputs(
             path=artifact_run_dir / "report.md",
             model_summary=model_summary,
             fold_summary=fold_summary,
+            strategy_summary=strategy_summary,
+            monthly_returns=monthly_returns,
+            turnover_costs=turnover_costs,
         )
 
     cumulative_plot_path: Path | None = None
     drawdown_plot_path: Path | None = None
+    turnover_plot_path: Path | None = None
     if config.artifacts.save_plots:
         cumulative_plot_path = plot_cumulative_returns(
             performance=performance,
@@ -125,15 +151,23 @@ def _persist_experiment_outputs(
             performance=performance,
             path=artifact_run_dir / "drawdown.png",
         )
+        turnover_plot_path = plot_turnover(
+            performance=performance,
+            path=artifact_run_dir / "turnover.png",
+        )
 
     return ExperimentArtifacts(
         run_dir=artifact_run_dir,
         panel_path=panel_path,
         metrics_path=metrics_path,
         performance_path=performance_path,
+        strategy_summary_path=strategy_summary_path,
+        monthly_returns_path=monthly_returns_path,
+        turnover_costs_path=turnover_costs_path,
         report_path=report_path,
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
+        turnover_plot_path=turnover_plot_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
     )

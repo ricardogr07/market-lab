@@ -47,3 +47,22 @@ def plot_drawdown(performance: pd.DataFrame, path: str | Path) -> Path:
     figure.savefig(output_path)
     plt.close(figure)
     return output_path
+
+
+def plot_turnover(performance: pd.DataFrame, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    figure, axis = plt.subplots(figsize=(9, 5))
+    for strategy, frame in performance.groupby("strategy", sort=False):
+        axis.plot(frame["date"], frame["turnover"], label=strategy)
+
+    axis.set_title("Turnover")
+    axis.set_xlabel("Date")
+    axis.set_ylabel("Turnover")
+    axis.legend()
+    axis.grid(alpha=0.3)
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
