@@ -73,6 +73,8 @@ def model_metrics() -> pd.DataFrame:
             "roc_auc": [0.71, 0.67, float("nan"), float("nan")],
             "log_loss": [0.59, 0.63, float("nan"), float("nan")],
             "brier_score": [0.22, 0.24, 0.19, 0.20],
+            "ece": [0.08, 0.10, 0.05, 0.06],
+            "max_calibration_gap": [0.12, 0.15, 0.09, 0.11],
             "target_rate": [0.50, 0.50, 0.45, 0.45],
             "prediction_rate": [0.52, 0.49, 0.44, 0.46],
             "rank_corr": [0.15, 0.10, 0.05, 0.08],
@@ -110,6 +112,8 @@ def test_build_model_summary_aggregates_one_row_per_model(
     assert gb_row["mean_roc_auc"] == pytest.approx(0.71)
     assert gb_row["mean_log_loss"] == pytest.approx(0.59)
     assert gb_row["mean_brier_score"] == pytest.approx(0.205)
+    assert gb_row["mean_ece"] == pytest.approx(0.065)
+    assert gb_row["mean_max_calibration_gap"] == pytest.approx(0.105)
     assert gb_row["mean_rank_corr"] == pytest.approx(0.10)
     assert gb_row["mean_top_bottom_spread"] == pytest.approx(0.0275)
     assert gb_row["worst_top_bottom_spread"] == pytest.approx(-0.04)
@@ -136,6 +140,8 @@ def test_build_fold_summary_aggregates_one_row_per_fold_and_selects_best_models(
     assert first_fold["mean_roc_auc"] == pytest.approx(0.69)
     assert first_fold["mean_log_loss"] == pytest.approx(0.61)
     assert first_fold["mean_brier_score"] == pytest.approx(0.23)
+    assert first_fold["mean_ece"] == pytest.approx(0.09)
+    assert first_fold["mean_max_calibration_gap"] == pytest.approx(0.135)
     assert first_fold["mean_rank_corr"] == pytest.approx(0.125)
     assert first_fold["mean_top_bottom_spread"] == pytest.approx(0.0275)
     assert first_fold["mean_spread_hit_rate"] == pytest.approx(0.575)

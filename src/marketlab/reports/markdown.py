@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -135,6 +136,45 @@ def _walk_forward_diagnostics_lines(fold_diagnostics: pd.DataFrame) -> list[str]
     return lines
 
 
+def _calibration_summary_table(model_summary: pd.DataFrame) -> str:
+    summary = model_summary.loc[:, ["model_name", "mean_ece", "mean_max_calibration_gap"]].copy()
+    return _markdown_table(_display_frame(summary))
+
+
+def _threshold_highlights(threshold_diagnostics: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for model_name, model_rows in threshold_diagnostics.groupby("model_name", sort=True):
+        aggregated = (
+            model_rows.groupby("threshold", as_index=False)
+            .agg(
+                mean_f1=("f1", "mean"),
+                mean_balanced_accuracy=("balanced_accuracy", "mean"),
+            )
+            .sort_values("threshold")
+            .reset_index(drop=True)
+        )
+        best_f1 = aggregated.sort_values(["mean_f1", "threshold"], ascending=[False, True]).iloc[0]
+        best_balanced = aggregated.sort_values(
+            ["mean_balanced_accuracy", "threshold"],
+            ascending=[False, True],
+        ).iloc[0]
+        rows.append(
+            {
+                "model_name": model_name,
+                "threshold_max_f1": float(best_f1["threshold"]),
+                "max_f1": float(best_f1["mean_f1"]),
+                "threshold_max_balanced_accuracy": float(best_balanced["threshold"]),
+                "max_balanced_accuracy": float(best_balanced["mean_balanced_accuracy"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _relative_image_line(report_path: Path, image_path: Path, alt_text: str) -> str:
+    relative_path = os.path.relpath(image_path, start=report_path.parent)
+    return f"![{alt_text}]({relative_path})"
+
+
 def _display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     display = frame.copy()
     numeric_columns = display.select_dtypes(include="number").columns
@@ -158,6 +198,10 @@ def write_markdown_report(
     monthly_returns: pd.DataFrame | None = None,
     turnover_costs: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
+    threshold_diagnostics: pd.DataFrame | None = None,
+    calibration_curves_plot_path: Path | None = None,
+    score_histograms_plot_path: Path | None = None,
+    threshold_sweeps_plot_path: Path | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +256,27 @@ def write_markdown_report(
 
     if fold_summary is not None and not fold_summary.empty:
         content_lines.extend(_section("Fold Summary", [_markdown_table(_display_frame(fold_summary))]))
+
+    show_calibration_section = (
+        model_summary is not None
+        and not model_summary.empty
+        and {"mean_ece", "mean_max_calibration_gap"}.issubset(model_summary.columns)
+    )
+    if show_calibration_section:
+        calibration_lines = [_calibration_summary_table(model_summary)]
+        if threshold_diagnostics is not None and not threshold_diagnostics.empty:
+            calibration_lines.extend([
+                "",
+                _markdown_table(_display_frame(_threshold_highlights(threshold_diagnostics))),
+            ])
+        for alt_text, plot_path in [
+            ("Calibration Curves", calibration_curves_plot_path),
+            ("Score Histograms", score_histograms_plot_path),
+            ("Threshold Sweeps", threshold_sweeps_plot_path),
+        ]:
+            if plot_path is not None and plot_path.exists():
+                calibration_lines.extend(["", _relative_image_line(output_path, plot_path, alt_text)])
+        content_lines.extend(_section("Calibration And Threshold Diagnostics", calibration_lines))
 
     output_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
     return output_path

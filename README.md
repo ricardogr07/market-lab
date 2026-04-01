@@ -19,8 +19,8 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 
 - `prepare-data`: build or reuse the cached prepared panel.
 - `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, analytics summaries, report, and plots.
-- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summary, ranking diagnostics, and walk-forward diagnostics CSVs.
-- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, and diagnostics artifacts.
+- `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summaries, ranking diagnostics, calibration diagnostics, threshold diagnostics, and review plots.
+- `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, calibration/threshold diagnostics, and review plots.
 
 ## Artifact Outputs
 
@@ -34,8 +34,14 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `model_metrics.csv`
 - `predictions.csv`
 - `ranking_diagnostics.csv`
+- `calibration_diagnostics.csv`
+- `score_histograms.csv`
+- `threshold_diagnostics.csv`
 - `model_summary.csv`
 - `fold_summary.csv`
+- `calibration_curves.png`
+- `score_histograms.png`
+- `threshold_sweeps.png`
 - per-fold model pickles under `models/`
 
 ### `backtest`
@@ -67,8 +73,14 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `turnover.png`
 - `fold_diagnostics.csv`
 - `ranking_diagnostics.csv`
+- `calibration_diagnostics.csv`
+- `score_histograms.csv`
+- `threshold_diagnostics.csv`
 - `model_summary.csv`
 - `fold_summary.csv`
+- `calibration_curves.png`
+- `score_histograms.png`
+- `threshold_sweeps.png`
 - optional per-fold model pickles under `models/`
 
 ## Walk-Forward Guardrails
@@ -90,6 +102,12 @@ When `train-models` or `run-experiment` end up with zero usable folds, they stil
 Model evaluation now stays additive to the existing ROC AUC surface while reflecting the actual long-short ranking use case. `model_metrics.csv` keeps the existing classification fields and now also includes balanced classification metrics, Brier score, per-fold mean rank correlation, top/bottom bucket returns, top-bottom spread, spread hit rate, worst observed spread, and the count of usable ranking dates. `ranking_diagnostics.csv` stores one row per model, fold, and signal date so underfilled ranking dates are visible instead of being silently folded into the aggregates.
 
 `model_summary.csv` and `fold_summary.csv` still preserve the ROC AUC winner fields for continuity, and they now add spread-based summary fields plus a separate `best_model_by_top_bottom_spread` winner. The report headline mirrors that split by showing both the best model by mean ROC AUC and the best model by mean top-bottom spread. This PR is evaluation-only: it does not change how weights are generated or how ML strategies trade.
+
+## Calibration And Threshold Diagnostics
+
+Calibration review is also additive to the existing evaluation surface. `calibration_diagnostics.csv` stores fixed 10-bin score calibration rows per model and fold, including observed positive rate, calibration gap, and return context inside each score band. `score_histograms.csv` stores target-class score distributions over the same fixed bins, and `threshold_diagnostics.csv` stores threshold sweeps from `0.05` to `0.95` with deterministic classification metrics plus downside-oriented forward-return columns for predicted positives.
+
+`model_metrics.csv` now adds fold-level `ece` and `max_calibration_gap`, while `model_summary.csv` and `fold_summary.csv` add `mean_ece` and `mean_max_calibration_gap`. When plots are enabled, `train-models` and `run-experiment` also write `calibration_curves.png`, `score_histograms.png`, and `threshold_sweeps.png`, and the experiment report includes a `Calibration And Threshold Diagnostics` section with compact calibration and threshold highlight tables. This PR remains evaluation-only: it does not recalibrate probabilities or change any strategy controls.
 
 ## Environment
 

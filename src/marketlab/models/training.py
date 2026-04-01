@@ -9,10 +9,17 @@ import pandas as pd
 from marketlab.config import ModelSpec
 from marketlab.evaluation.walk_forward import WalkForwardFold, slice_fold_rows
 from marketlab.models.evaluation import (
+    CALIBRATION_DIAGNOSTICS_COLUMNS,
     MODEL_METRICS_COLUMNS,
     RANKING_DIAGNOSTICS_COLUMNS,
+    SCORE_HISTOGRAM_COLUMNS,
+    THRESHOLD_DIAGNOSTICS_COLUMNS,
+    build_calibration_diagnostics,
     build_ranking_diagnostics,
+    build_score_histograms,
+    build_threshold_diagnostics,
     classification_metrics,
+    summarize_calibration_diagnostics,
     summarize_ranking_diagnostics,
 )
 from marketlab.models.registry import build_model_estimator, predict_direction_scores
@@ -33,6 +40,9 @@ class TrainingOutputs:
     metrics: pd.DataFrame
     predictions: pd.DataFrame | None
     ranking_diagnostics: pd.DataFrame
+    calibration_diagnostics: pd.DataFrame
+    score_histograms: pd.DataFrame
+    threshold_diagnostics: pd.DataFrame
 
 
 def modeling_feature_columns(modeling_dataset: pd.DataFrame) -> list[str]:
@@ -90,6 +100,9 @@ def train_direction_models_on_folds(
     metrics_rows: list[dict[str, object]] = []
     prediction_frames: list[pd.DataFrame] = []
     ranking_diagnostics_frames: list[pd.DataFrame] = []
+    calibration_diagnostics_frames: list[pd.DataFrame] = []
+    score_histogram_frames: list[pd.DataFrame] = []
+    threshold_diagnostics_frames: list[pd.DataFrame] = []
 
     for spec in model_specs:
         for fold in folds:
@@ -136,14 +149,33 @@ def train_direction_models_on_folds(
                 }
             )
 
+            scored_predictions = test_rows.assign(score=score_series.to_numpy())
             fold_ranking_diagnostics = build_ranking_diagnostics(
                 model_name=spec.name,
                 fold_id=fold.fold_id,
-                predictions=test_rows.assign(score=score_series.to_numpy()),
+                predictions=scored_predictions,
                 long_n=long_n,
                 short_n=short_n,
             )
+            fold_calibration_diagnostics = build_calibration_diagnostics(
+                model_name=spec.name,
+                fold_id=fold.fold_id,
+                predictions=scored_predictions,
+            )
+            fold_score_histograms = build_score_histograms(
+                model_name=spec.name,
+                fold_id=fold.fold_id,
+                predictions=scored_predictions,
+            )
+            fold_threshold_diagnostics = build_threshold_diagnostics(
+                model_name=spec.name,
+                fold_id=fold.fold_id,
+                predictions=scored_predictions,
+            )
             ranking_diagnostics_frames.append(fold_ranking_diagnostics)
+            calibration_diagnostics_frames.append(fold_calibration_diagnostics)
+            score_histogram_frames.append(fold_score_histograms)
+            threshold_diagnostics_frames.append(fold_threshold_diagnostics)
 
             metrics_rows.append(
                 {
@@ -161,6 +193,7 @@ def train_direction_models_on_folds(
                         predicted=predicted_target,
                         scores=score_series,
                     ),
+                    **summarize_calibration_diagnostics(fold_calibration_diagnostics),
                     **summarize_ranking_diagnostics(fold_ranking_diagnostics),
                 }
             )
@@ -193,6 +226,30 @@ def train_direction_models_on_folds(
     else:
         ranking_diagnostics = pd.DataFrame(columns=RANKING_DIAGNOSTICS_COLUMNS)
 
+    if calibration_diagnostics_frames:
+        calibration_diagnostics = pd.concat(calibration_diagnostics_frames, ignore_index=True)
+        calibration_diagnostics = calibration_diagnostics.loc[:, CALIBRATION_DIAGNOSTICS_COLUMNS].sort_values(
+            ["model_name", "fold_id", "bin_id"]
+        ).reset_index(drop=True)
+    else:
+        calibration_diagnostics = pd.DataFrame(columns=CALIBRATION_DIAGNOSTICS_COLUMNS)
+
+    if score_histogram_frames:
+        score_histograms = pd.concat(score_histogram_frames, ignore_index=True)
+        score_histograms = score_histograms.loc[:, SCORE_HISTOGRAM_COLUMNS].sort_values(
+            ["model_name", "fold_id", "target", "bin_id"]
+        ).reset_index(drop=True)
+    else:
+        score_histograms = pd.DataFrame(columns=SCORE_HISTOGRAM_COLUMNS)
+
+    if threshold_diagnostics_frames:
+        threshold_diagnostics = pd.concat(threshold_diagnostics_frames, ignore_index=True)
+        threshold_diagnostics = threshold_diagnostics.loc[:, THRESHOLD_DIAGNOSTICS_COLUMNS].sort_values(
+            ["model_name", "fold_id", "threshold"]
+        ).reset_index(drop=True)
+    else:
+        threshold_diagnostics = pd.DataFrame(columns=THRESHOLD_DIAGNOSTICS_COLUMNS)
+
     predictions = None
     if save_predictions:
         predictions = pd.concat(prediction_frames, ignore_index=True).sort_values(
@@ -204,4 +261,7 @@ def train_direction_models_on_folds(
         metrics=metrics,
         predictions=predictions,
         ranking_diagnostics=ranking_diagnostics,
+        calibration_diagnostics=calibration_diagnostics,
+        score_histograms=score_histograms,
+        threshold_diagnostics=threshold_diagnostics,
     )

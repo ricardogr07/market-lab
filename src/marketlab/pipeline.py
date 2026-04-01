@@ -28,8 +28,11 @@ from marketlab.reports.analytics import (
 )
 from marketlab.reports.markdown import write_markdown_report
 from marketlab.reports.plots import (
+    plot_calibration_curves,
     plot_cumulative_returns,
     plot_drawdown,
+    plot_score_histograms,
+    plot_threshold_sweeps,
     plot_turnover,
 )
 from marketlab.reports.summary import build_fold_summary, build_model_summary
@@ -54,8 +57,14 @@ class ExperimentArtifacts:
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
     turnover_plot_path: Path | None
+    calibration_curves_plot_path: Path | None
+    score_histograms_plot_path: Path | None
+    threshold_sweeps_plot_path: Path | None
     fold_diagnostics_path: Path | None
     ranking_diagnostics_path: Path | None
+    calibration_diagnostics_path: Path | None
+    score_histograms_path: Path | None
+    threshold_diagnostics_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
 
@@ -67,9 +76,15 @@ class TrainModelsArtifacts:
     folds_path: Path
     fold_diagnostics_path: Path
     ranking_diagnostics_path: Path
+    calibration_diagnostics_path: Path
+    score_histograms_path: Path
+    threshold_diagnostics_path: Path
     model_manifest_path: Path
     metrics_path: Path | None
     predictions_path: Path | None
+    calibration_curves_plot_path: Path | None
+    score_histograms_plot_path: Path | None
+    threshold_sweeps_plot_path: Path | None
     fold_summary_path: Path
     model_summary_path: Path
 
@@ -112,6 +127,12 @@ def _persist_experiment_outputs(
     fold_diagnostics_path: Path | None = None,
     ranking_diagnostics: pd.DataFrame | None = None,
     ranking_diagnostics_path: Path | None = None,
+    calibration_diagnostics: pd.DataFrame | None = None,
+    calibration_diagnostics_path: Path | None = None,
+    score_histograms: pd.DataFrame | None = None,
+    score_histograms_path: Path | None = None,
+    threshold_diagnostics: pd.DataFrame | None = None,
+    threshold_diagnostics_path: Path | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
@@ -142,6 +163,21 @@ def _persist_experiment_outputs(
         persisted_ranking_diagnostics_path = artifact_run_dir / "ranking_diagnostics.csv"
         ranking_diagnostics.to_csv(persisted_ranking_diagnostics_path, index=False)
 
+    persisted_calibration_diagnostics_path = calibration_diagnostics_path
+    if calibration_diagnostics is not None and persisted_calibration_diagnostics_path is None:
+        persisted_calibration_diagnostics_path = artifact_run_dir / "calibration_diagnostics.csv"
+        calibration_diagnostics.to_csv(persisted_calibration_diagnostics_path, index=False)
+
+    persisted_score_histograms_path = score_histograms_path
+    if score_histograms is not None and persisted_score_histograms_path is None:
+        persisted_score_histograms_path = artifact_run_dir / "score_histograms.csv"
+        score_histograms.to_csv(persisted_score_histograms_path, index=False)
+
+    persisted_threshold_diagnostics_path = threshold_diagnostics_path
+    if threshold_diagnostics is not None and persisted_threshold_diagnostics_path is None:
+        persisted_threshold_diagnostics_path = artifact_run_dir / "threshold_diagnostics.csv"
+        threshold_diagnostics.to_csv(persisted_threshold_diagnostics_path, index=False)
+
     model_summary_path: Path | None = None
     if model_summary is not None:
         model_summary_path = artifact_run_dir / "model_summary.csv"
@@ -151,6 +187,41 @@ def _persist_experiment_outputs(
     if fold_summary is not None:
         fold_summary_path = artifact_run_dir / "fold_summary.csv"
         fold_summary.to_csv(fold_summary_path, index=False)
+
+    cumulative_plot_path: Path | None = None
+    drawdown_plot_path: Path | None = None
+    turnover_plot_path: Path | None = None
+    calibration_curves_plot_path: Path | None = None
+    score_histograms_plot_path: Path | None = None
+    threshold_sweeps_plot_path: Path | None = None
+    if config.artifacts.save_plots:
+        cumulative_plot_path = plot_cumulative_returns(
+            performance=performance,
+            path=artifact_run_dir / "cumulative_returns.png",
+        )
+        drawdown_plot_path = plot_drawdown(
+            performance=performance,
+            path=artifact_run_dir / "drawdown.png",
+        )
+        turnover_plot_path = plot_turnover(
+            performance=performance,
+            path=artifact_run_dir / "turnover.png",
+        )
+        if calibration_diagnostics is not None and not calibration_diagnostics.empty:
+            calibration_curves_plot_path = plot_calibration_curves(
+                calibration_diagnostics=calibration_diagnostics,
+                path=artifact_run_dir / "calibration_curves.png",
+            )
+        if score_histograms is not None and not score_histograms.empty:
+            score_histograms_plot_path = plot_score_histograms(
+                score_histograms=score_histograms,
+                path=artifact_run_dir / "score_histograms.png",
+            )
+        if threshold_diagnostics is not None and not threshold_diagnostics.empty:
+            threshold_sweeps_plot_path = plot_threshold_sweeps(
+                threshold_diagnostics=threshold_diagnostics,
+                path=artifact_run_dir / "threshold_sweeps.png",
+            )
 
     report_path: Path | None = None
     if config.artifacts.save_report_md:
@@ -165,23 +236,10 @@ def _persist_experiment_outputs(
             monthly_returns=monthly_returns,
             turnover_costs=turnover_costs,
             fold_diagnostics=fold_diagnostics,
-        )
-
-    cumulative_plot_path: Path | None = None
-    drawdown_plot_path: Path | None = None
-    turnover_plot_path: Path | None = None
-    if config.artifacts.save_plots:
-        cumulative_plot_path = plot_cumulative_returns(
-            performance=performance,
-            path=artifact_run_dir / "cumulative_returns.png",
-        )
-        drawdown_plot_path = plot_drawdown(
-            performance=performance,
-            path=artifact_run_dir / "drawdown.png",
-        )
-        turnover_plot_path = plot_turnover(
-            performance=performance,
-            path=artifact_run_dir / "turnover.png",
+            threshold_diagnostics=threshold_diagnostics,
+            calibration_curves_plot_path=calibration_curves_plot_path,
+            score_histograms_plot_path=score_histograms_plot_path,
+            threshold_sweeps_plot_path=threshold_sweeps_plot_path,
         )
 
     return ExperimentArtifacts(
@@ -196,8 +254,14 @@ def _persist_experiment_outputs(
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
         turnover_plot_path=turnover_plot_path,
+        calibration_curves_plot_path=calibration_curves_plot_path,
+        score_histograms_plot_path=score_histograms_plot_path,
+        threshold_sweeps_plot_path=threshold_sweeps_plot_path,
         fold_diagnostics_path=persisted_fold_diagnostics_path,
         ranking_diagnostics_path=persisted_ranking_diagnostics_path,
+        calibration_diagnostics_path=persisted_calibration_diagnostics_path,
+        score_histograms_path=persisted_score_histograms_path,
+        threshold_diagnostics_path=persisted_threshold_diagnostics_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
     )
@@ -375,6 +439,12 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
 
     ranking_diagnostics_path = run_dir / "ranking_diagnostics.csv"
     training_outputs.ranking_diagnostics.to_csv(ranking_diagnostics_path, index=False)
+    calibration_diagnostics_path = run_dir / "calibration_diagnostics.csv"
+    training_outputs.calibration_diagnostics.to_csv(calibration_diagnostics_path, index=False)
+    score_histograms_path = run_dir / "score_histograms.csv"
+    training_outputs.score_histograms.to_csv(score_histograms_path, index=False)
+    threshold_diagnostics_path = run_dir / "threshold_diagnostics.csv"
+    training_outputs.threshold_diagnostics.to_csv(threshold_diagnostics_path, index=False)
 
     predictions_path: Path | None = None
     if config.artifacts.save_predictions and training_outputs.predictions is not None:
@@ -394,15 +464,38 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
     model_summary.to_csv(model_summary_path, index=False)
     fold_summary.to_csv(fold_summary_path, index=False)
 
+    calibration_curves_plot_path: Path | None = None
+    score_histograms_plot_path: Path | None = None
+    threshold_sweeps_plot_path: Path | None = None
+    if config.artifacts.save_plots:
+        calibration_curves_plot_path = plot_calibration_curves(
+            calibration_diagnostics=training_outputs.calibration_diagnostics,
+            path=run_dir / "calibration_curves.png",
+        )
+        score_histograms_plot_path = plot_score_histograms(
+            score_histograms=training_outputs.score_histograms,
+            path=run_dir / "score_histograms.png",
+        )
+        threshold_sweeps_plot_path = plot_threshold_sweeps(
+            threshold_diagnostics=training_outputs.threshold_diagnostics,
+            path=run_dir / "threshold_sweeps.png",
+        )
+
     return TrainModelsArtifacts(
         run_dir=run_dir,
         panel_path=panel_path,
         folds_path=folds_path,
         fold_diagnostics_path=fold_diagnostics_path,
         ranking_diagnostics_path=ranking_diagnostics_path,
+        calibration_diagnostics_path=calibration_diagnostics_path,
+        score_histograms_path=score_histograms_path,
+        threshold_diagnostics_path=threshold_diagnostics_path,
         model_manifest_path=model_manifest_path,
         metrics_path=metrics_path,
         predictions_path=predictions_path,
+        calibration_curves_plot_path=calibration_curves_plot_path,
+        score_histograms_plot_path=score_histograms_plot_path,
+        threshold_sweeps_plot_path=threshold_sweeps_plot_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
     )
@@ -498,4 +591,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         fold_diagnostics=fold_diagnostics,
         fold_diagnostics_path=fold_diagnostics_path,
         ranking_diagnostics=training_outputs.ranking_diagnostics,
+        calibration_diagnostics=training_outputs.calibration_diagnostics,
+        score_histograms=training_outputs.score_histograms,
+        threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
