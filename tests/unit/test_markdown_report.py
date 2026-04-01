@@ -153,3 +153,56 @@ def test_write_markdown_report_adds_ranking_aware_model_headline(tmp_path: Path)
 
     assert "- Best model by mean ROC AUC: `logistic_regression` (0.570000)" in report_text
     assert "- Best model by mean top-bottom spread: `random_forest` (0.030000)" in report_text
+
+
+def test_write_markdown_report_adds_calibration_section_and_plot_links(tmp_path: Path) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+    model_summary = pd.DataFrame(
+        {
+            "model_name": ["random_forest", "logistic_regression"],
+            "mean_roc_auc": [0.54, 0.57],
+            "mean_top_bottom_spread": [0.03, 0.01],
+            "mean_ece": [0.08, 0.05],
+            "mean_max_calibration_gap": [0.18, 0.12],
+        }
+    )
+    threshold_diagnostics = pd.DataFrame(
+        {
+            "model_name": [
+                "logistic_regression",
+                "logistic_regression",
+                "random_forest",
+                "random_forest",
+            ],
+            "threshold": [0.25, 0.50, 0.25, 0.50],
+            "f1": [0.60, 0.65, 0.55, 0.50],
+            "balanced_accuracy": [0.58, 0.57, 0.56, 0.62],
+        }
+    )
+    calibration_plot = tmp_path / "calibration_curves.png"
+    hist_plot = tmp_path / "score_histograms.png"
+    threshold_plot = tmp_path / "threshold_sweeps.png"
+    for path in [calibration_plot, hist_plot, threshold_plot]:
+        path.write_text("placeholder", encoding="utf-8")
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / 'report.md',
+        model_summary=model_summary,
+        threshold_diagnostics=threshold_diagnostics,
+        calibration_curves_plot_path=calibration_plot,
+        score_histograms_plot_path=hist_plot,
+        threshold_sweeps_plot_path=threshold_plot,
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "## Calibration And Threshold Diagnostics" in report_text
+    assert "| model_name | mean_ece | mean_max_calibration_gap |" in report_text
+    assert "| logistic_regression | 0.05 | 0.12 |" in report_text
+    assert "| random_forest | 0.08 | 0.18 |" in report_text
+    assert "| model_name | threshold_max_f1 | max_f1 | threshold_max_balanced_accuracy | max_balanced_accuracy |" in report_text
+    assert "![Calibration Curves](calibration_curves.png)" in report_text
+    assert "![Score Histograms](score_histograms.png)" in report_text
+    assert "![Threshold Sweeps](threshold_sweeps.png)" in report_text

@@ -16,6 +16,9 @@ MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
 FOLD_SUMMARY_COLUMNS = _cli_harness.FOLD_SUMMARY_COLUMNS
 FOLD_DIAGNOSTICS_COLUMNS = _cli_harness.FOLD_DIAGNOSTICS_COLUMNS
 RANKING_DIAGNOSTICS_COLUMNS = _cli_harness.RANKING_DIAGNOSTICS_COLUMNS
+CALIBRATION_DIAGNOSTICS_COLUMNS = _cli_harness.CALIBRATION_DIAGNOSTICS_COLUMNS
+SCORE_HISTOGRAM_COLUMNS = _cli_harness.SCORE_HISTOGRAM_COLUMNS
+THRESHOLD_DIAGNOSTICS_COLUMNS = _cli_harness.THRESHOLD_DIAGNOSTICS_COLUMNS
 run_marketlab_cli = getattr(
     _cli_harness,
     "run_marketlab_cli",
@@ -105,7 +108,7 @@ def _write_config(
                 "save_predictions": True,
                 "save_metrics_csv": True,
                 "save_report_md": False,
-                "save_plots": False,
+                "save_plots": True,
             },
         },
     )
@@ -132,17 +135,26 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
         "folds.csv",
         "fold_diagnostics.csv",
         "ranking_diagnostics.csv",
+        "calibration_diagnostics.csv",
+        "score_histograms.csv",
+        "threshold_diagnostics.csv",
         "model_manifest.csv",
         "model_metrics.csv",
         "predictions.csv",
         "model_summary.csv",
         "fold_summary.csv",
+        "calibration_curves.png",
+        "score_histograms.png",
+        "threshold_sweeps.png",
         "models",
     }
 
     folds = pd.read_csv(run_dir / "folds.csv")
     fold_diagnostics = pd.read_csv(run_dir / "fold_diagnostics.csv")
     ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
+    calibration_diagnostics = pd.read_csv(run_dir / "calibration_diagnostics.csv")
+    score_histograms = pd.read_csv(run_dir / "score_histograms.csv")
+    threshold_diagnostics = pd.read_csv(run_dir / "threshold_diagnostics.csv")
     manifest = pd.read_csv(run_dir / "model_manifest.csv")
     metrics = pd.read_csv(run_dir / "model_metrics.csv")
     predictions = pd.read_csv(run_dir / "predictions.csv")
@@ -151,6 +163,9 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
 
     assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
     assert list(ranking_diagnostics.columns) == RANKING_DIAGNOSTICS_COLUMNS
+    assert list(calibration_diagnostics.columns) == CALIBRATION_DIAGNOSTICS_COLUMNS
+    assert list(score_histograms.columns) == SCORE_HISTOGRAM_COLUMNS
+    assert list(threshold_diagnostics.columns) == THRESHOLD_DIAGNOSTICS_COLUMNS
     assert list(metrics.columns) == MODEL_METRICS_COLUMNS
     assert list(predictions.columns) == PREDICTIONS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
@@ -158,15 +173,22 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
     assert not folds.empty
     assert not fold_diagnostics.empty
     assert not ranking_diagnostics.empty
+    assert not calibration_diagnostics.empty
+    assert not score_histograms.empty
+    assert not threshold_diagnostics.empty
     assert not model_summary.empty
     assert not fold_summary.empty
     assert set(fold_diagnostics["status"]).issubset({"used", "skipped"})
     assert "used" in set(fold_diagnostics["status"])
     assert set(ranking_diagnostics["bucket_status"]).issubset({"used", "underfilled"})
+    assert set(threshold_diagnostics["threshold_status"]).issubset({"used", "empty"})
     assert set(manifest["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(metrics["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(predictions["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(ranking_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(calibration_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(score_histograms["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(threshold_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
     assert set(fold_summary["fold_id"]) == set(folds["fold_id"])
     assert set(folds["fold_id"]) == set(
@@ -176,6 +198,8 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
     assert predictions["predicted_target"].isin([0, 1]).all()
     assert predictions.groupby("model_name")["fold_id"].nunique().gt(0).all()
     assert metrics["spread_signal_count"].ge(0).all()
+    assert metrics["ece"].ge(0.0).all()
+    assert metrics["max_calibration_gap"].ge(0.0).all()
 
     metrics_index = metrics.set_index(["model_name", "fold_id"])
     used_signal_counts = (
@@ -188,6 +212,8 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
 
     for relative_model_path in manifest["model_path"]:
         assert (run_dir / relative_model_path).exists()
+    for plot_name in ["calibration_curves.png", "score_histograms.png", "threshold_sweeps.png"]:
+        assert (run_dir / plot_name).exists()
 
 
 def test_train_models_writes_diagnostics_before_failing_on_zero_usable_folds(tmp_path: Path) -> None:

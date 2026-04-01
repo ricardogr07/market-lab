@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -18,6 +18,7 @@ This document ties the current pieces together and records the working rules tha
   - score-to-weight ranking strategy for ML portfolios
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
+  - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
   - `buy_hold` and `sma` baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
@@ -76,8 +77,8 @@ flowchart TD
 
     Prepare --> Panel[prepared panel cache]
     Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots]
-    Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv ranking_diagnostics.csv manifest metrics predictions summaries models/]
-    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md plots diagnostics summaries optional models/]
+    Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv ranking_diagnostics.csv calibration_diagnostics.csv score_histograms.csv threshold_diagnostics.csv manifest metrics predictions summaries plots models/]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md strategy plots calibration plots diagnostics summaries optional models/]
 ```
 
 ## Automation Split
@@ -140,7 +141,7 @@ flowchart TD
     Evaluation --> FoldDefs[folds.csv]
     Evaluation --> FoldDiagnosticsCsv[fold_diagnostics.csv]
     Models --> ModelArtifacts[Per-fold model pickles]
-    Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv, ranking_diagnostics.csv]
+    Models --> TrainArtifacts[model_manifest.csv, model_metrics.csv, predictions.csv, ranking_diagnostics.csv, calibration_diagnostics.csv, score_histograms.csv, threshold_diagnostics.csv]
     Metrics --> MetricsCsv[metrics.csv]
     Markdown --> ReportMd[report.md]
     Plots --> PlotFiles[cumulative_returns.png drawdown.png and turnover.png]
@@ -361,6 +362,12 @@ classDiagram
       +cumulative_plot_path: Path | None
       +drawdown_plot_path: Path | None
       +turnover_plot_path: Path | None
+      +calibration_curves_plot_path: Path | None
+      +score_histograms_plot_path: Path | None
+      +threshold_sweeps_plot_path: Path | None
+      +calibration_diagnostics_path: Path | None
+      +score_histograms_path: Path | None
+      +threshold_diagnostics_path: Path | None
     }
 
     class TrainModelsArtifacts {
@@ -369,9 +376,15 @@ classDiagram
       +folds_path: Path
       +fold_diagnostics_path: Path
       +ranking_diagnostics_path: Path
+      +calibration_diagnostics_path: Path
+      +score_histograms_path: Path
+      +threshold_diagnostics_path: Path
       +model_manifest_path: Path
       +metrics_path: Path | None
       +predictions_path: Path | None
+      +calibration_curves_plot_path: Path | None
+      +score_histograms_plot_path: Path | None
+      +threshold_sweeps_plot_path: Path | None
       +model_summary_path: Path
       +fold_summary_path: Path
     }
@@ -685,12 +698,13 @@ Best practice:
 - Adds strategy summary, monthly net return, and turnover-and-cost sections when those analytics are available.
 - Switches scope text when ML strategies are present.
 - Reports both the best model by mean ROC AUC and the best model by mean top-bottom spread when model summaries are available.
+- Adds a compact calibration-and-threshold section when calibration summaries or threshold diagnostics are available, including relative links to the diagnostic plots.
 
 ### `src/marketlab/reports/summary.py`
 
 - Builds fold-level and model-level summary tables from existing training metrics and manifests.
 - Keeps the reporting summaries additive and derived from raw training outputs.
-- Preserves ROC AUC continuity while adding spread-based ranking winners and downside-oriented aggregates.
+- Preserves ROC AUC continuity while adding spread-based ranking winners, downside-oriented aggregates, and additive calibration summary fields.
 
 Best practice:
 - Keep summary generation pure and deterministic.
@@ -699,6 +713,7 @@ Best practice:
 ### `src/marketlab/reports/plots.py`
 
 - Produces cumulative equity, drawdown, and turnover charts.
+- Also renders calibration curves, target-class score histograms, and threshold sweep review plots from the persisted diagnostic CSVs.
 
 Best practice:
 - Report modules should only render artifacts from already-computed outputs.
@@ -730,7 +745,7 @@ Best practice:
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `label_cutoff`, not just by `test_start`.
 - Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
-- Derive `model_summary.csv`, `fold_summary.csv`, and ranking-aware winners from existing model metrics and manifests, not from new training state.
+- Derive `model_summary.csv`, `fold_summary.csv`, calibration summaries, and ranking-aware winners from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
 - Use the smoke runner to validate the full current artifact surface after runtime changes.

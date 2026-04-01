@@ -22,6 +22,8 @@ MODEL_METRICS_COLUMNS = [
     "recall",
     "f1",
     "brier_score",
+    "ece",
+    "max_calibration_gap",
     "target_rate",
     "prediction_rate",
     "roc_auc",
@@ -50,8 +52,56 @@ RANKING_DIAGNOSTICS_COLUMNS = [
     "top_bottom_spread",
 ]
 
+CALIBRATION_DIAGNOSTICS_COLUMNS = [
+    "model_name",
+    "fold_id",
+    "bin_id",
+    "bin_left",
+    "bin_right",
+    "sample_count",
+    "sample_fraction",
+    "mean_score",
+    "observed_positive_rate",
+    "calibration_gap",
+    "absolute_calibration_gap",
+    "avg_forward_return",
+    "negative_forward_return_rate",
+]
+
+SCORE_HISTOGRAM_COLUMNS = [
+    "model_name",
+    "fold_id",
+    "target",
+    "bin_id",
+    "bin_left",
+    "bin_right",
+    "sample_count",
+    "fraction_within_target",
+]
+
+THRESHOLD_DIAGNOSTICS_COLUMNS = [
+    "model_name",
+    "fold_id",
+    "threshold",
+    "threshold_status",
+    "predicted_positive_count",
+    "predicted_positive_rate",
+    "precision",
+    "recall",
+    "f1",
+    "balanced_accuracy",
+    "avg_forward_return_predicted_positive",
+    "negative_forward_return_rate_predicted_positive",
+    "worst_forward_return_predicted_positive",
+]
+
 BUCKET_STATUS_USED = "used"
 BUCKET_STATUS_UNDERFILLED = "underfilled"
+THRESHOLD_STATUS_USED = "used"
+THRESHOLD_STATUS_EMPTY = "empty"
+
+SCORE_BIN_COUNT = 10
+THRESHOLD_GRID = [step / 100 for step in range(5, 100, 5)]
 
 
 def _binary_recall(
@@ -158,6 +208,210 @@ def _bucket_frame(
         ascending=[True, True],
     ).head(short_n)
     return long_bucket, short_bucket
+
+
+def _score_bin_bounds(
+    bin_id: int,
+    *,
+    bin_count: int,
+) -> tuple[float, float]:
+    return float((bin_id - 1) / bin_count), float(bin_id / bin_count)
+
+
+def _score_bin_ids(
+    scores: pd.Series,
+    *,
+    bin_count: int,
+) -> pd.Series:
+    clipped_scores = np.clip(scores.astype(float).to_numpy(dtype=float), 0.0, 1.0)
+    bin_indexes = np.minimum((clipped_scores * bin_count).astype(int), bin_count - 1)
+    return pd.Series(bin_indexes + 1, index=scores.index, dtype=int)
+
+
+def _prediction_frame_for_score_bins(
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    required = {"score", "target", "forward_return"}
+    missing = required - set(predictions.columns)
+    if missing:
+        joined = ", ".join(sorted(missing))
+        raise ValueError(f"Prediction frame is missing required columns: {joined}")
+
+    working = predictions.loc[:, ["score", "target", "forward_return"]].copy()
+    working["score"] = working["score"].astype(float).clip(0.0, 1.0)
+    working["target"] = working["target"].astype(int)
+    working["forward_return"] = working["forward_return"].astype(float)
+    working["bin_id"] = _score_bin_ids(working["score"], bin_count=SCORE_BIN_COUNT)
+    return working
+
+
+def build_calibration_diagnostics(
+    model_name: str,
+    fold_id: int,
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame(columns=CALIBRATION_DIAGNOSTICS_COLUMNS)
+
+    working = _prediction_frame_for_score_bins(predictions)
+    total_count = int(len(working))
+    diagnostics_rows: list[dict[str, object]] = []
+
+    for bin_id in range(1, SCORE_BIN_COUNT + 1):
+        bin_left, bin_right = _score_bin_bounds(bin_id, bin_count=SCORE_BIN_COUNT)
+        bin_rows = working.loc[working["bin_id"] == bin_id]
+        sample_count = int(len(bin_rows))
+        sample_fraction = float(sample_count / total_count) if total_count > 0 else 0.0
+        if sample_count > 0:
+            mean_score = float(bin_rows["score"].mean())
+            observed_positive_rate = float(bin_rows["target"].mean())
+            avg_forward_return = float(bin_rows["forward_return"].mean())
+            negative_forward_return_rate = float((bin_rows["forward_return"] < 0.0).mean())
+            calibration_gap = float(observed_positive_rate - mean_score)
+            absolute_calibration_gap = abs(calibration_gap)
+        else:
+            mean_score = float("nan")
+            observed_positive_rate = float("nan")
+            avg_forward_return = float("nan")
+            negative_forward_return_rate = float("nan")
+            calibration_gap = float("nan")
+            absolute_calibration_gap = float("nan")
+
+        diagnostics_rows.append(
+            {
+                "model_name": model_name,
+                "fold_id": fold_id,
+                "bin_id": bin_id,
+                "bin_left": bin_left,
+                "bin_right": bin_right,
+                "sample_count": sample_count,
+                "sample_fraction": sample_fraction,
+                "mean_score": mean_score,
+                "observed_positive_rate": observed_positive_rate,
+                "calibration_gap": calibration_gap,
+                "absolute_calibration_gap": absolute_calibration_gap,
+                "avg_forward_return": avg_forward_return,
+                "negative_forward_return_rate": negative_forward_return_rate,
+            }
+        )
+
+    diagnostics = pd.DataFrame(diagnostics_rows)
+    return diagnostics.loc[:, CALIBRATION_DIAGNOSTICS_COLUMNS]
+
+
+def summarize_calibration_diagnostics(
+    calibration_diagnostics: pd.DataFrame,
+) -> dict[str, float]:
+    if calibration_diagnostics.empty:
+        return {"ece": float("nan"), "max_calibration_gap": float("nan")}
+
+    occupied = calibration_diagnostics.loc[calibration_diagnostics["sample_count"] > 0].copy()
+    if occupied.empty:
+        return {"ece": float("nan"), "max_calibration_gap": float("nan")}
+
+    return {
+        "ece": float((occupied["sample_fraction"] * occupied["absolute_calibration_gap"]).sum()),
+        "max_calibration_gap": float(occupied["absolute_calibration_gap"].max()),
+    }
+
+
+def build_score_histograms(
+    model_name: str,
+    fold_id: int,
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame(columns=SCORE_HISTOGRAM_COLUMNS)
+
+    working = _prediction_frame_for_score_bins(predictions)
+    histogram_rows: list[dict[str, object]] = []
+
+    for target in [0, 1]:
+        target_rows = working.loc[working["target"] == target]
+        target_count = int(len(target_rows))
+        for bin_id in range(1, SCORE_BIN_COUNT + 1):
+            bin_left, bin_right = _score_bin_bounds(bin_id, bin_count=SCORE_BIN_COUNT)
+            sample_count = int((target_rows["bin_id"] == bin_id).sum())
+            histogram_rows.append(
+                {
+                    "model_name": model_name,
+                    "fold_id": fold_id,
+                    "target": target,
+                    "bin_id": bin_id,
+                    "bin_left": bin_left,
+                    "bin_right": bin_right,
+                    "sample_count": sample_count,
+                    "fraction_within_target": float(sample_count / target_count) if target_count > 0 else 0.0,
+                }
+            )
+
+    histograms = pd.DataFrame(histogram_rows)
+    return histograms.loc[:, SCORE_HISTOGRAM_COLUMNS]
+
+
+def build_threshold_diagnostics(
+    model_name: str,
+    fold_id: int,
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    required = {"score", "target", "forward_return"}
+    missing = required - set(predictions.columns)
+    if missing:
+        joined = ", ".join(sorted(missing))
+        raise ValueError(f"Prediction frame is missing required columns: {joined}")
+
+    if predictions.empty:
+        return pd.DataFrame(columns=THRESHOLD_DIAGNOSTICS_COLUMNS)
+
+    working = predictions.loc[:, ["score", "target", "forward_return"]].copy()
+    working["score"] = working["score"].astype(float).clip(0.0, 1.0)
+    working["target"] = working["target"].astype(int)
+    working["forward_return"] = working["forward_return"].astype(float)
+    truth = working["target"]
+    total_count = int(len(working))
+    diagnostics_rows: list[dict[str, object]] = []
+
+    for threshold in THRESHOLD_GRID:
+        predicted_positive = working["score"] >= threshold
+        predicted_positive_count = int(predicted_positive.sum())
+        threshold_metrics = classification_metrics(
+            truth=truth,
+            predicted=predicted_positive.astype(int),
+            scores=working["score"],
+        )
+
+        if predicted_positive_count > 0:
+            positive_rows = working.loc[predicted_positive]
+            avg_forward_return = float(positive_rows["forward_return"].mean())
+            negative_forward_return_rate = float((positive_rows["forward_return"] < 0.0).mean())
+            worst_forward_return = float(positive_rows["forward_return"].min())
+            threshold_status = THRESHOLD_STATUS_USED
+        else:
+            avg_forward_return = float("nan")
+            negative_forward_return_rate = float("nan")
+            worst_forward_return = float("nan")
+            threshold_status = THRESHOLD_STATUS_EMPTY
+
+        diagnostics_rows.append(
+            {
+                "model_name": model_name,
+                "fold_id": fold_id,
+                "threshold": float(threshold),
+                "threshold_status": threshold_status,
+                "predicted_positive_count": predicted_positive_count,
+                "predicted_positive_rate": float(predicted_positive_count / total_count) if total_count > 0 else 0.0,
+                "precision": threshold_metrics["precision"],
+                "recall": threshold_metrics["recall"],
+                "f1": threshold_metrics["f1"],
+                "balanced_accuracy": threshold_metrics["balanced_accuracy"],
+                "avg_forward_return_predicted_positive": avg_forward_return,
+                "negative_forward_return_rate_predicted_positive": negative_forward_return_rate,
+                "worst_forward_return_predicted_positive": worst_forward_return,
+            }
+        )
+
+    diagnostics = pd.DataFrame(diagnostics_rows)
+    return diagnostics.loc[:, THRESHOLD_DIAGNOSTICS_COLUMNS]
 
 
 def build_ranking_diagnostics(
