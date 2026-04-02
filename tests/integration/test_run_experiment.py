@@ -49,6 +49,7 @@ def _write_run_experiment_config(
     tmp_path: Path,
     *,
     walk_forward: dict[str, int | float] | None = None,
+    ranking: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(
@@ -73,6 +74,17 @@ def _write_run_experiment_config(
     if walk_forward is not None:
         walk_forward_payload.update(walk_forward)
 
+    ranking_payload: dict[str, object] = {
+        "long_n": 2,
+        "short_n": 2,
+        "rebalance_frequency": "W-FRI",
+        "weighting": "equal",
+        "mode": "long_short",
+        "min_score_threshold": 0.0,
+        "cash_when_underfilled": False,
+    }
+    if ranking is not None:
+        ranking_payload.update(ranking)
     return write_yaml_config(
         tmp_path / "integration.yaml",
         {
@@ -96,12 +108,7 @@ def _write_run_experiment_config(
                 "type": "direction",
             },
             "portfolio": {
-                "ranking": {
-                    "long_n": 2,
-                    "short_n": 2,
-                    "rebalance_frequency": "W-FRI",
-                    "weighting": "equal",
-                },
+                "ranking": ranking_payload,
                 "costs": {"bps_per_trade": 10},
             },
             "baselines": {
@@ -359,3 +366,63 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert not (run_dir / "calibration_curves.png").exists()
     assert not (run_dir / "score_histograms.png").exists()
     assert not (run_dir / "threshold_sweeps.png").exists()
+
+
+def test_run_experiment_supports_long_only_strategy_variants(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        ranking={"mode": "long_only"},
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategies = {
+        "buy_hold",
+        "sma",
+        "ml_logistic_regression__long_only",
+        "ml_random_forest__long_only",
+    }
+    assert set(metrics["strategy"]) == expected_strategies
+    assert set(performance["strategy"]) == expected_strategies
+    assert set(strategy_summary["strategy"]) == expected_strategies
+    assert "ml_logistic_regression__long_only" in report_text
+
+
+def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        ranking={
+            "mode": "long_short",
+            "min_score_threshold": 0.99,
+            "cash_when_underfilled": True,
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategies = {
+        "buy_hold",
+        "sma",
+        "ml_logistic_regression__long_short__thr0p99__cash",
+        "ml_random_forest__long_short__thr0p99__cash",
+    }
+    assert set(metrics["strategy"]) == expected_strategies
+    assert set(performance["strategy"]) == expected_strategies
+    assert set(strategy_summary["strategy"]) == expected_strategies
+    assert "ml_logistic_regression__long_short__thr0p99__cash" in report_text

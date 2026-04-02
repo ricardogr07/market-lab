@@ -109,6 +109,30 @@ Calibration review is also additive to the existing evaluation surface. `calibra
 
 `model_metrics.csv` now adds fold-level `ece` and `max_calibration_gap`, while `model_summary.csv` and `fold_summary.csv` add `mean_ece` and `mean_max_calibration_gap`. When plots are enabled, `train-models` and `run-experiment` also write `calibration_curves.png`, `score_histograms.png`, and `threshold_sweeps.png`, and the experiment report includes a `Calibration And Threshold Diagnostics` section with compact calibration and threshold highlight tables. This PR remains evaluation-only: it does not recalibrate probabilities or change any strategy controls.
 
+## Ranking Strategy Modes
+
+`run-experiment` now supports additive execution controls under `portfolio.ranking`:
+
+- `mode`: `long_short` or `long_only`
+- `min_score_threshold`: minimum score required for long selection; in `long_short`, shorts require `score <= 1 - min_score_threshold`
+- `cash_when_underfilled`: when `true`, keep fixed per-slot weights for the names that pass and leave the missing exposure in cash instead of zeroing the whole basket
+
+Defaults remain backward-compatible:
+
+- `mode: long_short`
+- `min_score_threshold: 0.0`
+- `cash_when_underfilled: false`
+
+Execution semantics:
+
+- `long_short` keeps the existing equal-weight market-neutral construction with `+0.5` total long exposure and `-0.5` total short exposure when the basket is fully populated.
+- `long_only` allocates `+1.0 / long_n` per selected long and leaves all other names at `0.0`.
+- With `cash_when_underfilled: false`, any underfilled basket still falls back to an all-zero allocation for that rebalance.
+- With `cash_when_underfilled: true`, missing slots stay in cash and the selected names keep their fixed per-slot weights instead of being renormalized.
+
+Non-default ML strategy variants are named explicitly in experiment outputs, for example `ml_logistic_regression__long_only` or `ml_random_forest__long_short__thr0p60__cash`.
+
+This PR changes execution strategy behavior only. `train-models` keeps the issue #19 and #20 evaluation surface unchanged, so the ranking, calibration, and threshold diagnostics remain score-review artifacts rather than execution-mode-aware strategy artifacts.
 ## Environment
 
 - Python 3.12+
@@ -216,3 +240,4 @@ Before the first automated public release:
 - create the GitHub Actions environment named `pypi`
 
 The first automated public release target remains `v0.1.0`.
+

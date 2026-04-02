@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +39,9 @@ class RankingConfig:
     short_n: int = 2
     rebalance_frequency: str = "W-FRI"
     weighting: str = "equal"
+    mode: str = "long_short"
+    min_score_threshold: float = 0.0
+    cash_when_underfilled: bool = False
 
 
 @dataclass(slots=True)
@@ -184,4 +187,5 @@ def load_config(path: str | Path) -> ExperimentConfig:
         base_dir=_config_base_dir(config_path),
     )
     return config
+
 

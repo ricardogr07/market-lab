@@ -24,6 +24,9 @@ portfolio:
     short_n: 2
     rebalance_frequency: "W-FRI"
     weighting: "equal"
+    mode: "long_short"
+    min_score_threshold: 0.0
+    cash_when_underfilled: false
   costs:
     bps_per_trade: 10
 
@@ -55,5 +58,6 @@ artifacts:
   save_metrics_csv: true
   save_report_md: true
   save_plots: true
+
 
 
