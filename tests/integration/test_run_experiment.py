@@ -44,6 +44,15 @@ PERFORMANCE_COLUMNS = [
     "equity",
 ]
 
+DEFAULT_MODEL_NAMES = {
+    "extra_trees",
+    "gradient_boosting",
+    "hist_gradient_boosting",
+    "logistic_l1",
+    "logistic_regression",
+    "random_forest",
+}
+
 
 def _write_run_experiment_config(
     tmp_path: Path,
@@ -117,7 +126,11 @@ def _write_run_experiment_config(
             },
             "models": [
                 {"name": "logistic_regression"},
+                {"name": "logistic_l1"},
                 {"name": "random_forest"},
+                {"name": "extra_trees"},
+                {"name": "gradient_boosting"},
+                {"name": "hist_gradient_boosting"},
             ],
             "evaluation": {
                 "walk_forward": walk_forward_payload,
@@ -224,7 +237,11 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "buy_hold",
         "sma",
         "ml_logistic_regression",
+        "ml_logistic_l1",
         "ml_random_forest",
+        "ml_extra_trees",
+        "ml_gradient_boosting",
+        "ml_hist_gradient_boosting",
     }
     assert list(metrics.columns) == EXPECTED_METRICS_COLUMNS
     assert list(performance.columns) == PERFORMANCE_COLUMNS
@@ -243,11 +260,11 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert set(monthly_returns["strategy"]) == expected_strategies
     assert set(turnover_costs["strategy"]) == expected_strategies
-    assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(ranking_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(calibration_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(score_histograms["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(threshold_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(model_summary["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(ranking_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(calibration_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(score_histograms["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(threshold_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
     assert not fold_diagnostics.empty
     assert not ranking_diagnostics.empty
     assert not calibration_diagnostics.empty
@@ -282,6 +299,10 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert "## Calibration And Threshold Diagnostics" in report_text
     assert "Phase 2 baseline plus ML experiment" in report_text
     assert "ml_logistic_regression" in report_text
+    assert "ml_logistic_l1" in report_text
+    assert "ml_extra_trees" in report_text
+    assert "ml_gradient_boosting" in report_text
+    assert "ml_hist_gradient_boosting" in report_text
     assert "- Used candidates:" in report_text
     assert "- Skipped candidates:" in report_text
     assert "- Best model by mean ROC AUC:" in report_text
@@ -388,12 +409,17 @@ def test_run_experiment_supports_long_only_strategy_variants(tmp_path: Path) -> 
         "buy_hold",
         "sma",
         "ml_logistic_regression__long_only",
+        "ml_logistic_l1__long_only",
         "ml_random_forest__long_only",
+        "ml_extra_trees__long_only",
+        "ml_gradient_boosting__long_only",
+        "ml_hist_gradient_boosting__long_only",
     }
     assert set(metrics["strategy"]) == expected_strategies
     assert set(performance["strategy"]) == expected_strategies
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_only" in report_text
+    assert "ml_logistic_l1__long_only" in report_text
 
 
 def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) -> None:
@@ -420,9 +446,14 @@ def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) ->
         "buy_hold",
         "sma",
         "ml_logistic_regression__long_short__thr0p99__cash",
+        "ml_logistic_l1__long_short__thr0p99__cash",
         "ml_random_forest__long_short__thr0p99__cash",
+        "ml_extra_trees__long_short__thr0p99__cash",
+        "ml_gradient_boosting__long_short__thr0p99__cash",
+        "ml_hist_gradient_boosting__long_short__thr0p99__cash",
     }
     assert set(metrics["strategy"]) == expected_strategies
     assert set(performance["strategy"]) == expected_strategies
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_short__thr0p99__cash" in report_text
+    assert "ml_logistic_l1__long_short__thr0p99__cash" in report_text

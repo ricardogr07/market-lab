@@ -39,8 +39,11 @@ baselines:
 
 models:
   - name: logistic_regression
+  - name: logistic_l1
   - name: random_forest
+  - name: extra_trees
   - name: gradient_boosting
+  - name: hist_gradient_boosting
 
 evaluation:
   walk_forward:

@@ -133,6 +133,19 @@ Execution semantics:
 Non-default ML strategy variants are named explicitly in experiment outputs, for example `ml_logistic_regression__long_only` or `ml_random_forest__long_short__thr0p60__cash`.
 
 This PR changes execution strategy behavior only. `train-models` keeps the issue #19 and #20 evaluation surface unchanged, so the ranking, calibration, and threshold diagnostics remain score-review artifacts rather than execution-mode-aware strategy artifacts.
+
+## Lightweight Model Comparison Set
+
+The default weekly configs now compare six sklearn-only direction classifiers:
+
+- `logistic_regression`
+- `logistic_l1`
+- `random_forest`
+- `extra_trees`
+- `gradient_boosting`
+- `hist_gradient_boosting`
+
+This wave deliberately stays lightweight. It broadens the comparison baseline without adding external booster dependencies, model-specific pipeline branching, or tuning knobs.
 ## Environment
 
 - Python 3.12+

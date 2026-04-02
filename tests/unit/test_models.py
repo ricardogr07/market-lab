@@ -18,9 +18,12 @@ FEATURES = pd.DataFrame(
 TARGET = pd.Series([0, 0, 0, 1, 1, 1], dtype=int)
 
 
-def test_supported_model_names_cover_phase_two_defaults() -> None:
+def test_supported_model_names_cover_lightweight_baseline_set() -> None:
     assert supported_model_names() == (
+        "extra_trees",
         "gradient_boosting",
+        "hist_gradient_boosting",
+        "logistic_l1",
         "logistic_regression",
         "random_forest",
     )
