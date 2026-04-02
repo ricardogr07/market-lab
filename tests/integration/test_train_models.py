@@ -43,6 +43,15 @@ PREDICTIONS_COLUMNS = [
     "predicted_target",
 ]
 
+DEFAULT_MODEL_NAMES = {
+    "extra_trees",
+    "gradient_boosting",
+    "hist_gradient_boosting",
+    "logistic_l1",
+    "logistic_regression",
+    "random_forest",
+}
+
 
 def _write_config(
     tmp_path: Path,
@@ -129,7 +138,11 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
         tmp_path,
         models=[
             {"name": "logistic_regression"},
+            {"name": "logistic_l1"},
             {"name": "random_forest"},
+            {"name": "extra_trees"},
+            {"name": "gradient_boosting"},
+            {"name": "hist_gradient_boosting"},
         ],
     )
 
@@ -192,14 +205,14 @@ def test_train_models_writes_fold_metrics_manifest_predictions_and_summaries(tmp
     assert "used" in set(fold_diagnostics["status"])
     assert set(ranking_diagnostics["bucket_status"]).issubset({"used", "underfilled"})
     assert set(threshold_diagnostics["threshold_status"]).issubset({"used", "empty"})
-    assert set(manifest["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(metrics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(predictions["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(ranking_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(calibration_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(score_histograms["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(threshold_diagnostics["model_name"]) == {"logistic_regression", "random_forest"}
-    assert set(model_summary["model_name"]) == {"logistic_regression", "random_forest"}
+    assert set(manifest["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(metrics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(predictions["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(ranking_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(calibration_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(score_histograms["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(threshold_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
+    assert set(model_summary["model_name"]) == DEFAULT_MODEL_NAMES
     assert set(fold_summary["fold_id"]) == set(folds["fold_id"])
     assert set(folds["fold_id"]) == set(
         fold_diagnostics.loc[fold_diagnostics["status"] == "used", "fold_id"].dropna().astype(int)

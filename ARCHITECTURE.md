@@ -634,6 +634,7 @@ Best practice:
 - Keeps target-type validation at the model-entry seam.
 - Produces normalized direction scores from `predict_proba` for downstream ranking work.
 - Exposes a pure evaluation helper layer that derives classification, ranking, and downside diagnostics without changing model fitting.
+- The default comparison set now includes six sklearn-only classifiers: `logistic_regression`, `logistic_l1`, `random_forest`, `extra_trees`, `gradient_boosting`, and `hist_gradient_boosting`.
 
 Best practice:
 - Keep the registry lightweight and explicit.
@@ -772,6 +773,4 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
-
-
 

@@ -5,7 +5,12 @@ from typing import Callable
 
 import pandas as pd
 from sklearn.base import ClassifierMixin
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -29,8 +34,28 @@ def _logistic_regression() -> ClassifierMixin:
     )
 
 
+def _logistic_l1() -> ClassifierMixin:
+    return make_pipeline(
+        StandardScaler(),
+        LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            max_iter=1000,
+            random_state=7,
+        ),
+    )
+
+
 def _random_forest() -> ClassifierMixin:
     return RandomForestClassifier(
+        n_estimators=200,
+        min_samples_leaf=3,
+        random_state=7,
+    )
+
+
+def _extra_trees() -> ClassifierMixin:
+    return ExtraTreesClassifier(
         n_estimators=200,
         min_samples_leaf=3,
         random_state=7,
@@ -41,7 +66,21 @@ def _gradient_boosting() -> ClassifierMixin:
     return GradientBoostingClassifier(random_state=7)
 
 
+def _hist_gradient_boosting() -> ClassifierMixin:
+    return HistGradientBoostingClassifier(random_state=7)
+
+
 MODEL_REGISTRY: dict[str, ModelDefinition] = {
+    "extra_trees": ModelDefinition(
+        name="extra_trees",
+        estimator_label="ExtraTreesClassifier",
+        builder=_extra_trees,
+    ),
+    "logistic_l1": ModelDefinition(
+        name="logistic_l1",
+        estimator_label="LogisticRegression",
+        builder=_logistic_l1,
+    ),
     "logistic_regression": ModelDefinition(
         name="logistic_regression",
         estimator_label="LogisticRegression",
@@ -56,6 +95,11 @@ MODEL_REGISTRY: dict[str, ModelDefinition] = {
         name="gradient_boosting",
         estimator_label="GradientBoostingClassifier",
         builder=_gradient_boosting,
+    ),
+    "hist_gradient_boosting": ModelDefinition(
+        name="hist_gradient_boosting",
+        estimator_label="HistGradientBoostingClassifier",
+        builder=_hist_gradient_boosting,
     ),
 }
 
