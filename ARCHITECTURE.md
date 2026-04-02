@@ -15,7 +15,7 @@ This document ties the current pieces together and records the working rules tha
   - walk-forward fold generation with additive guardrails, embargo controls, and skipped-fold diagnostics
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
-  - score-to-weight ranking strategy for ML portfolios
+  - score-to-weight ranking strategies for ML portfolios, including long-short, long-only, and confidence-gated cash-underfilled variants
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
@@ -302,6 +302,9 @@ classDiagram
       +short_n: int
       +rebalance_frequency: str
       +weighting: str
+      +mode: str
+      +min_score_threshold: float
+      +cash_when_underfilled: bool
     }
 
     class CostsConfig {
@@ -653,13 +656,14 @@ Best practice:
 ### `src/marketlab/strategies/ranking.py`
 
 - Turns one model's fold predictions into a canonical `WeightsFrame`.
-- Ranks longs from the highest scores and shorts from the lowest scores with `symbol` as the deterministic tie-breaker.
-- Emits full-symbol weight rows with explicit zeros for non-selected names.
+- Supports `long_short` and `long_only` execution modes plus additive score-threshold gating.
+- Uses `symbol` as the deterministic tie-breaker for both long and short candidate ranking.
+- Emits full-symbol weight rows with explicit zeros for non-selected names and can either zero the full basket or leave missing exposure in cash when the basket is underfilled.
 - Adds zero-weight boundary rows at the next rebalance `effective_date` when a later fold does not already begin there.
 
 Best practice:
 - Keep ranking prediction-only; do not derive scores from the panel in this layer.
-- Keep the exposure policy explicit: `+0.5` total long, `-0.5` total short, gross exposure `1.0`.
+- Keep the exposure policy explicit: default `long_short` uses `+0.5` total long and `-0.5` total short, while `long_only` uses `+1.0` total long exposure with any missing slots left in cash only when configured.
 
 ### `src/marketlab/backtest/engine.py`
 
@@ -768,5 +772,6 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
+
 
 

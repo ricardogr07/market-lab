@@ -374,6 +374,9 @@ def _run_ml_strategies(
             short_n=config.portfolio.ranking.short_n,
             frequency=config.portfolio.ranking.rebalance_frequency,
             weighting=config.portfolio.ranking.weighting,
+            mode=config.portfolio.ranking.mode,
+            min_score_threshold=config.portfolio.ranking.min_score_threshold,
+            cash_when_underfilled=config.portfolio.ranking.cash_when_underfilled,
         )
         performance_frames.append(
             run_backtest(
@@ -595,3 +598,4 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
+

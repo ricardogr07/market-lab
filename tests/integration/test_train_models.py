@@ -49,6 +49,7 @@ def _write_config(
     *,
     models: list[dict[str, str]],
     walk_forward: dict[str, int | float] | None = None,
+    ranking: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(
@@ -72,6 +73,17 @@ def _write_config(
     if walk_forward is not None:
         walk_forward_payload.update(walk_forward)
 
+    ranking_payload: dict[str, object] = {
+        "long_n": 2,
+        "short_n": 2,
+        "rebalance_frequency": "W-FRI",
+        "weighting": "equal",
+        "mode": "long_short",
+        "min_score_threshold": 0.0,
+        "cash_when_underfilled": False,
+    }
+    if ranking is not None:
+        ranking_payload.update(ranking)
     return write_yaml_config(
         tmp_path / "train_models.yaml",
         {
@@ -95,9 +107,7 @@ def _write_config(
                 "type": "direction",
             },
             "portfolio": {
-                "ranking": {
-                    "rebalance_frequency": "W-FRI",
-                }
+                "ranking": ranking_payload,
             },
             "models": models,
             "evaluation": {
@@ -251,3 +261,28 @@ def test_train_models_surfaces_unsupported_model_name(tmp_path: Path) -> None:
     assert result.returncode != 0
     combined_output = f"{result.stdout}\n{result.stderr}"
     assert "Unsupported model 'not_real'" in combined_output
+
+
+def test_train_models_keeps_existing_artifact_contract_with_strategy_mode_fields(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        ranking={
+            "mode": "long_only",
+            "min_score_threshold": 0.8,
+            "cash_when_underfilled": True,
+        },
+    )
+
+    result = run_marketlab_cli("train-models", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_train_models"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "model_metrics.csv")
+    ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
+    model_summary = pd.read_csv(run_dir / "model_summary.csv")
+
+    assert list(metrics.columns) == MODEL_METRICS_COLUMNS
+    assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
+    assert set(ranking_diagnostics["model_name"]) == {"logistic_regression"}
