@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, two baseline strategies, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -19,7 +19,7 @@ This document ties the current pieces together and records the working rules tha
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
-  - `buy_hold` and `sma` baselines
+  - `buy_hold`, `sma`, and config-defined allocation baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, strategy analytics CSVs, plots, and Markdown reporting
@@ -122,8 +122,10 @@ flowchart TD
     Pipeline --> Summary[src/marketlab/reports/summary.py]
     Pipeline --> Analytics[src/marketlab/reports/analytics.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
+    Pipeline --> Allocation[src/marketlab/strategies/allocation.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
     BuyHold --> Engine[src/marketlab/backtest/engine.py]
+    Allocation --> Engine
     SMA --> Engine
     Ranking --> Engine
     Engine --> Performance[PerformanceFrame]
@@ -278,6 +280,7 @@ classDiagram
       +interval: str
       +cache_dir: str
       +prepared_panel_filename: str
+      +symbol_groups: dict[str, str]
     }
 
     class FeaturesConfig {
@@ -314,6 +317,7 @@ classDiagram
     class BaselinesConfig {
       +buy_hold: bool
       +sma: SMAConfig
+      +allocation: AllocationConfig
     }
 
     class SMAConfig {
@@ -322,6 +326,12 @@ classDiagram
       +slow_window: int
     }
 
+    class AllocationConfig {
+      +enabled: bool
+      +mode: str
+      +symbol_weights: dict[str, float]
+      +group_weights: dict[str, float]
+    }
     class EvaluationConfig {
       +walk_forward: WalkForwardConfig
     }
@@ -403,6 +413,7 @@ classDiagram
     PortfolioConfig *-- RankingConfig
     PortfolioConfig *-- CostsConfig
     BaselinesConfig *-- SMAConfig
+    BaselinesConfig *-- AllocationConfig
     EvaluationConfig *-- WalkForwardConfig
 ```
 
@@ -641,9 +652,15 @@ Best practice:
 - Keep the registry lightweight and explicit.
 - Avoid premature model-abstraction layers beyond construction and score extraction.
 
+### `src/marketlab/strategies/allocation.py`
+
+- Builds periodic long-only target-weight baselines from config.
+- Reuses the shared rebalance cadence and emits full-symbol target rows on the first trading date and each later effective rebalance date.
+- Supports equal, exact symbol-weight, and group-sleeve allocation modes.
+
 ### `src/marketlab/strategies/buy_hold.py`
 
-- Emits one equal-weight allocation on the first available date.
+- Emits one equal-weight allocation on the first available date and then lets weights drift until the backtest engine sees another target row.
 
 ### `src/marketlab/strategies/sma.py`
 
@@ -670,7 +687,8 @@ Best practice:
 
 ### `src/marketlab/backtest/engine.py`
 
-- Joins weights to adjusted open and close data.
+- Joins target weights to adjusted open and close data.
+- Lets positions drift between rebalance dates and applies new target weights only when a strategy emits another `effective_date` row.
 - Splits return computation into overnight and intraday components.
 - Applies turnover-based trading costs.
 - Produces the canonical `PerformanceFrame`.
@@ -679,7 +697,6 @@ Best practice:
 - Keep execution timing explicit.
 - Use adjusted open and close consistently so splits and dividends do not distort returns.
 - Backtest one strategy at a time, then concatenate performance frames at the pipeline layer.
-
 ### `src/marketlab/backtest/metrics.py`
 
 - Summarizes performance by strategy.
@@ -752,6 +769,7 @@ Best practice:
 - Keep backtest timing explicit: Friday-close signal, next-open execution.
 - Keep walk-forward training windows label-aware: only train on rows whose `target_end_date` is known by `label_cutoff`, not just by `test_start`.
 - Compare baseline and ML strategies on the same shared OOS daily window inside `run-experiment`.
+- Keep `buy_hold` distinct from periodic allocation baselines: one initial target row for drifted exposure versus repeated target rows for scheduled rebalancing.
 - Derive `model_summary.csv`, `fold_summary.csv`, calibration summaries, and ranking-aware winners from existing model metrics and manifests, not from new training state.
 - Treat no allocation as cash with zero return.
 - Keep `train-models` artifact-focused; use `run-experiment` for unified baseline-plus-ML comparison.
@@ -775,4 +793,8 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
+
+
+
+
 
