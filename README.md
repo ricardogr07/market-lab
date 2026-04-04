@@ -2,7 +2,9 @@
 
 MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, shared out-of-sample experiments, and reviewable artifact summaries.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the system map, data contracts, execution flow, and extension rules.
+See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
+See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
+See [docs/PLAN.md](docs/PLAN.md) for the current project status and Phase 5 direction.
 
 ## Current Commands
 
@@ -99,9 +101,9 @@ When `train-models` or `run-experiment` end up with zero usable folds, they stil
 
 ## Ranking-Aware Evaluation
 
-Model evaluation now stays additive to the existing ROC AUC surface while reflecting the actual long-short ranking use case. `model_metrics.csv` keeps the existing classification fields and now also includes balanced classification metrics, Brier score, per-fold mean rank correlation, top/bottom bucket returns, top-bottom spread, spread hit rate, worst observed spread, and the count of usable ranking dates. `ranking_diagnostics.csv` stores one row per model, fold, and signal date so underfilled ranking dates are visible instead of being silently folded into the aggregates.
+Model evaluation now stays additive to the existing ROC AUC surface while reflecting the configured ranking mode. `ranking_diagnostics.csv` stores one row per model, fold, and signal date, now including `evaluation_mode` so the persisted diagnostics distinguish the default `long_short` path from `long_only` timing runs. `model_metrics.csv` keeps the existing classification fields and now also includes balanced classification metrics, Brier score, per-fold mean rank correlation, top/bottom bucket returns, top-bottom spread, spread hit rate, top-bucket hit rate, worst observed top-bucket return, worst observed spread, and the counts of usable ranking dates.
 
-`model_summary.csv` and `fold_summary.csv` still preserve the ROC AUC winner fields for continuity, and they now add spread-based summary fields plus a separate `best_model_by_top_bottom_spread` winner. The report headline mirrors that split by showing both the best model by mean ROC AUC and the best model by mean top-bottom spread. This PR is evaluation-only: it does not change how weights are generated or how ML strategies trade.
+`model_summary.csv` and `fold_summary.csv` still preserve the ROC AUC winner fields for continuity, and they now add both spread-based and long-only-friendly winner fields. The report headline mirrors that split by showing the best model by mean ROC AUC, mean top-bucket return, and mean top-bottom spread. This remains evaluation-focused: it does not change how weights are generated or how ML strategies trade.
 
 ## Calibration And Threshold Diagnostics
 
@@ -132,7 +134,13 @@ Execution semantics:
 
 Non-default ML strategy variants are named explicitly in experiment outputs, for example `ml_logistic_regression__long_only` or `ml_random_forest__long_short__thr0p60__cash`.
 
-This PR changes execution strategy behavior only. `train-models` keeps the issue #19 and #20 evaluation surface unchanged, so the ranking, calibration, and threshold diagnostics remain score-review artifacts rather than execution-mode-aware strategy artifacts.
+`train-models` now keeps the existing issue #19 and #20 score-review artifacts while making the ranking diagnostics mode-aware for `long_short` and `long_only`. Threshold gating and cash-underfilled behavior still remain execution-only controls; the offline evaluation layer does not replay those execution variants.
+
+## Single-Symbol VOO Timing Example
+
+`configs/experiment.voo_long_only.ytd.yaml` is a tracked one-symbol directional timing example built around `VOO` from `2018-01-01` through `2026-04-03`. It currently compares five sklearn models, runs in `long_only` mode with `long_n: 1`, and lowers `min_test_rows` to `10` so quarterly test folds stay viable on a one-symbol weekly dataset.
+
+Treat this config as a timing study, not as a cross-sectional ranking experiment. Compare its ML outputs primarily against `buy_hold` and `sma`, and do not read the results as evidence about cross-sectional ranking skill.
 
 ## Lightweight Model Comparison Set
 
@@ -199,7 +207,7 @@ python -m tox -e preflight
 
 Use `python -m tox -e preflight` as the canonical local pre-push gate. It runs the same lint, docs, packaging, unit-test, and offline integration checks that Phase 3 CI expects through one local entrypoint after the dev dependencies are installed.
 
-The MkDocs site renders the current root Markdown docs through `mkdocs-include-markdown-plugin`, so the documentation build stays aligned with `README.md`, `ARCHITECTURE.md`, `Phase2-results.md`, and `PLAN.md`.
+The MkDocs site now builds directly from the `docs/` directory, which is the canonical home for the public documentation set.
 
 ## Contribution Workflow
 

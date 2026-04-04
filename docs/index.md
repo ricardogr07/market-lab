@@ -1,8 +1,9 @@
 # MarketLab Docs
 
-This MkDocs site is a thin wrapper around the repository's stable public documentation so CI can
-validate the docs surface without duplicating the source material.
+This site is the canonical home for MarketLab's public documentation.
 
+- [How It Works](how-it-works.md)
 - [Architecture](architecture.md)
+- [Plan](PLAN.md)
 
-The package overview, command entrypoints, and contributor workflow remain in the root README.
+The root `README.md` remains the repository-facing entrypoint, while the deeper public docs live here.

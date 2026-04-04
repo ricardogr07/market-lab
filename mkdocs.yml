@@ -3,12 +3,14 @@ site_description: Documentation site for the MarketLab research workflow
 docs_dir: docs
 nav:
   - Overview: index.md
+  - How It Works: how-it-works.md
   - Architecture: architecture.md
+  - Plan: PLAN.md
 plugins:
   - search
-  - include-markdown:
-      rewrite_relative_urls: true
-      comments: false
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js
+  - javascripts/mermaid-init.js
 markdown_extensions:
   - tables
   - admonition
