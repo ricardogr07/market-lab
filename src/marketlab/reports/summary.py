@@ -22,10 +22,13 @@ MODEL_SUMMARY_COLUMNS = [
     "mean_prediction_rate",
     "mean_rank_corr",
     "mean_top_bucket_return",
+    "mean_top_bucket_hit_rate",
     "mean_bottom_bucket_return",
     "mean_top_bottom_spread",
     "mean_spread_hit_rate",
+    "worst_top_bucket_return",
     "worst_top_bottom_spread",
+    "mean_top_bucket_signal_count",
     "mean_train_rows",
     "mean_test_rows",
 ]
@@ -50,12 +53,17 @@ FOLD_SUMMARY_COLUMNS = [
     "mean_max_calibration_gap",
     "mean_rank_corr",
     "mean_top_bucket_return",
+    "mean_top_bucket_hit_rate",
     "mean_bottom_bucket_return",
     "mean_top_bottom_spread",
     "mean_spread_hit_rate",
+    "worst_top_bucket_return",
     "worst_top_bottom_spread",
+    "mean_top_bucket_signal_count",
     "best_model_by_roc_auc",
     "best_roc_auc",
+    "best_model_by_top_bucket_return",
+    "best_top_bucket_return",
     "best_model_by_top_bottom_spread",
     "best_top_bottom_spread",
 ]
@@ -91,10 +99,13 @@ def build_model_summary(
             "prediction_rate",
             "rank_corr",
             "top_bucket_return",
+            "top_bucket_hit_rate",
             "bottom_bucket_return",
             "top_bottom_spread",
             "spread_hit_rate",
+            "worst_top_bucket_return",
             "worst_top_bottom_spread",
+            "top_bucket_signal_count",
             "train_rows",
             "test_rows",
         },
@@ -128,10 +139,13 @@ def build_model_summary(
             "prediction_rate",
             "rank_corr",
             "top_bucket_return",
+            "top_bucket_hit_rate",
             "bottom_bucket_return",
             "top_bottom_spread",
             "spread_hit_rate",
+            "worst_top_bucket_return",
             "worst_top_bottom_spread",
+            "top_bucket_signal_count",
             "train_rows",
             "test_rows",
         ],
@@ -168,10 +182,13 @@ def build_model_summary(
             mean_prediction_rate=("prediction_rate", "mean"),
             mean_rank_corr=("rank_corr", "mean"),
             mean_top_bucket_return=("top_bucket_return", "mean"),
+            mean_top_bucket_hit_rate=("top_bucket_hit_rate", "mean"),
             mean_bottom_bucket_return=("bottom_bucket_return", "mean"),
             mean_top_bottom_spread=("top_bottom_spread", "mean"),
             mean_spread_hit_rate=("spread_hit_rate", "mean"),
+            worst_top_bucket_return=("worst_top_bucket_return", "min"),
             worst_top_bottom_spread=("worst_top_bottom_spread", "min"),
+            mean_top_bucket_signal_count=("top_bucket_signal_count", "mean"),
             mean_train_rows=("train_rows", "mean"),
             mean_test_rows=("test_rows", "mean"),
         )
@@ -217,10 +234,13 @@ def build_fold_summary(
             "max_calibration_gap",
             "rank_corr",
             "top_bucket_return",
+            "top_bucket_hit_rate",
             "bottom_bucket_return",
             "top_bottom_spread",
             "spread_hit_rate",
+            "worst_top_bucket_return",
             "worst_top_bottom_spread",
+            "top_bucket_signal_count",
         },
         "Model metrics",
     )
@@ -258,10 +278,13 @@ def build_fold_summary(
             "max_calibration_gap",
             "rank_corr",
             "top_bucket_return",
+            "top_bucket_hit_rate",
             "bottom_bucket_return",
             "top_bottom_spread",
             "spread_hit_rate",
+            "worst_top_bucket_return",
             "worst_top_bottom_spread",
+            "top_bucket_signal_count",
         ],
     ].copy()
     manifest_rows = model_manifest.loc[
@@ -298,10 +321,13 @@ def build_fold_summary(
             mean_max_calibration_gap=("max_calibration_gap", "mean"),
             mean_rank_corr=("rank_corr", "mean"),
             mean_top_bucket_return=("top_bucket_return", "mean"),
+            mean_top_bucket_hit_rate=("top_bucket_hit_rate", "mean"),
             mean_bottom_bucket_return=("bottom_bucket_return", "mean"),
             mean_top_bottom_spread=("top_bottom_spread", "mean"),
             mean_spread_hit_rate=("spread_hit_rate", "mean"),
+            worst_top_bucket_return=("worst_top_bucket_return", "min"),
             worst_top_bottom_spread=("worst_top_bottom_spread", "min"),
+            mean_top_bucket_signal_count=("top_bucket_signal_count", "mean"),
         )
         .sort_values("fold_id")
         .reset_index(drop=True)
@@ -321,6 +347,18 @@ def build_fold_summary(
             best_model_by_roc_auc = str(best_roc["model_name"])
             best_roc_auc = float(best_roc["roc_auc"])
 
+        ranked_top_bucket = fold_rows.dropna(subset=["top_bucket_return"]).sort_values(
+            ["top_bucket_return", "model_name"],
+            ascending=[False, True],
+        )
+        if ranked_top_bucket.empty:
+            best_model_by_top_bucket_return = ""
+            best_top_bucket_return = float("nan")
+        else:
+            best_top_bucket = ranked_top_bucket.iloc[0]
+            best_model_by_top_bucket_return = str(best_top_bucket["model_name"])
+            best_top_bucket_return = float(best_top_bucket["top_bucket_return"])
+
         ranked_spread = fold_rows.dropna(subset=["top_bottom_spread"]).sort_values(
             ["top_bottom_spread", "model_name"],
             ascending=[False, True],
@@ -338,6 +376,8 @@ def build_fold_summary(
                 "fold_id": fold_id,
                 "best_model_by_roc_auc": best_model_by_roc_auc,
                 "best_roc_auc": best_roc_auc,
+                "best_model_by_top_bucket_return": best_model_by_top_bucket_return,
+                "best_top_bucket_return": best_top_bucket_return,
                 "best_model_by_top_bottom_spread": best_model_by_top_bottom_spread,
                 "best_top_bottom_spread": best_top_bottom_spread,
             }

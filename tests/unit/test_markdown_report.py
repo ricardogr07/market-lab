@@ -137,6 +137,7 @@ def test_write_markdown_report_adds_ranking_aware_model_headline(tmp_path: Path)
         {
             "model_name": ["random_forest", "logistic_regression"],
             "mean_roc_auc": [0.54, 0.57],
+            "mean_top_bucket_return": [0.01, 0.03],
             "mean_top_bottom_spread": [0.03, 0.01],
         }
     )
@@ -152,6 +153,7 @@ def test_write_markdown_report_adds_ranking_aware_model_headline(tmp_path: Path)
     report_text = report_path.read_text(encoding="utf-8")
 
     assert "- Best model by mean ROC AUC: `logistic_regression` (0.570000)" in report_text
+    assert "- Best model by mean top-bucket return: `logistic_regression` (0.030000)" in report_text
     assert "- Best model by mean top-bottom spread: `random_forest` (0.030000)" in report_text
 
 

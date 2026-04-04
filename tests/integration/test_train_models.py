@@ -59,15 +59,17 @@ def _write_config(
     models: list[dict[str, str]],
     walk_forward: dict[str, int | float] | None = None,
     ranking: dict[str, object] | None = None,
+    symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
+    resolved_symbol_specs = symbol_specs or (
+        ("AAA", 100.0, 0.45),
+        ("BBB", 130.0, 0.40),
+        ("CCC", 160.0, 0.35),
+    )
     save_panel_csv(
         build_synthetic_panel(
-            (
-                ("AAA", 100.0, 0.45),
-                ("BBB", 130.0, 0.40),
-                ("CCC", 160.0, 0.35),
-            ),
+            resolved_symbol_specs,
             start_date="2020-01-01",
             end_date="2022-12-30",
         ),
@@ -98,7 +100,7 @@ def _write_config(
         {
             "experiment_name": "integration_train_models",
             "data": {
-                "symbols": ["AAA", "BBB", "CCC"],
+                "symbols": [symbol for symbol, _, _ in resolved_symbol_specs],
                 "start_date": "2020-01-01",
                 "end_date": "2022-12-30",
                 "interval": "1d",
@@ -299,3 +301,50 @@ def test_train_models_keeps_existing_artifact_contract_with_strategy_mode_fields
     assert list(metrics.columns) == MODEL_METRICS_COLUMNS
     assert list(model_summary.columns) == MODEL_SUMMARY_COLUMNS
     assert set(ranking_diagnostics["model_name"]) == {"logistic_regression"}
+    assert set(ranking_diagnostics["evaluation_mode"]) == {"long_only"}
+    assert metrics["top_bucket_signal_count"].gt(0).all()
+    assert metrics["spread_signal_count"].eq(0).all()
+
+
+def test_train_models_supports_single_symbol_long_only_evaluation(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+        },
+        symbol_specs=(("VOO", 100.0, 0.45),),
+    )
+
+    result = run_marketlab_cli("train-models", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_train_models"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "model_metrics.csv")
+    ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
+    model_summary = pd.read_csv(run_dir / "model_summary.csv")
+    fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
+
+    assert set(ranking_diagnostics["evaluation_mode"]) == {"long_only"}
+    assert ranking_diagnostics["bucket_status"].eq("used").all()
+    assert ranking_diagnostics["top_bucket_size"].eq(1).all()
+    assert ranking_diagnostics["bottom_bucket_size"].eq(0).all()
+    assert ranking_diagnostics["top_bucket_return"].notna().all()
+    assert ranking_diagnostics["bottom_bucket_return"].isna().all()
+    assert ranking_diagnostics["top_bottom_spread"].isna().all()
+    assert metrics["top_bucket_signal_count"].gt(0).all()
+    assert metrics["top_bucket_return"].notna().all()
+    assert metrics["top_bucket_hit_rate"].between(0.0, 1.0).all()
+    assert metrics["spread_signal_count"].eq(0).all()
+    assert metrics["top_bottom_spread"].isna().all()
+    assert model_summary["mean_top_bucket_return"].notna().all()
+    assert model_summary["worst_top_bucket_return"].notna().all()
+    assert model_summary["mean_top_bucket_signal_count"].gt(0).all()
+    assert model_summary["mean_top_bottom_spread"].isna().all()
+    assert fold_summary["best_model_by_top_bucket_return"].eq("logistic_regression").all()
+    assert fold_summary["best_top_bucket_return"].notna().all()
+    assert fold_summary["best_model_by_top_bottom_spread"].isna().all()
+    assert fold_summary["best_top_bottom_spread"].isna().all()

@@ -79,10 +79,13 @@ def model_metrics() -> pd.DataFrame:
             "prediction_rate": [0.52, 0.49, 0.44, 0.46],
             "rank_corr": [0.15, 0.10, 0.05, 0.08],
             "top_bucket_return": [0.020, 0.015, 0.010, 0.005],
+            "top_bucket_hit_rate": [0.75, 0.50, 0.60, 0.40],
             "bottom_bucket_return": [-0.015, -0.005, -0.010, -0.008],
             "top_bottom_spread": [0.035, 0.020, 0.020, 0.013],
             "spread_hit_rate": [0.60, 0.55, 0.50, 0.45],
+            "worst_top_bucket_return": [-0.005, -0.010, -0.015, -0.020],
             "worst_top_bottom_spread": [-0.020, -0.030, -0.040, -0.050],
+            "top_bucket_signal_count": [8, 8, 9, 9],
             "spread_signal_count": [8, 8, 9, 9],
             "train_rows": [120, 120, 130, 130],
             "test_rows": [20, 20, 22, 22],
@@ -115,8 +118,12 @@ def test_build_model_summary_aggregates_one_row_per_model(
     assert gb_row["mean_ece"] == pytest.approx(0.065)
     assert gb_row["mean_max_calibration_gap"] == pytest.approx(0.105)
     assert gb_row["mean_rank_corr"] == pytest.approx(0.10)
+    assert gb_row["mean_top_bucket_return"] == pytest.approx(0.015)
+    assert gb_row["mean_top_bucket_hit_rate"] == pytest.approx(0.675)
     assert gb_row["mean_top_bottom_spread"] == pytest.approx(0.0275)
+    assert gb_row["worst_top_bucket_return"] == pytest.approx(-0.015)
     assert gb_row["worst_top_bottom_spread"] == pytest.approx(-0.04)
+    assert gb_row["mean_top_bucket_signal_count"] == pytest.approx(8.5)
     assert gb_row["mean_train_rows"] == pytest.approx(125.0)
     assert gb_row["mean_test_rows"] == pytest.approx(21.0)
 
@@ -143,16 +150,22 @@ def test_build_fold_summary_aggregates_one_row_per_fold_and_selects_best_models(
     assert first_fold["mean_ece"] == pytest.approx(0.09)
     assert first_fold["mean_max_calibration_gap"] == pytest.approx(0.135)
     assert first_fold["mean_rank_corr"] == pytest.approx(0.125)
+    assert first_fold["mean_top_bucket_return"] == pytest.approx(0.0175)
+    assert first_fold["mean_top_bucket_hit_rate"] == pytest.approx(0.625)
     assert first_fold["mean_top_bottom_spread"] == pytest.approx(0.0275)
     assert first_fold["mean_spread_hit_rate"] == pytest.approx(0.575)
+    assert first_fold["worst_top_bucket_return"] == pytest.approx(-0.01)
     assert first_fold["worst_top_bottom_spread"] == pytest.approx(-0.03)
+    assert first_fold["mean_top_bucket_signal_count"] == pytest.approx(8.0)
     assert first_fold["best_model_by_roc_auc"] == "gradient_boosting"
     assert first_fold["best_roc_auc"] == pytest.approx(0.71)
+    assert first_fold["best_model_by_top_bucket_return"] == "gradient_boosting"
+    assert first_fold["best_top_bucket_return"] == pytest.approx(0.02)
     assert first_fold["best_model_by_top_bottom_spread"] == "gradient_boosting"
     assert first_fold["best_top_bottom_spread"] == pytest.approx(0.035)
 
 
-def test_build_fold_summary_keeps_nan_roc_metrics_for_single_class_folds_but_still_ranks_by_spread(
+def test_build_fold_summary_keeps_nan_roc_metrics_for_single_class_folds_but_still_ranks_by_bucket_return(
     model_metrics: pd.DataFrame,
     model_manifest: pd.DataFrame,
 ) -> None:
@@ -163,5 +176,7 @@ def test_build_fold_summary_keeps_nan_roc_metrics_for_single_class_folds_but_sti
     assert math.isnan(second_fold["mean_log_loss"])
     assert second_fold["best_model_by_roc_auc"] == ""
     assert math.isnan(second_fold["best_roc_auc"])
+    assert second_fold["best_model_by_top_bucket_return"] == "gradient_boosting"
+    assert second_fold["best_top_bucket_return"] == pytest.approx(0.01)
     assert second_fold["best_model_by_top_bottom_spread"] == "gradient_boosting"
     assert second_fold["best_top_bottom_spread"] == pytest.approx(0.02)

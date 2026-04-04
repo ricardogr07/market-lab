@@ -59,16 +59,27 @@ def _write_run_experiment_config(
     *,
     walk_forward: dict[str, int | float] | None = None,
     ranking: dict[str, object] | None = None,
+    symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
+    models: list[dict[str, str]] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
+    resolved_symbol_specs = symbol_specs or (
+        ("AAA", 100.0, 0.45),
+        ("BBB", 130.0, 0.40),
+        ("CCC", 160.0, 0.35),
+        ("DDD", 190.0, 0.30),
+    )
+    resolved_models = models or [
+        {"name": "logistic_regression"},
+        {"name": "logistic_l1"},
+        {"name": "random_forest"},
+        {"name": "extra_trees"},
+        {"name": "gradient_boosting"},
+        {"name": "hist_gradient_boosting"},
+    ]
     save_panel_csv(
         build_synthetic_panel(
-            (
-                ("AAA", 100.0, 0.45),
-                ("BBB", 130.0, 0.40),
-                ("CCC", 160.0, 0.35),
-                ("DDD", 190.0, 0.30),
-            ),
+            resolved_symbol_specs,
             start_date="2020-01-01",
             end_date="2024-12-31",
         ),
@@ -99,7 +110,7 @@ def _write_run_experiment_config(
         {
             "experiment_name": "integration_fixture",
             "data": {
-                "symbols": ["AAA", "BBB", "CCC", "DDD"],
+                "symbols": [symbol for symbol, _, _ in resolved_symbol_specs],
                 "start_date": "2020-01-01",
                 "end_date": "2024-12-31",
                 "interval": "1d",
@@ -124,14 +135,7 @@ def _write_run_experiment_config(
                 "buy_hold": True,
                 "sma": {"enabled": True, "fast_window": 5, "slow_window": 10},
             },
-            "models": [
-                {"name": "logistic_regression"},
-                {"name": "logistic_l1"},
-                {"name": "random_forest"},
-                {"name": "extra_trees"},
-                {"name": "gradient_boosting"},
-                {"name": "hist_gradient_boosting"},
-            ],
+            "models": resolved_models,
             "evaluation": {
                 "walk_forward": walk_forward_payload,
             },
@@ -420,6 +424,61 @@ def test_run_experiment_supports_long_only_strategy_variants(tmp_path: Path) -> 
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_only" in report_text
     assert "ml_logistic_l1__long_only" in report_text
+
+
+def test_run_experiment_supports_single_symbol_long_only_timing_runs(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+        },
+        walk_forward={
+            "train_years": 3,
+            "test_months": 3,
+            "step_months": 3,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        symbol_specs=(("VOO", 100.0, 0.45),),
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
+    model_summary = pd.read_csv(run_dir / "model_summary.csv")
+    fold_summary = pd.read_csv(run_dir / "fold_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(metrics["strategy"]) == {
+        "buy_hold",
+        "sma",
+        "ml_logistic_regression__long_only",
+    }
+    assert set(ranking_diagnostics["evaluation_mode"]) == {"long_only"}
+    assert ranking_diagnostics["bucket_status"].eq("used").all()
+    assert ranking_diagnostics["top_bucket_size"].eq(1).all()
+    assert ranking_diagnostics["bottom_bucket_size"].eq(0).all()
+    assert ranking_diagnostics["top_bucket_return"].notna().all()
+    assert ranking_diagnostics["top_bottom_spread"].isna().all()
+    assert model_summary["mean_top_bucket_return"].notna().all()
+    assert model_summary["mean_top_bucket_signal_count"].gt(0).all()
+    assert model_summary["mean_top_bottom_spread"].isna().all()
+    assert fold_summary["best_model_by_top_bucket_return"].eq("logistic_regression").all()
+    assert fold_summary["best_top_bucket_return"].notna().all()
+    assert fold_summary["best_model_by_top_bottom_spread"].isna().all()
+    assert fold_summary["best_top_bottom_spread"].isna().all()
+    assert "ml_logistic_regression__long_only" in report_text
+    assert "- Best model by mean top-bucket return:" in report_text
 
 
 def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) -> None:
