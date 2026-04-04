@@ -2,6 +2,24 @@ from __future__ import annotations
 
 import pandas as pd
 
+WEIGHT_EPSILON = 1e-12
+
+
+def _advance_weights(
+    asset_weights: pd.Series,
+    cash_weight: float,
+    asset_returns: pd.Series,
+) -> tuple[pd.Series, float, float]:
+    evolved_asset_weights = asset_weights * (1.0 + asset_returns.fillna(0.0))
+    portfolio_value = float(evolved_asset_weights.sum() + cash_weight)
+    if abs(portfolio_value) <= WEIGHT_EPSILON:
+        raise ValueError("Portfolio value collapsed to zero; weights are undefined.")
+
+    next_asset_weights = evolved_asset_weights / portfolio_value
+    next_cash_weight = cash_weight / portfolio_value
+    period_return = portfolio_value - 1.0
+    return next_asset_weights, next_cash_weight, period_return
+
 
 def run_backtest(
     panel: pd.DataFrame,
@@ -29,33 +47,63 @@ def run_backtest(
     overnight_returns = (adj_open / adj_close.shift(1)) - 1.0
     intraday_returns = (adj_close / adj_open) - 1.0
 
-    weights_pivot = (
+    weights_schedule = (
         weights.copy()
         .assign(effective_date=lambda frame: pd.to_datetime(frame["effective_date"]))
         .pivot(index="effective_date", columns="symbol", values="weight")
         .reindex(columns=symbols, fill_value=0.0)
+        .sort_index()
     )
-    weights_pivot = weights_pivot.reindex(unique_dates).ffill().fillna(0.0)
 
-    post_open_weights = weights_pivot
-    pre_open_weights = post_open_weights.shift(1).fillna(0.0)
-    turnover = (post_open_weights - pre_open_weights).abs().sum(axis=1)
+    close_weights = pd.Series(0.0, index=symbols, dtype=float)
+    close_cash_weight = 1.0
+    equity = 1.0
+    rows: list[dict[str, object]] = []
 
-    gross_returns = (
-        (pre_open_weights * overnight_returns.fillna(0.0)).sum(axis=1)
-        + (post_open_weights * intraday_returns.fillna(0.0)).sum(axis=1)
-    )
-    costs = turnover * (cost_bps / 10_000.0)
-    net_returns = gross_returns - costs
-    equity = (1.0 + net_returns).cumprod()
+    for date in unique_dates:
+        date_timestamp = pd.Timestamp(date)
+        overnight_row = overnight_returns.loc[date_timestamp].reindex(symbols).fillna(0.0)
+        pre_open_weights, cash_open_weight, overnight_return = _advance_weights(
+            close_weights,
+            close_cash_weight,
+            overnight_row,
+        )
 
-    return pd.DataFrame(
-        {
-            "date": unique_dates,
-            "strategy": strategy_name,
-            "gross_return": gross_returns.values,
-            "net_return": net_returns.values,
-            "turnover": turnover.values,
-            "equity": equity.values,
-        }
-    )
+        if date_timestamp in weights_schedule.index:
+            post_open_weights = (
+                weights_schedule.loc[date_timestamp]
+                .reindex(symbols)
+                .fillna(0.0)
+                .astype(float)
+            )
+            turnover = float((post_open_weights - pre_open_weights).abs().sum())
+            post_open_cash_weight = 1.0 - float(post_open_weights.sum())
+        else:
+            post_open_weights = pre_open_weights
+            post_open_cash_weight = cash_open_weight
+            turnover = 0.0
+
+        intraday_row = intraday_returns.loc[date_timestamp].reindex(symbols).fillna(0.0)
+        close_weights, close_cash_weight, intraday_return = _advance_weights(
+            post_open_weights,
+            post_open_cash_weight,
+            intraday_row,
+        )
+
+        gross_return = ((1.0 + overnight_return) * (1.0 + intraday_return)) - 1.0
+        costs = turnover * (cost_bps / 10_000.0)
+        net_return = gross_return - costs
+        equity *= 1.0 + net_return
+
+        rows.append(
+            {
+                "date": date_timestamp,
+                "strategy": strategy_name,
+                "gross_return": gross_return,
+                "net_return": net_return,
+                "turnover": turnover,
+                "equity": equity,
+            }
+        )
+
+    return pd.DataFrame(rows)

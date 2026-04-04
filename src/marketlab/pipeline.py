@@ -36,6 +36,7 @@ from marketlab.reports.plots import (
     plot_turnover,
 )
 from marketlab.reports.summary import build_fold_summary, build_model_summary
+from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
 from marketlab.strategies.ranking import generate_weights as ranking_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
@@ -286,6 +287,24 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.Dat
                 cost_bps=config.portfolio.costs.bps_per_trade,
             )
         )
+
+    if config.baselines.allocation.enabled:
+        weights = allocation_weights(
+            panel=featured,
+            frequency=config.portfolio.ranking.rebalance_frequency,
+            mode=config.baselines.allocation.mode,
+            symbol_weights=config.baselines.allocation.symbol_weights,
+            symbol_groups=config.data.symbol_groups,
+            group_weights=config.baselines.allocation.group_weights,
+        )
+        if not weights.empty:
+            performance_frames.append(
+                run_backtest(
+                    panel=featured,
+                    weights=weights,
+                    cost_bps=config.portfolio.costs.bps_per_trade,
+                )
+            )
 
     if config.baselines.sma.enabled:
         weights = sma_weights(
@@ -600,4 +619,6 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
+
+
 
