@@ -136,6 +136,19 @@ Non-default ML strategy variants are named explicitly in experiment outputs, for
 
 `train-models` now keeps the existing issue #19 and #20 score-review artifacts while making the ranking diagnostics mode-aware for `long_short` and `long_only`. Threshold gating and cash-underfilled behavior still remain execution-only controls; the offline evaluation layer does not replay those execution variants.
 
+## Ranking Exposure Caps
+
+`run-experiment` now also supports structural risk caps for ML ranking strategies under `portfolio.risk`:
+
+- `max_position_weight`
+- `max_group_weight`
+- `max_long_exposure`
+- `max_short_exposure`
+
+These caps apply only after the current ranking strategy has already selected longs and shorts. MarketLab clips single-name exposure first, then clips group exposure separately for the long and short sleeves, then caps total long exposure, and finally caps total short exposure. Any removed exposure stays in cash; it is never renormalized back into the book.
+
+This remains a narrow structural-control step. The new caps do not change `buy_hold`, `sma`, or allocation baselines, and they do not add benchmark-relative reporting, optimizer methods, or broader portfolio analytics yet. Lower realized volatility or drawdown under a capped ranking strategy may simply reflect lower invested exposure or more cash, not better signal quality.
+
 ## Allocation Baselines And Symbol Groups
 
 `backtest` and `run-experiment` now also support optional config-defined allocation baselines under `baselines.allocation`.
