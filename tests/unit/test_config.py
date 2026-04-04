@@ -45,6 +45,26 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.baselines.allocation.group_weights == {}
 
 
+def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbol_groups": None},
+        baselines={
+            "allocation": {
+                "enabled": False,
+                "symbol_weights": None,
+                "group_weights": None,
+            }
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.data.symbol_groups == {}
+    assert config.baselines.allocation.symbol_weights == {}
+    assert config.baselines.allocation.group_weights == {}
+
+
 def test_load_config_rejects_unknown_symbol_group_entries(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "config.yaml",

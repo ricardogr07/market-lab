@@ -163,6 +163,17 @@ def _config_base_dir(path: Path) -> Path:
     return path.parent.resolve()
 
 
+def _normalize_mapping_sections(config: ExperimentConfig) -> None:
+    if config.data.symbol_groups is None:
+        config.data.symbol_groups = {}
+
+    if config.baselines.allocation.symbol_weights is None:
+        config.baselines.allocation.symbol_weights = {}
+
+    if config.baselines.allocation.group_weights is None:
+        config.baselines.allocation.group_weights = {}
+
+
 def _validate_weights(label: str, weights: dict[str, float]) -> None:
     if any(value < 0.0 for value in weights.values()):
         raise ValueError(f"{label} must contain non-negative weights.")
@@ -263,5 +274,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
         base_dir=_config_base_dir(config_path),
     )
+    _normalize_mapping_sections(config)
     _validate_config(config)
     return config
+
