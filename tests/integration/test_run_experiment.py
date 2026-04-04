@@ -60,6 +60,8 @@ def _write_run_experiment_config(
     walk_forward: dict[str, int | float] | None = None,
     ranking: dict[str, object] | None = None,
     symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
+    symbol_groups: dict[str, str] | None = None,
+    allocation: dict[str, object] | None = None,
     models: list[dict[str, str]] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
@@ -69,6 +71,7 @@ def _write_run_experiment_config(
         ("CCC", 160.0, 0.35),
         ("DDD", 190.0, 0.30),
     )
+    resolved_symbol_groups = symbol_groups or {}
     resolved_models = models or [
         {"name": "logistic_regression"},
         {"name": "logistic_l1"},
@@ -105,6 +108,14 @@ def _write_run_experiment_config(
     }
     if ranking is not None:
         ranking_payload.update(ranking)
+
+    baselines_payload: dict[str, object] = {
+        "buy_hold": True,
+        "sma": {"enabled": True, "fast_window": 5, "slow_window": 10},
+    }
+    if allocation is not None:
+        baselines_payload["allocation"] = allocation
+
     return write_yaml_config(
         tmp_path / "integration.yaml",
         {
@@ -116,6 +127,7 @@ def _write_run_experiment_config(
                 "interval": "1d",
                 "cache_dir": str(cache_dir),
                 "prepared_panel_filename": "panel.csv",
+                "symbol_groups": resolved_symbol_groups,
             },
             "features": {
                 "return_windows": [5, 10],
@@ -131,10 +143,7 @@ def _write_run_experiment_config(
                 "ranking": ranking_payload,
                 "costs": {"bps_per_trade": 10},
             },
-            "baselines": {
-                "buy_hold": True,
-                "sma": {"enabled": True, "fast_window": 5, "slow_window": 10},
-            },
+            "baselines": baselines_payload,
             "models": resolved_models,
             "evaluation": {
                 "walk_forward": walk_forward_payload,
@@ -150,9 +159,21 @@ def _write_run_experiment_config(
     )
 
 
-def _write_backtest_config(tmp_path: Path) -> Path:
+def _write_backtest_config(
+    tmp_path: Path,
+    *,
+    symbol_groups: dict[str, str] | None = None,
+    allocation: dict[str, object] | None = None,
+) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(load_fixture_panel(), cache_dir / "panel.csv")
+    resolved_symbol_groups = symbol_groups or {}
+    baselines_payload: dict[str, object] = {
+        "buy_hold": True,
+        "sma": {"enabled": True, "fast_window": 2, "slow_window": 3},
+    }
+    if allocation is not None:
+        baselines_payload["allocation"] = allocation
 
     return write_yaml_config(
         tmp_path / "backtest.yaml",
@@ -165,6 +186,7 @@ def _write_backtest_config(tmp_path: Path) -> Path:
                 "interval": "1d",
                 "cache_dir": str(cache_dir),
                 "prepared_panel_filename": "panel.csv",
+                "symbol_groups": resolved_symbol_groups,
             },
             "features": {
                 "return_windows": [2, 3],
@@ -175,10 +197,7 @@ def _write_backtest_config(tmp_path: Path) -> Path:
             "portfolio": {
                 "costs": {"bps_per_trade": 10},
             },
-            "baselines": {
-                "buy_hold": True,
-                "sma": {"enabled": True, "fast_window": 2, "slow_window": 3},
-            },
+            "baselines": baselines_payload,
             "artifacts": {
                 "output_dir": str(tmp_path / "runs"),
                 "save_predictions": False,
@@ -188,7 +207,6 @@ def _write_backtest_config(tmp_path: Path) -> Path:
             },
         },
     )
-
 
 def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(tmp_path)
@@ -393,6 +411,76 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert not (run_dir / "threshold_sweeps.png").exists()
 
 
+def test_backtest_supports_config_defined_allocation_baseline(tmp_path: Path) -> None:
+    config_path = _write_backtest_config(
+        tmp_path,
+        allocation={
+            "enabled": True,
+            "mode": "equal",
+        },
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_backtest_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(metrics["strategy"]) == {"buy_hold", "sma", "allocation_equal"}
+    assert set(strategy_summary["strategy"]) == {"buy_hold", "sma", "allocation_equal"}
+
+    allocation_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "allocation_equal"
+    ].iloc[0]
+    buy_hold_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "buy_hold"
+    ].iloc[0]
+    assert allocation_row["total_turnover"] > 0.0
+    assert allocation_row["cumulative_return"] != pytest.approx(
+        buy_hold_row["cumulative_return"]
+    )
+    assert "allocation_equal" in report_text
+
+
+def test_run_experiment_supports_group_weight_allocation_baseline(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        symbol_groups={
+            "AAA": "growth",
+            "BBB": "growth",
+            "CCC": "defensive",
+            "DDD": "defensive",
+        },
+        allocation={
+            "enabled": True,
+            "mode": "group_weights",
+            "group_weights": {"growth": 0.75, "defensive": 0.25},
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "allocation_group_weights" in set(metrics["strategy"])
+    assert "allocation_group_weights" in set(performance["strategy"])
+    assert "allocation_group_weights" in set(strategy_summary["strategy"])
+    allocation_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "allocation_group_weights"
+    ].iloc[0]
+    assert allocation_row["total_turnover"] > 0.0
+    assert "allocation_group_weights" in report_text
+
+
 def test_run_experiment_supports_long_only_strategy_variants(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
         tmp_path,
@@ -516,3 +604,6 @@ def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) ->
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_short__thr0p99__cash" in report_text
     assert "ml_logistic_l1__long_short__thr0p99__cash" in report_text
+
+
+

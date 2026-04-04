@@ -6,6 +6,9 @@ from typing import Any
 
 import yaml
 
+ALLOCATION_MODES = {"equal", "group_weights", "symbol_weights"}
+WEIGHT_TOLERANCE = 1e-6
+
 
 @dataclass(slots=True)
 class DataConfig:
@@ -17,6 +20,7 @@ class DataConfig:
     interval: str = "1d"
     cache_dir: str = "artifacts/data"
     prepared_panel_filename: str = "panel.csv"
+    symbol_groups: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -63,9 +67,18 @@ class SMAConfig:
 
 
 @dataclass(slots=True)
+class AllocationConfig:
+    enabled: bool = False
+    mode: str = "equal"
+    symbol_weights: dict[str, float] = field(default_factory=dict)
+    group_weights: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class BaselinesConfig:
     buy_hold: bool = True
     sma: SMAConfig = field(default_factory=SMAConfig)
+    allocation: AllocationConfig = field(default_factory=AllocationConfig)
 
 
 @dataclass(slots=True)
@@ -150,6 +163,77 @@ def _config_base_dir(path: Path) -> Path:
     return path.parent.resolve()
 
 
+def _normalize_mapping_sections(config: ExperimentConfig) -> None:
+    if config.data.symbol_groups is None:
+        config.data.symbol_groups = {}
+
+    if config.baselines.allocation.symbol_weights is None:
+        config.baselines.allocation.symbol_weights = {}
+
+    if config.baselines.allocation.group_weights is None:
+        config.baselines.allocation.group_weights = {}
+
+
+def _validate_weights(label: str, weights: dict[str, float]) -> None:
+    if any(value < 0.0 for value in weights.values()):
+        raise ValueError(f"{label} must contain non-negative weights.")
+
+    if abs(sum(weights.values()) - 1.0) > WEIGHT_TOLERANCE:
+        raise ValueError(f"{label} must sum to 1.0.")
+
+
+def _validate_config(config: ExperimentConfig) -> None:
+    symbols = list(config.data.symbols)
+    symbol_set = set(symbols)
+    group_symbol_keys = set(config.data.symbol_groups)
+
+    unknown_group_symbols = sorted(group_symbol_keys - symbol_set)
+    if unknown_group_symbols:
+        joined = ", ".join(unknown_group_symbols)
+        raise ValueError(f"data.symbol_groups contains unknown symbols: {joined}")
+
+    allocation = config.baselines.allocation
+    if allocation.mode not in ALLOCATION_MODES:
+        allowed = ", ".join(sorted(ALLOCATION_MODES))
+        raise ValueError(f"baselines.allocation.mode must be one of: {allowed}")
+
+    if not allocation.enabled:
+        return
+
+    if allocation.mode == "equal":
+        return
+
+    if allocation.mode == "symbol_weights":
+        if set(allocation.symbol_weights) != symbol_set:
+            raise ValueError(
+                "baselines.allocation.symbol_weights must match data.symbols exactly."
+            )
+        _validate_weights(
+            "baselines.allocation.symbol_weights",
+            allocation.symbol_weights,
+        )
+        return
+
+    missing_group_symbols = sorted(symbol_set - group_symbol_keys)
+    if missing_group_symbols:
+        joined = ", ".join(missing_group_symbols)
+        raise ValueError(
+            "baselines.allocation.group_weights requires symbol_groups for all "
+            f"data.symbols: {joined}"
+        )
+
+    configured_groups = {config.data.symbol_groups[symbol] for symbol in symbols}
+    if set(allocation.group_weights) != configured_groups:
+        raise ValueError(
+            "baselines.allocation.group_weights must match configured symbol "
+            "groups exactly."
+        )
+    _validate_weights(
+        "baselines.allocation.group_weights",
+        allocation.group_weights,
+    )
+
+
 def load_config(path: str | Path) -> ExperimentConfig:
     config_path = Path(path).resolve()
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -172,6 +256,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
         baselines=BaselinesConfig(
             buy_hold=(payload.get("baselines") or {}).get("buy_hold", True),
             sma=_section(SMAConfig, (payload.get("baselines") or {}).get("sma")),
+            allocation=_section(
+                AllocationConfig,
+                (payload.get("baselines") or {}).get("allocation"),
+            ),
         ),
         models=[
             _section(ModelSpec, item)
@@ -186,6 +274,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
         base_dir=_config_base_dir(config_path),
     )
+    _normalize_mapping_sections(config)
+    _validate_config(config)
     return config
-
 

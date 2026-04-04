@@ -20,7 +20,7 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 ## What Each Command Does
 
 - `prepare-data`: build or reuse the cached prepared panel.
-- `backtest`: run the rule baselines only (`buy_hold` and `sma`) and write performance, analytics summaries, report, and plots.
+- `backtest`: run the enabled baselines (`buy_hold`, `sma`, and optional config-defined allocation baselines) and write performance, analytics summaries, report, and plots.
 - `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summaries, ranking diagnostics, calibration diagnostics, threshold diagnostics, and review plots.
 - `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, calibration/threshold diagnostics, and review plots.
 
@@ -135,6 +135,30 @@ Execution semantics:
 Non-default ML strategy variants are named explicitly in experiment outputs, for example `ml_logistic_regression__long_only` or `ml_random_forest__long_short__thr0p60__cash`.
 
 `train-models` now keeps the existing issue #19 and #20 score-review artifacts while making the ranking diagnostics mode-aware for `long_short` and `long_only`. Threshold gating and cash-underfilled behavior still remain execution-only controls; the offline evaluation layer does not replay those execution variants.
+
+## Allocation Baselines And Symbol Groups
+
+`backtest` and `run-experiment` now also support optional config-defined allocation baselines under `baselines.allocation`.
+
+Add to `data`:
+
+- `symbol_groups`: optional mapping from symbol to group name
+
+Add to `baselines`:
+
+- `allocation.enabled`
+- `allocation.mode`: `equal`, `symbol_weights`, or `group_weights`
+- `allocation.symbol_weights`
+- `allocation.group_weights`
+
+Allocation semantics:
+
+- `buy_hold` emits one initial equal-weight allocation and then lets positions drift naturally.
+- `allocation_equal` rebalances back to equal target weights on the existing rebalance cadence.
+- `allocation_symbol_weights` rebalances back to exact configured symbol weights.
+- `allocation_group_weights` rebalances back to configured group sleeves and splits each sleeve equally across the symbols in that group.
+
+This first Phase 5 step stays narrow: allocation baselines are long-only, fully invested target-weight portfolios. Risk caps, benchmark-relative reporting, and optimizer methods remain later work.
 
 ## Single-Symbol VOO Timing Example
 
@@ -261,4 +285,5 @@ Before the first automated public release:
 - create the GitHub Actions environment named `pypi`
 
 The first automated public release target remains `v0.1.0`.
+
 
