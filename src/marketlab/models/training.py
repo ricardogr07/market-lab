@@ -89,6 +89,7 @@ def train_direction_models_on_folds(
     run_dir: Path,
     save_predictions: bool,
     *,
+    mode: str,
     long_n: int,
     short_n: int,
 ) -> TrainingOutputs:
@@ -154,6 +155,7 @@ def train_direction_models_on_folds(
                 model_name=spec.name,
                 fold_id=fold.fold_id,
                 predictions=scored_predictions,
+                mode=mode,
                 long_n=long_n,
                 short_n=short_n,
             )

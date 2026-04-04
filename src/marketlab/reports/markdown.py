@@ -51,29 +51,44 @@ def _headline_lines(
         )
 
     if model_summary is not None and not model_summary.empty:
-        ranked_models = model_summary.dropna(subset=["mean_roc_auc"]).sort_values(
-            ["mean_roc_auc", "model_name"],
-            ascending=[False, True],
-        )
-        if ranked_models.empty:
-            lines.append("- Best model by mean ROC AUC: n/a")
-        else:
-            best_model = ranked_models.iloc[0]
-            lines.append(
-                f"- Best model by mean ROC AUC: `{best_model['model_name']}` ({best_model['mean_roc_auc']:.6f})"
+        if {"model_name", "mean_roc_auc"}.issubset(model_summary.columns):
+            ranked_models = model_summary.dropna(subset=["mean_roc_auc"]).sort_values(
+                ["mean_roc_auc", "model_name"],
+                ascending=[False, True],
             )
+            if ranked_models.empty:
+                lines.append("- Best model by mean ROC AUC: n/a")
+            else:
+                best_model = ranked_models.iloc[0]
+                lines.append(
+                    f"- Best model by mean ROC AUC: `{best_model['model_name']}` ({best_model['mean_roc_auc']:.6f})"
+                )
 
-        ranked_spread = model_summary.dropna(subset=["mean_top_bottom_spread"]).sort_values(
-            ["mean_top_bottom_spread", "model_name"],
-            ascending=[False, True],
-        )
-        if ranked_spread.empty:
-            lines.append("- Best model by mean top-bottom spread: n/a")
-        else:
-            best_spread = ranked_spread.iloc[0]
-            lines.append(
-                f"- Best model by mean top-bottom spread: `{best_spread['model_name']}` ({best_spread['mean_top_bottom_spread']:.6f})"
+        if {"model_name", "mean_top_bucket_return"}.issubset(model_summary.columns):
+            ranked_top_bucket = model_summary.dropna(subset=["mean_top_bucket_return"]).sort_values(
+                ["mean_top_bucket_return", "model_name"],
+                ascending=[False, True],
             )
+            if ranked_top_bucket.empty:
+                lines.append("- Best model by mean top-bucket return: n/a")
+            else:
+                best_top_bucket = ranked_top_bucket.iloc[0]
+                lines.append(
+                    f"- Best model by mean top-bucket return: `{best_top_bucket['model_name']}` ({best_top_bucket['mean_top_bucket_return']:.6f})"
+                )
+
+        if {"model_name", "mean_top_bottom_spread"}.issubset(model_summary.columns):
+            ranked_spread = model_summary.dropna(subset=["mean_top_bottom_spread"]).sort_values(
+                ["mean_top_bottom_spread", "model_name"],
+                ascending=[False, True],
+            )
+            if ranked_spread.empty:
+                lines.append("- Best model by mean top-bottom spread: n/a")
+            else:
+                best_spread = ranked_spread.iloc[0]
+                lines.append(
+                    f"- Best model by mean top-bottom spread: `{best_spread['model_name']}` ({best_spread['mean_top_bottom_spread']:.6f})"
+                )
 
     return lines
 

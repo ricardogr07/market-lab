@@ -30,16 +30,20 @@ MODEL_METRICS_COLUMNS = [
     "log_loss",
     "rank_corr",
     "top_bucket_return",
+    "top_bucket_hit_rate",
     "bottom_bucket_return",
     "top_bottom_spread",
     "spread_hit_rate",
+    "worst_top_bucket_return",
     "worst_top_bottom_spread",
+    "top_bucket_signal_count",
     "spread_signal_count",
 ]
 
 RANKING_DIAGNOSTICS_COLUMNS = [
     "model_name",
     "fold_id",
+    "evaluation_mode",
     "signal_date",
     "effective_date",
     "symbol_count",
@@ -99,6 +103,7 @@ BUCKET_STATUS_USED = "used"
 BUCKET_STATUS_UNDERFILLED = "underfilled"
 THRESHOLD_STATUS_USED = "used"
 THRESHOLD_STATUS_EMPTY = "empty"
+VALID_EVALUATION_MODES = {"long_only", "long_short"}
 
 SCORE_BIN_COUNT = 10
 THRESHOLD_GRID = [step / 100 for step in range(5, 100, 5)]
@@ -196,6 +201,7 @@ def _spearman_rank_corr(
 def _bucket_frame(
     signal_rows: pd.DataFrame,
     *,
+    mode: str,
     long_n: int,
     short_n: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -203,10 +209,15 @@ def _bucket_frame(
         ["score", "symbol"],
         ascending=[False, True],
     ).head(long_n)
-    short_bucket = signal_rows.loc[~signal_rows["symbol"].isin(long_bucket["symbol"])].sort_values(
-        ["score", "symbol"],
-        ascending=[True, True],
-    ).head(short_n)
+    if mode == "long_only":
+        short_bucket = signal_rows.iloc[0:0].copy()
+    else:
+        short_bucket = signal_rows.loc[
+            ~signal_rows["symbol"].isin(long_bucket["symbol"])
+        ].sort_values(
+            ["score", "symbol"],
+            ascending=[True, True],
+        ).head(short_n)
     return long_bucket, short_bucket
 
 
@@ -421,7 +432,14 @@ def build_ranking_diagnostics(
     *,
     long_n: int,
     short_n: int,
+    mode: str = "long_short",
 ) -> pd.DataFrame:
+    if mode not in VALID_EVALUATION_MODES:
+        supported = ", ".join(sorted(VALID_EVALUATION_MODES))
+        raise ValueError(
+            f"Unsupported ranking evaluation mode '{mode}'. Expected one of: {supported}"
+        )
+
     required = {
         "symbol",
         "signal_date",
@@ -451,6 +469,7 @@ def build_ranking_diagnostics(
     ):
         long_bucket, short_bucket = _bucket_frame(
             signal_rows,
+            mode=mode,
             long_n=long_n,
             short_n=short_n,
         )
@@ -469,15 +488,18 @@ def build_ranking_diagnostics(
             if not math.isnan(top_bucket_return) and not math.isnan(bottom_bucket_return)
             else float("nan")
         )
+        long_bucket_complete = len(long_bucket) == long_n
+        short_bucket_complete = mode == "long_only" or len(short_bucket) == short_n
         bucket_status = (
             BUCKET_STATUS_USED
-            if len(long_bucket) == long_n and len(short_bucket) == short_n
+            if long_bucket_complete and short_bucket_complete
             else BUCKET_STATUS_UNDERFILLED
         )
         diagnostics_rows.append(
             {
                 "model_name": model_name,
                 "fold_id": fold_id,
+                "evaluation_mode": mode,
                 "signal_date": pd.Timestamp(signal_date),
                 "effective_date": pd.Timestamp(effective_date),
                 "symbol_count": int(signal_rows["symbol"].nunique()),
@@ -505,28 +527,39 @@ def summarize_ranking_diagnostics(
         return {
             "rank_corr": float("nan"),
             "top_bucket_return": float("nan"),
+            "top_bucket_hit_rate": float("nan"),
             "bottom_bucket_return": float("nan"),
             "top_bottom_spread": float("nan"),
             "spread_hit_rate": float("nan"),
+            "worst_top_bucket_return": float("nan"),
             "worst_top_bottom_spread": float("nan"),
+            "top_bucket_signal_count": 0,
             "spread_signal_count": 0,
         }
 
     used_rows = ranking_diagnostics.loc[
         ranking_diagnostics["bucket_status"] == BUCKET_STATUS_USED
     ].copy()
+    top_rows = used_rows.dropna(subset=["top_bucket_return"]).copy()
     spread_rows = used_rows.dropna(subset=["top_bottom_spread"]).copy()
 
     return {
         "rank_corr": float(ranking_diagnostics["rank_corr"].mean()),
-        "top_bucket_return": float(spread_rows["top_bucket_return"].mean()),
+        "top_bucket_return": float(top_rows["top_bucket_return"].mean()),
+        "top_bucket_hit_rate": float((top_rows["top_bucket_return"] > 0.0).mean())
+        if not top_rows.empty
+        else float("nan"),
         "bottom_bucket_return": float(spread_rows["bottom_bucket_return"].mean()),
         "top_bottom_spread": float(spread_rows["top_bottom_spread"].mean()),
         "spread_hit_rate": float((spread_rows["top_bottom_spread"] > 0.0).mean())
         if not spread_rows.empty
         else float("nan"),
+        "worst_top_bucket_return": float(top_rows["top_bucket_return"].min())
+        if not top_rows.empty
+        else float("nan"),
         "worst_top_bottom_spread": float(spread_rows["top_bottom_spread"].min())
         if not spread_rows.empty
         else float("nan"),
+        "top_bucket_signal_count": int(len(top_rows)),
         "spread_signal_count": int(len(spread_rows)),
     }

@@ -428,6 +428,7 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         target_type=config.target.type,
         run_dir=run_dir,
         save_predictions=config.artifacts.save_predictions,
+        mode=config.portfolio.ranking.mode,
         long_n=config.portfolio.ranking.long_n,
         short_n=config.portfolio.ranking.short_n,
     )
@@ -553,6 +554,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         target_type=config.target.type,
         run_dir=run_dir,
         save_predictions=True,
+        mode=config.portfolio.ranking.mode,
         long_n=config.portfolio.ranking.long_n,
         short_n=config.portfolio.ranking.short_n,
     )

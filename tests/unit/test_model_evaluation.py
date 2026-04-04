@@ -68,6 +68,7 @@ def test_build_ranking_diagnostics_and_summary_exclude_underfilled_rows_from_spr
         short_n=2,
     )
 
+    assert diagnostics["evaluation_mode"].tolist() == ["long_short", "long_short"]
     assert diagnostics["bucket_status"].tolist() == [BUCKET_STATUS_USED, BUCKET_STATUS_UNDERFILLED]
 
     used_row = diagnostics.iloc[0]
@@ -78,13 +79,54 @@ def test_build_ranking_diagnostics_and_summary_exclude_underfilled_rows_from_spr
     assert used_row["top_bottom_spread"] == pytest.approx(0.05)
 
     summary = summarize_ranking_diagnostics(diagnostics)
+    assert summary["top_bucket_signal_count"] == 1
     assert summary["spread_signal_count"] == 1
     assert summary["top_bucket_return"] == pytest.approx(0.025)
+    assert summary["top_bucket_hit_rate"] == pytest.approx(1.0)
     assert summary["bottom_bucket_return"] == pytest.approx(-0.025)
     assert summary["top_bottom_spread"] == pytest.approx(0.05)
     assert summary["spread_hit_rate"] == pytest.approx(1.0)
+    assert summary["worst_top_bucket_return"] == pytest.approx(0.025)
     assert summary["worst_top_bottom_spread"] == pytest.approx(0.05)
     assert summary["rank_corr"] == pytest.approx(diagnostics["rank_corr"].mean())
+
+
+def test_build_ranking_diagnostics_long_only_keeps_top_bucket_metrics_without_short_bucket() -> None:
+    diagnostics = build_ranking_diagnostics(
+        model_name="logistic_regression",
+        fold_id=4,
+        predictions=pd.DataFrame(
+            {
+                "symbol": ["VOO", "VOO"],
+                "signal_date": pd.to_datetime(["2024-01-05", "2024-01-12"]),
+                "effective_date": pd.to_datetime(["2024-01-08", "2024-01-16"]),
+                "forward_return": [0.04, -0.02],
+                "score": [0.9, 0.3],
+            }
+        ),
+        mode="long_only",
+        long_n=1,
+        short_n=1,
+    )
+
+    assert diagnostics["evaluation_mode"].tolist() == ["long_only", "long_only"]
+    assert diagnostics["bucket_status"].tolist() == [BUCKET_STATUS_USED, BUCKET_STATUS_USED]
+    assert diagnostics["top_bucket_size"].tolist() == [1, 1]
+    assert diagnostics["bottom_bucket_size"].tolist() == [0, 0]
+    assert diagnostics["top_bucket_return"].tolist() == pytest.approx([0.04, -0.02])
+    assert diagnostics["bottom_bucket_return"].isna().all()
+    assert diagnostics["top_bottom_spread"].isna().all()
+
+    summary = summarize_ranking_diagnostics(diagnostics)
+    assert summary["top_bucket_signal_count"] == 2
+    assert summary["spread_signal_count"] == 0
+    assert summary["top_bucket_return"] == pytest.approx(0.01)
+    assert summary["top_bucket_hit_rate"] == pytest.approx(0.5)
+    assert math.isnan(summary["bottom_bucket_return"])
+    assert math.isnan(summary["top_bottom_spread"])
+    assert math.isnan(summary["spread_hit_rate"])
+    assert summary["worst_top_bucket_return"] == pytest.approx(-0.02)
+    assert math.isnan(summary["worst_top_bottom_spread"])
 
 
 def test_build_ranking_diagnostics_keeps_nan_rank_corr_for_constant_inputs() -> None:
