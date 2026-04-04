@@ -49,6 +49,14 @@ class RankingConfig:
 
 
 @dataclass(slots=True)
+class RiskConfig:
+    max_position_weight: float | None = None
+    max_group_weight: float | None = None
+    max_long_exposure: float | None = None
+    max_short_exposure: float | None = None
+
+
+@dataclass(slots=True)
 class CostsConfig:
     bps_per_trade: float = 10.0
 
@@ -56,6 +64,7 @@ class CostsConfig:
 @dataclass(slots=True)
 class PortfolioConfig:
     ranking: RankingConfig = field(default_factory=RankingConfig)
+    risk: RiskConfig = field(default_factory=RiskConfig)
     costs: CostsConfig = field(default_factory=CostsConfig)
 
 
@@ -182,6 +191,13 @@ def _validate_weights(label: str, weights: dict[str, float]) -> None:
         raise ValueError(f"{label} must sum to 1.0.")
 
 
+def _validate_cap(label: str, value: float | None) -> None:
+    if value is None:
+        return
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{label} must be between 0.0 and 1.0.")
+
+
 def _validate_config(config: ExperimentConfig) -> None:
     symbols = list(config.data.symbols)
     symbol_set = set(symbols)
@@ -191,6 +207,26 @@ def _validate_config(config: ExperimentConfig) -> None:
     if unknown_group_symbols:
         joined = ", ".join(unknown_group_symbols)
         raise ValueError(f"data.symbol_groups contains unknown symbols: {joined}")
+
+    risk = config.portfolio.risk
+    _validate_cap("portfolio.risk.max_position_weight", risk.max_position_weight)
+    _validate_cap("portfolio.risk.max_group_weight", risk.max_group_weight)
+    _validate_cap("portfolio.risk.max_long_exposure", risk.max_long_exposure)
+    _validate_cap("portfolio.risk.max_short_exposure", risk.max_short_exposure)
+
+    if config.portfolio.ranking.mode == "long_only" and risk.max_short_exposure is not None:
+        raise ValueError(
+            "portfolio.risk.max_short_exposure is not allowed when portfolio.ranking.mode='long_only'."
+        )
+
+    if risk.max_group_weight is not None:
+        missing_group_symbols = sorted(symbol_set - group_symbol_keys)
+        if missing_group_symbols:
+            joined = ", ".join(missing_group_symbols)
+            raise ValueError(
+                "portfolio.risk.max_group_weight requires data.symbol_groups for all "
+                f"data.symbols: {joined}"
+            )
 
     allocation = config.baselines.allocation
     if allocation.mode not in ALLOCATION_MODES:
@@ -248,6 +284,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
                 RankingConfig,
                 (payload.get("portfolio") or {}).get("ranking"),
             ),
+            risk=_section(
+                RiskConfig,
+                (payload.get("portfolio") or {}).get("risk"),
+            ),
             costs=_section(
                 CostsConfig,
                 (payload.get("portfolio") or {}).get("costs"),
@@ -277,4 +317,3 @@ def load_config(path: str | Path) -> ExperimentConfig:
     _normalize_mapping_sections(config)
     _validate_config(config)
     return config
-
