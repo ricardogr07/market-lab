@@ -7,6 +7,19 @@ import pandas as pd
 
 from marketlab.config import ExperimentConfig
 
+EXPOSURE_SUMMARY_COLUMNS = [
+    "strategy",
+    "avg_long_exposure",
+    "avg_short_exposure",
+    "avg_gross_exposure",
+    "avg_net_exposure",
+    "avg_cash_weight",
+    "avg_engine_cash_weight",
+    "avg_active_positions",
+    "max_position_weight",
+    "max_group_weight",
+]
+
 
 def _markdown_table(frame: pd.DataFrame) -> str:
     columns = list(frame.columns)
@@ -198,6 +211,23 @@ def _display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
+def _exposure_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
+    if not set(EXPOSURE_SUMMARY_COLUMNS).issubset(strategy_summary.columns):
+        return []
+
+    lines = [_markdown_table(_display_frame(strategy_summary.loc[:, EXPOSURE_SUMMARY_COLUMNS]))]
+    lines.extend(
+        [
+            "",
+            "- Lower drawdown can reflect lower gross exposure or more cash, not necessarily better selection.",
+            "- `avg_cash_weight` is exposure-style slack; `avg_engine_cash_weight` is the engine's carried cash or collateral weight.",
+        ]
+    )
+    if strategy_summary["max_group_weight"].notna().any():
+        lines.append("- Group concentration details are also persisted in `group_exposure.csv`.")
+    return lines
+
+
 def _section(title: str, body_lines: list[str]) -> list[str]:
     return [f"## {title}", "", *body_lines, ""]
 
@@ -251,6 +281,9 @@ def write_markdown_report(
 
     if strategy_summary is not None and not strategy_summary.empty:
         content_lines.extend(_section("Strategy Summary", [_markdown_table(_display_frame(strategy_summary))]))
+        exposure_lines = _exposure_summary_lines(strategy_summary)
+        if exposure_lines:
+            content_lines.extend(_section("Exposure Summary", exposure_lines))
 
     if monthly_returns is not None and not monthly_returns.empty:
         content_lines.extend(_section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)]))
