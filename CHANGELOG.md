@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.1.0...marketlab-v0.2.0) (2026-04-05)
+
+
+### Features
+
+* add config-defined allocation baselines ([#45](https://github.com/ricardogr07/market-lab/issues/45)) ([41515c1](https://github.com/ricardogr07/market-lab/commit/41515c11b57342c16b86f045e610d804f231fa2a))
+* add embargo-aware fold diagnostics builder ([5f2fb73](https://github.com/ricardogr07/market-lab/commit/5f2fb7364d7f631aedc9d2ea4453b3d453a39cac))
+* add exposure and concentration caps to ranking strategies ([#46](https://github.com/ricardogr07/market-lab/issues/46)) ([abf5516](https://github.com/ricardogr07/market-lab/commit/abf551629ddac615ef26a21437fb720ae2637902))
+* add exposure-aware analytics and reporting ([#47](https://github.com/ricardogr07/market-lab/issues/47)) ([e028147](https://github.com/ricardogr07/market-lab/commit/e02814709f39d0fad5a409343e9240738693ba06))
+* add lightweight sklearn comparison models ([40a223b](https://github.com/ricardogr07/market-lab/commit/40a223bad2c6ea69ca91037f87d0a3f837e6a682))
+* add ranking strategy modes ([#30](https://github.com/ricardogr07/market-lab/issues/30)) ([4294b80](https://github.com/ricardogr07/market-lab/commit/4294b80d948a37a849778a2c86b42765f1e8cc41))
+* add ranking-aware fold evaluation builders ([e5a126c](https://github.com/ricardogr07/market-lab/commit/e5a126c4d0c6d16178e8e71066deb0559e0a8fad))
+* add single-symbol VOO long-only evaluation support ([6981c7d](https://github.com/ricardogr07/market-lab/commit/6981c7d79d3a52c391d5e6ad29fe83051f4d38b3))
+* add walk-forward guardrail config and template defaults ([4715291](https://github.com/ricardogr07/market-lab/commit/47152917d04194a2df6f0b97b298851e5cb5a033))
+* extend summaries with ranking-aware and downside metrics ([06817a5](https://github.com/ricardogr07/market-lab/commit/06817a576c23ac5d73f63b108f9b9e866c0f6157))
+* persist fold diagnostics across training and experiment runs ([2756e02](https://github.com/ricardogr07/market-lab/commit/2756e02216700c64fd8358a1b3430ab26930ed69))
+* persist ranking diagnostics in experiment artifacts and report headlines ([c5cfa64](https://github.com/ricardogr07/market-lab/commit/c5cfa64b7a2c6299bb4cf6164de17d6902e2f4f7))
+* surface walk-forward diagnostics in reporting ([b53b273](https://github.com/ricardogr07/market-lab/commit/b53b2735aa0667d1f24af0b7e42c21aa6b8f5a1e))
+
+
+### Documentation
+
+* consolidate public docs under docs ([ad7abb4](https://github.com/ricardogr07/market-lab/commit/ad7abb4b31d19128a9dc9ec87f38ae6694a3bdc7))
+* document ranking-aware evaluation artifacts ([73c5ac9](https://github.com/ricardogr07/market-lab/commit/73c5ac96a6e1a17bd6b5b7b787e6a890db3c6dbf))
+* refresh project plan for phase 4 roadmap ([110b9fc](https://github.com/ricardogr07/market-lab/commit/110b9fc858b7c9f7358d2013805e963bc0eb6f91))
+
 ## 0.1.0 (2026-03-29)
 
 
