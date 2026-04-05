@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -226,6 +226,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "strategy_summary.csv",
         "monthly_returns.csv",
         "turnover_costs.csv",
+        "daily_exposure.csv",
         "report.md",
         "cumulative_returns.png",
         "drawdown.png",
@@ -242,7 +243,6 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "fold_summary.csv",
         "models",
     }
-
     metrics = pd.read_csv(run_dir / "metrics.csv")
     performance = pd.read_csv(run_dir / "performance.csv", parse_dates=["date"])
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv", parse_dates=["start_date", "end_date"])
@@ -375,12 +375,12 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
         "strategy_summary.csv",
         "monthly_returns.csv",
         "turnover_costs.csv",
+        "daily_exposure.csv",
         "report.md",
         "cumulative_returns.png",
         "drawdown.png",
         "turnover.png",
     }
-
     metrics = pd.read_csv(run_dir / "metrics.csv")
     performance = pd.read_csv(run_dir / "performance.csv")
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
@@ -401,7 +401,8 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert "## Strategy Summary" in report_text
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
-    assert not (run_dir / "fold_diagnostics.csv").exists()
+    assert not (run_dir / "group_exposure.csv").exists()
+    assert not (run_dir / 'fold_diagnostics.csv').exists()
     assert not (run_dir / "ranking_diagnostics.csv").exists()
     assert not (run_dir / "calibration_diagnostics.csv").exists()
     assert not (run_dir / "score_histograms.csv").exists()
@@ -673,6 +674,4 @@ def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) ->
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_short__thr0p99__cash" in report_text
     assert "ml_logistic_l1__long_short__thr0p99__cash" in report_text
-
-
 
