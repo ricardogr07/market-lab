@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from marketlab.backtest.engine import run_backtest
+from marketlab.backtest.engine import BacktestResult, run_backtest_detailed
 from marketlab.backtest.metrics import compute_strategy_metrics
 from marketlab.config import ExperimentConfig
 from marketlab.data.market import load_symbol_frames
@@ -22,6 +22,8 @@ from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
 from marketlab.reports.analytics import (
+    build_daily_exposure,
+    build_group_exposure,
     build_monthly_returns,
     build_strategy_summary,
     build_turnover_costs,
@@ -54,6 +56,8 @@ class ExperimentArtifacts:
     strategy_summary_path: Path
     monthly_returns_path: Path
     turnover_costs_path: Path
+    daily_exposure_path: Path
+    group_exposure_path: Path | None
     report_path: Path | None
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
@@ -90,6 +94,31 @@ class TrainModelsArtifacts:
     model_summary_path: Path
 
 
+def _concat_backtest_results(results: list[BacktestResult]) -> BacktestResult:
+    if not results:
+        raise RuntimeError("No strategy backtest results were generated.")
+
+    return BacktestResult(
+        performance=pd.concat([result.performance for result in results], ignore_index=True),
+        daily_holdings=pd.concat([result.daily_holdings for result in results], ignore_index=True),
+        daily_cash=pd.concat([result.daily_cash for result in results], ignore_index=True),
+    )
+
+
+def _slice_backtest_result(
+    backtest_result: BacktestResult,
+    oos_dates: pd.Index,
+) -> BacktestResult:
+    return BacktestResult(
+        performance=_slice_and_rebase_performance(backtest_result.performance, oos_dates),
+        daily_holdings=backtest_result.daily_holdings.loc[
+            backtest_result.daily_holdings["date"].isin(oos_dates)
+        ].copy(),
+        daily_cash=backtest_result.daily_cash.loc[
+            backtest_result.daily_cash["date"].isin(oos_dates)
+        ].copy(),
+    )
+
 def prepare_data(config: ExperimentConfig) -> tuple[pd.DataFrame, Path]:
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +150,9 @@ def _persist_experiment_outputs(
     config: ExperimentConfig,
     panel_path: Path,
     performance: pd.DataFrame,
+    daily_holdings: pd.DataFrame,
+    daily_cash: pd.DataFrame,
+    symbol_groups: dict[str, str],
     run_dir: Path | None = None,
     model_summary: pd.DataFrame | None = None,
     fold_summary: pd.DataFrame | None = None,
@@ -137,7 +169,13 @@ def _persist_experiment_outputs(
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
-    strategy_summary = build_strategy_summary(performance)
+    daily_exposure = build_daily_exposure(daily_holdings, daily_cash)
+    group_exposure = build_group_exposure(daily_holdings, symbol_groups)
+    strategy_summary = build_strategy_summary(
+        performance,
+        daily_exposure=daily_exposure,
+        group_exposure=group_exposure,
+    )
     monthly_returns = build_monthly_returns(performance)
     turnover_costs = build_turnover_costs(performance)
 
@@ -146,11 +184,18 @@ def _persist_experiment_outputs(
     strategy_summary_path = artifact_run_dir / "strategy_summary.csv"
     monthly_returns_path = artifact_run_dir / "monthly_returns.csv"
     turnover_costs_path = artifact_run_dir / "turnover_costs.csv"
+    daily_exposure_path = artifact_run_dir / "daily_exposure.csv"
     metrics.to_csv(metrics_path, index=False)
     performance.to_csv(performance_path, index=False)
     strategy_summary.to_csv(strategy_summary_path, index=False)
     monthly_returns.to_csv(monthly_returns_path, index=False)
     turnover_costs.to_csv(turnover_costs_path, index=False)
+    daily_exposure.to_csv(daily_exposure_path, index=False)
+
+    group_exposure_path: Path | None = None
+    if not group_exposure.empty:
+        group_exposure_path = artifact_run_dir / "group_exposure.csv"
+        group_exposure.to_csv(group_exposure_path, index=False)
 
     persisted_fold_diagnostics_path = fold_diagnostics_path
     if fold_diagnostics is not None and persisted_fold_diagnostics_path is None:
@@ -251,6 +296,8 @@ def _persist_experiment_outputs(
         strategy_summary_path=strategy_summary_path,
         monthly_returns_path=monthly_returns_path,
         turnover_costs_path=turnover_costs_path,
+        daily_exposure_path=daily_exposure_path,
+        group_exposure_path=group_exposure_path,
         report_path=report_path,
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
@@ -268,7 +315,7 @@ def _persist_experiment_outputs(
     )
 
 
-def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResult:
     featured = add_feature_set(
         panel=panel,
         return_windows=config.features.return_windows,
@@ -277,11 +324,11 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.Dat
         momentum_window=config.features.momentum_window,
     )
 
-    performance_frames: list[pd.DataFrame] = []
+    backtest_results: list[BacktestResult] = []
     if config.baselines.buy_hold:
         weights = buy_hold_weights(featured)
-        performance_frames.append(
-            run_backtest(
+        backtest_results.append(
+            run_backtest_detailed(
                 panel=featured,
                 weights=weights,
                 cost_bps=config.portfolio.costs.bps_per_trade,
@@ -298,8 +345,8 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.Dat
             group_weights=config.baselines.allocation.group_weights,
         )
         if not weights.empty:
-            performance_frames.append(
-                run_backtest(
+            backtest_results.append(
+                run_backtest_detailed(
                     panel=featured,
                     weights=weights,
                     cost_bps=config.portfolio.costs.bps_per_trade,
@@ -313,21 +360,15 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> tuple[pd.Dat
             slow_window=config.baselines.sma.slow_window,
         )
         if not weights.empty:
-            performance_frames.append(
-                run_backtest(
+            backtest_results.append(
+                run_backtest_detailed(
                     panel=featured,
                     weights=weights,
                     cost_bps=config.portfolio.costs.bps_per_trade,
                 )
             )
 
-    if not performance_frames:
-        raise RuntimeError("No baseline strategies are enabled.")
-
-    performance = pd.concat(performance_frames, ignore_index=True)
-    metrics = compute_strategy_metrics(performance)
-    return performance, metrics
-
+    return _concat_backtest_results(backtest_results)
 
 def _shared_oos_dates(
     panel: pd.DataFrame,
@@ -382,8 +423,8 @@ def _run_ml_strategies(
     config: ExperimentConfig,
     panel: pd.DataFrame,
     predictions: pd.DataFrame,
-) -> pd.DataFrame:
-    performance_frames: list[pd.DataFrame] = []
+) -> BacktestResult:
+    backtest_results: list[BacktestResult] = []
 
     for _, model_predictions in predictions.groupby("model_name", sort=True):
         weights = ranking_weights(
@@ -402,19 +443,15 @@ def _run_ml_strategies(
             max_long_exposure=config.portfolio.risk.max_long_exposure,
             max_short_exposure=config.portfolio.risk.max_short_exposure,
         )
-        performance_frames.append(
-            run_backtest(
+        backtest_results.append(
+            run_backtest_detailed(
                 panel=panel,
                 weights=weights,
                 cost_bps=config.portfolio.costs.bps_per_trade,
             )
         )
 
-    if not performance_frames:
-        raise RuntimeError("No ML strategy performance was generated.")
-
-    return pd.concat(performance_frames, ignore_index=True)
-
+    return _concat_backtest_results(backtest_results)
 
 def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
     if not config.models:
@@ -531,23 +568,29 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
 
 def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    performance, _ = run_baselines(config, panel)
+    baseline_outputs = run_baselines(config, panel)
     return _persist_experiment_outputs(
         config=config,
         panel_path=panel_path,
-        performance=performance,
+        performance=baseline_outputs.performance,
+        daily_holdings=baseline_outputs.daily_holdings,
+        daily_cash=baseline_outputs.daily_cash,
+        symbol_groups=config.data.symbol_groups,
     )
 
 
 def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    baseline_performance, _ = run_baselines(config, panel)
+    baseline_outputs = run_baselines(config, panel)
 
     if not config.models:
         return _persist_experiment_outputs(
             config=config,
             panel_path=panel_path,
-            performance=baseline_performance,
+            performance=baseline_outputs.performance,
+            daily_holdings=baseline_outputs.daily_holdings,
+            daily_cash=baseline_outputs.daily_cash,
+            symbol_groups=config.data.symbol_groups,
         )
 
     modeling_dataset = build_weekly_modeling_dataset(panel, config)
@@ -585,7 +628,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     if training_outputs.predictions is None or training_outputs.predictions.empty:
         raise RuntimeError("run-experiment requires fold predictions for ranking.")
 
-    ml_performance = _run_ml_strategies(
+    ml_outputs = _run_ml_strategies(
         config=config,
         panel=panel,
         predictions=training_outputs.predictions,
@@ -596,11 +639,8 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         folds=folds,
         frequency=config.portfolio.ranking.rebalance_frequency,
     )
-    combined_performance = pd.concat(
-        [baseline_performance, ml_performance],
-        ignore_index=True,
-    )
-    oos_performance = _slice_and_rebase_performance(combined_performance, oos_dates)
+    combined_outputs = _concat_backtest_results([baseline_outputs, ml_outputs])
+    oos_outputs = _slice_backtest_result(combined_outputs, oos_dates)
     model_summary = build_model_summary(
         model_metrics=training_outputs.metrics,
         model_manifest=training_outputs.manifest,
@@ -613,7 +653,10 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     return _persist_experiment_outputs(
         config=config,
         panel_path=panel_path,
-        performance=oos_performance,
+        performance=oos_outputs.performance,
+        daily_holdings=oos_outputs.daily_holdings,
+        daily_cash=oos_outputs.daily_cash,
+        symbol_groups=config.data.symbol_groups,
         run_dir=run_dir,
         model_summary=model_summary,
         fold_summary=fold_summary,
@@ -624,6 +667,4 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
-
-
 
