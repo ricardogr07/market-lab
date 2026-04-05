@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, strategy analytics artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -22,7 +22,7 @@ This document ties the current pieces together and records the working rules tha
   - `buy_hold`, `sma`, and config-defined allocation baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
-  - metrics, strategy analytics CSVs, plots, and Markdown reporting
+  - metrics, exposure-aware strategy analytics CSVs, plots, and Markdown reporting
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
   - release automation with a monthly-batching Release PR and a PyPI publish path
@@ -96,6 +96,14 @@ flowchart TD
 ```
 
 The required CI path stays offline and deterministic through tox. The Docker runner is separate, manual, and allowed to exercise the historical real-data smoke config without becoming a required PR gate. Release automation is also separate from required PR CI: normal merges update the open Release PR, and only the Release PR merge cuts a public release.
+## Exposure Analytics Rules
+
+- Exposure analytics are derived from the actual end-of-day drifted book, not from pre-trade targets.
+- `daily_exposure.csv` reports long, short, gross, and net exposure per strategy and date.
+- `cash_weight` is exposure-style slack based on gross exposure.
+- `engine_cash_weight` is the engine's carried cash or collateral weight and can remain large in long-short books.
+- `group_exposure.csv` is only written when `data.symbol_groups` covers the run universe, and it keeps long and short sleeves separate so concentration is not hidden by netting.
+- `strategy_summary.csv` appends average exposure, cash, active-position, and concentration fields without changing the existing leading performance columns.
 
 ## System Map
 
@@ -205,7 +213,7 @@ sequenceDiagram
     B-->>P: metrics table
     P->>SUM: build_model_summary(...) and build_fold_summary(...)
     SUM-->>P: summary tables
-    P->>AN: build_strategy_summary(...) monthly returns turnover costs
+    P->>AN: build_strategy_summary(...) daily and grouped exposure monthly returns turnover costs
     AN-->>P: analytics tables
     P->>R: write_markdown_report(...)
     P->>R: plot_cumulative_returns(...)
@@ -803,6 +811,7 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
+
 
 
 

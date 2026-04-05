@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 WEIGHT_EPSILON = 1e-12
+PERFORMANCE_COLUMNS = [
+    "date",
+    "strategy",
+    "gross_return",
+    "net_return",
+    "turnover",
+    "equity",
+]
+DAILY_HOLDINGS_COLUMNS = ["date", "strategy", "symbol", "weight"]
+DAILY_CASH_COLUMNS = ["date", "strategy", "engine_cash_weight"]
+
+
+@dataclass(slots=True)
+class BacktestResult:
+    performance: pd.DataFrame
+    daily_holdings: pd.DataFrame
+    daily_cash: pd.DataFrame
 
 
 def _advance_weights(
@@ -21,11 +40,13 @@ def _advance_weights(
     return next_asset_weights, next_cash_weight, period_return
 
 
-def run_backtest(
+def _run_backtest_internal(
     panel: pd.DataFrame,
     weights: pd.DataFrame,
     cost_bps: float,
-) -> pd.DataFrame:
+    *,
+    capture_details: bool,
+) -> BacktestResult:
     required_weight_columns = {"strategy", "effective_date", "symbol", "weight"}
     missing = required_weight_columns - set(weights.columns)
     if missing:
@@ -58,7 +79,9 @@ def run_backtest(
     close_weights = pd.Series(0.0, index=symbols, dtype=float)
     close_cash_weight = 1.0
     equity = 1.0
-    rows: list[dict[str, object]] = []
+    performance_rows: list[dict[str, object]] = []
+    holdings_rows: list[dict[str, object]] | None = [] if capture_details else None
+    cash_rows: list[dict[str, object]] | None = [] if capture_details else None
 
     for date in unique_dates:
         date_timestamp = pd.Timestamp(date)
@@ -95,7 +118,7 @@ def run_backtest(
         net_return = gross_return - costs
         equity *= 1.0 + net_return
 
-        rows.append(
+        performance_rows.append(
             {
                 "date": date_timestamp,
                 "strategy": strategy_name,
@@ -105,5 +128,52 @@ def run_backtest(
                 "equity": equity,
             }
         )
+        if holdings_rows is not None and cash_rows is not None:
+            holdings_rows.extend(
+                {
+                    "date": date_timestamp,
+                    "strategy": strategy_name,
+                    "symbol": symbol,
+                    "weight": float(close_weights.loc[symbol]),
+                }
+                for symbol in symbols
+            )
+            cash_rows.append(
+                {
+                    "date": date_timestamp,
+                    "strategy": strategy_name,
+                    "engine_cash_weight": float(close_cash_weight),
+                }
+            )
 
-    return pd.DataFrame(rows)
+    return BacktestResult(
+        performance=pd.DataFrame(performance_rows, columns=PERFORMANCE_COLUMNS),
+        daily_holdings=pd.DataFrame(holdings_rows or [], columns=DAILY_HOLDINGS_COLUMNS),
+        daily_cash=pd.DataFrame(cash_rows or [], columns=DAILY_CASH_COLUMNS),
+    )
+
+
+def run_backtest_detailed(
+    panel: pd.DataFrame,
+    weights: pd.DataFrame,
+    cost_bps: float,
+) -> BacktestResult:
+    return _run_backtest_internal(
+        panel=panel,
+        weights=weights,
+        cost_bps=cost_bps,
+        capture_details=True,
+    )
+
+
+def run_backtest(
+    panel: pd.DataFrame,
+    weights: pd.DataFrame,
+    cost_bps: float,
+) -> pd.DataFrame:
+    return _run_backtest_internal(
+        panel=panel,
+        weights=weights,
+        cost_bps=cost_bps,
+        capture_details=False,
+    ).performance

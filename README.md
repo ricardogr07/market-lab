@@ -148,6 +148,17 @@ Non-default ML strategy variants are named explicitly in experiment outputs, for
 These caps apply only after the current ranking strategy has already selected longs and shorts. MarketLab clips single-name exposure first, then clips group exposure separately for the long and short sleeves, then caps total long exposure, and finally caps total short exposure. Any removed exposure stays in cash; it is never renormalized back into the book.
 
 This remains a narrow structural-control step. The new caps do not change `buy_hold`, `sma`, or allocation baselines, and they do not add benchmark-relative reporting, optimizer methods, or broader portfolio analytics yet. Lower realized volatility or drawdown under a capped ranking strategy may simply reflect lower invested exposure or more cash, not better signal quality.
+## Exposure-Aware Analytics
+
+`backtest` and `run-experiment` now also persist additive exposure analytics alongside the existing return and turnover artifacts.
+
+- `daily_exposure.csv` stores end-of-day drifted long, short, gross, and net exposure for every strategy date.
+- `cash_weight` is exposure-style slack: `max(0, 1 - gross_exposure)`.
+- `engine_cash_weight` is the engine's carried cash or collateral weight, which matters for long-short books where gross exposure can be fully deployed while the engine still carries collateral cash.
+- `group_exposure.csv` is written when `data.symbol_groups` covers the run universe, and it keeps long and short sleeves separate instead of netting them together.
+- `strategy_summary.csv` now appends average exposure, cash, active-position, and concentration fields, and `report.md` includes an `Exposure Summary` section.
+
+These analytics are interpretive, not predictive. Lower drawdown or volatility can simply reflect lower gross exposure or more cash, not better signal quality.
 
 ## Allocation Baselines And Symbol Groups
 
@@ -298,5 +309,6 @@ Before the first automated public release:
 - create the GitHub Actions environment named `pypi`
 
 The first automated public release target remains `v0.1.0`.
+
 
 

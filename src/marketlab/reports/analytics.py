@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from marketlab.backtest.engine import WEIGHT_EPSILON
 from marketlab.backtest.metrics import compute_strategy_metrics
 
 STRATEGY_SUMMARY_COLUMNS = [
@@ -23,6 +24,15 @@ STRATEGY_SUMMARY_COLUMNS = [
     "total_turnover",
     "avg_cost_return",
     "total_cost_return",
+    "avg_long_exposure",
+    "avg_short_exposure",
+    "avg_gross_exposure",
+    "avg_net_exposure",
+    "avg_cash_weight",
+    "avg_engine_cash_weight",
+    "avg_active_positions",
+    "max_position_weight",
+    "max_group_weight",
 ]
 
 MONTHLY_RETURNS_COLUMNS = [
@@ -39,6 +49,29 @@ TURNOVER_COSTS_COLUMNS = [
     "gross_return",
     "net_return",
     "cost_return",
+]
+
+DAILY_EXPOSURE_COLUMNS = [
+    "date",
+    "strategy",
+    "long_exposure",
+    "short_exposure",
+    "gross_exposure",
+    "net_exposure",
+    "cash_weight",
+    "engine_cash_weight",
+    "active_positions",
+    "max_position_weight",
+]
+
+GROUP_EXPOSURE_COLUMNS = [
+    "date",
+    "strategy",
+    "group_name",
+    "long_exposure",
+    "short_exposure",
+    "gross_exposure",
+    "net_exposure",
 ]
 
 
@@ -62,6 +95,74 @@ def _normalized_performance(performance: pd.DataFrame) -> pd.DataFrame:
         performance.copy()
         .assign(date=lambda frame: pd.to_datetime(frame["date"]))
         .sort_values(["strategy", "date"])
+        .reset_index(drop=True)
+    )
+
+
+def _normalized_daily_holdings(daily_holdings: pd.DataFrame) -> pd.DataFrame:
+    _require_columns(
+        daily_holdings,
+        {"date", "strategy", "symbol", "weight"},
+        "Daily holdings frame",
+    )
+    if daily_holdings.empty:
+        return daily_holdings.copy()
+
+    return (
+        daily_holdings.copy()
+        .assign(date=lambda frame: pd.to_datetime(frame["date"]))
+        .sort_values(["strategy", "date", "symbol"])
+        .reset_index(drop=True)
+    )
+
+
+def _normalized_daily_cash(daily_cash: pd.DataFrame) -> pd.DataFrame:
+    _require_columns(
+        daily_cash,
+        {"date", "strategy", "engine_cash_weight"},
+        "Daily cash frame",
+    )
+    if daily_cash.empty:
+        return daily_cash.copy()
+
+    return (
+        daily_cash.copy()
+        .assign(date=lambda frame: pd.to_datetime(frame["date"]))
+        .sort_values(["strategy", "date"])
+        .reset_index(drop=True)
+    )
+
+
+def _normalized_daily_exposure(daily_exposure: pd.DataFrame) -> pd.DataFrame:
+    _require_columns(
+        daily_exposure,
+        set(DAILY_EXPOSURE_COLUMNS),
+        "Daily exposure frame",
+    )
+    if daily_exposure.empty:
+        return daily_exposure.copy()
+
+    return (
+        daily_exposure.copy()
+        .assign(date=lambda frame: pd.to_datetime(frame["date"]))
+        .sort_values(["strategy", "date"])
+        .reset_index(drop=True)
+    )
+
+
+def _normalized_group_exposure(group_exposure: pd.DataFrame) -> pd.DataFrame:
+    _require_columns(
+        group_exposure,
+        set(GROUP_EXPOSURE_COLUMNS),
+        "Group exposure frame",
+    )
+    if group_exposure.empty:
+        return group_exposure.copy()
+
+    return (
+        group_exposure.copy()
+        .assign(date=lambda frame: pd.to_datetime(frame["date"]))
+        .sort_values(["strategy", "date", "group_name"])
         .reset_index(drop=True)
     )
 
@@ -93,7 +194,86 @@ def build_monthly_returns(performance: pd.DataFrame) -> pd.DataFrame:
     return monthly.loc[:, MONTHLY_RETURNS_COLUMNS]
 
 
-def build_strategy_summary(performance: pd.DataFrame) -> pd.DataFrame:
+def build_daily_exposure(
+    daily_holdings: pd.DataFrame,
+    daily_cash: pd.DataFrame,
+) -> pd.DataFrame:
+    holdings = _normalized_daily_holdings(daily_holdings)
+    cash = _normalized_daily_cash(daily_cash)
+    if holdings.empty or cash.empty:
+        return pd.DataFrame(columns=DAILY_EXPOSURE_COLUMNS)
+
+    working = holdings.assign(
+        long_component=lambda frame: frame["weight"].clip(lower=0.0),
+        short_component=lambda frame: (-frame["weight"].clip(upper=0.0)),
+        abs_weight=lambda frame: frame["weight"].abs(),
+        active_flag=lambda frame: frame["weight"].abs().gt(WEIGHT_EPSILON).astype(int),
+    )
+
+    exposure = (
+        working.groupby(["date", "strategy"], as_index=False)
+        .agg(
+            long_exposure=("long_component", "sum"),
+            short_exposure=("short_component", "sum"),
+            active_positions=("active_flag", "sum"),
+            max_position_weight=("abs_weight", "max"),
+        )
+        .sort_values(["strategy", "date"])
+        .reset_index(drop=True)
+    )
+    exposure["gross_exposure"] = exposure["long_exposure"] + exposure["short_exposure"]
+    exposure["net_exposure"] = exposure["long_exposure"] - exposure["short_exposure"]
+    exposure["cash_weight"] = (1.0 - exposure["gross_exposure"]).clip(lower=0.0)
+
+    merged = exposure.merge(
+        cash.loc[:, ["date", "strategy", "engine_cash_weight"]],
+        on=["date", "strategy"],
+        how="inner",
+        validate="one_to_one",
+    )
+    return merged.loc[:, DAILY_EXPOSURE_COLUMNS]
+
+
+def build_group_exposure(
+    daily_holdings: pd.DataFrame,
+    symbol_groups: dict[str, str] | None,
+) -> pd.DataFrame:
+    if not symbol_groups:
+        return pd.DataFrame(columns=GROUP_EXPOSURE_COLUMNS)
+
+    holdings = _normalized_daily_holdings(daily_holdings)
+    if holdings.empty:
+        return pd.DataFrame(columns=GROUP_EXPOSURE_COLUMNS)
+
+    covered_symbols = set(symbol_groups)
+    active_symbols = set(holdings["symbol"].unique())
+    if not active_symbols.issubset(covered_symbols):
+        return pd.DataFrame(columns=GROUP_EXPOSURE_COLUMNS)
+
+    working = holdings.assign(
+        group_name=lambda frame: frame["symbol"].map(symbol_groups),
+        long_component=lambda frame: frame["weight"].clip(lower=0.0),
+        short_component=lambda frame: (-frame["weight"].clip(upper=0.0)),
+    )
+    grouped = (
+        working.groupby(["date", "strategy", "group_name"], as_index=False)
+        .agg(
+            long_exposure=("long_component", "sum"),
+            short_exposure=("short_component", "sum"),
+        )
+        .sort_values(["strategy", "date", "group_name"])
+        .reset_index(drop=True)
+    )
+    grouped["gross_exposure"] = grouped["long_exposure"] + grouped["short_exposure"]
+    grouped["net_exposure"] = grouped["long_exposure"] - grouped["short_exposure"]
+    return grouped.loc[:, GROUP_EXPOSURE_COLUMNS]
+
+
+def build_strategy_summary(
+    performance: pd.DataFrame,
+    daily_exposure: pd.DataFrame | None = None,
+    group_exposure: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     working = _normalized_performance(performance)
     if working.empty:
         return pd.DataFrame(columns=STRATEGY_SUMMARY_COLUMNS)
@@ -143,4 +323,62 @@ def build_strategy_summary(performance: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     summary["cost_drag"] = summary["gross_cumulative_return"] - summary["cumulative_return"]
+
+    if daily_exposure is None:
+        exposure_summary = pd.DataFrame(
+            {
+                "strategy": summary["strategy"],
+                "avg_long_exposure": float("nan"),
+                "avg_short_exposure": float("nan"),
+                "avg_gross_exposure": float("nan"),
+                "avg_net_exposure": float("nan"),
+                "avg_cash_weight": float("nan"),
+                "avg_engine_cash_weight": float("nan"),
+                "avg_active_positions": float("nan"),
+                "max_position_weight": float("nan"),
+            }
+        )
+    else:
+        normalized_daily_exposure = _normalized_daily_exposure(daily_exposure)
+        exposure_summary = (
+            normalized_daily_exposure.groupby("strategy", as_index=False)
+            .agg(
+                avg_long_exposure=("long_exposure", "mean"),
+                avg_short_exposure=("short_exposure", "mean"),
+                avg_gross_exposure=("gross_exposure", "mean"),
+                avg_net_exposure=("net_exposure", "mean"),
+                avg_cash_weight=("cash_weight", "mean"),
+                avg_engine_cash_weight=("engine_cash_weight", "mean"),
+                avg_active_positions=("active_positions", "mean"),
+                max_position_weight=("max_position_weight", "max"),
+            )
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+
+    if group_exposure is None or group_exposure.empty:
+        group_summary = pd.DataFrame(
+            {
+                "strategy": summary["strategy"],
+                "max_group_weight": float("nan"),
+            }
+        )
+    else:
+        normalized_group_exposure = _normalized_group_exposure(group_exposure).copy()
+        normalized_group_exposure["same_side_group_weight"] = normalized_group_exposure[
+            ["long_exposure", "short_exposure"]
+        ].max(axis=1)
+        group_summary = (
+            normalized_group_exposure.groupby("strategy", as_index=False)
+            .agg(max_group_weight=("same_side_group_weight", "max"))
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+
+    summary = (
+        summary.merge(exposure_summary, on="strategy", how="left", validate="one_to_one")
+        .merge(group_summary, on="strategy", how="left", validate="one_to_one")
+        .sort_values("strategy")
+        .reset_index(drop=True)
+    )
     return summary.loc[:, STRATEGY_SUMMARY_COLUMNS]
