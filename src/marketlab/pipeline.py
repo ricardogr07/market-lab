@@ -396,6 +396,11 @@ def _run_ml_strategies(
             mode=config.portfolio.ranking.mode,
             min_score_threshold=config.portfolio.ranking.min_score_threshold,
             cash_when_underfilled=config.portfolio.ranking.cash_when_underfilled,
+            symbol_groups=config.data.symbol_groups,
+            max_position_weight=config.portfolio.risk.max_position_weight,
+            max_group_weight=config.portfolio.risk.max_group_weight,
+            max_long_exposure=config.portfolio.risk.max_long_exposure,
+            max_short_exposure=config.portfolio.risk.max_short_exposure,
         )
         performance_frames.append(
             run_backtest(

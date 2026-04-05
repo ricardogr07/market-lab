@@ -12,6 +12,7 @@ def _write_config(
     path: Path,
     *,
     data: dict[str, object] | None = None,
+    portfolio: dict[str, object] | None = None,
     baselines: dict[str, object] | None = None,
 ) -> Path:
     payload = {
@@ -26,6 +27,8 @@ def _write_config(
     }
     if data is not None:
         payload["data"].update(data)
+    if portfolio is not None:
+        payload["portfolio"] = portfolio
     if baselines is not None:
         payload["baselines"] = baselines
 
@@ -43,6 +46,10 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.baselines.allocation.mode == "equal"
     assert config.baselines.allocation.symbol_weights == {}
     assert config.baselines.allocation.group_weights == {}
+    assert config.portfolio.risk.max_position_weight is None
+    assert config.portfolio.risk.max_group_weight is None
+    assert config.portfolio.risk.max_long_exposure is None
+    assert config.portfolio.risk.max_short_exposure is None
 
 
 def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
@@ -123,3 +130,89 @@ def test_load_config_accepts_valid_group_weight_allocations(tmp_path: Path) -> N
         "growth": 0.75,
         "defensive": 0.25,
     }
+
+
+def test_load_config_rejects_risk_caps_outside_unit_interval(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        portfolio={
+            "risk": {
+                "max_position_weight": 1.2,
+            }
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="portfolio.risk.max_position_weight must be between 0.0 and 1.0",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_rejects_group_cap_without_full_symbol_groups(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={
+            "symbol_groups": {
+                "AAA": "growth",
+            }
+        },
+        portfolio={
+            "risk": {
+                "max_group_weight": 0.30,
+            }
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="portfolio.risk.max_group_weight requires data.symbol_groups for all data.symbols: BBB",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_rejects_short_cap_in_long_only_mode(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        portfolio={
+            "ranking": {
+                "mode": "long_only",
+            },
+            "risk": {
+                "max_short_exposure": 0.25,
+            },
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="portfolio.risk.max_short_exposure is not allowed when portfolio.ranking.mode='long_only'",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_accepts_valid_risk_caps(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={
+            "symbol_groups": {
+                "AAA": "growth",
+                "BBB": "defensive",
+            }
+        },
+        portfolio={
+            "risk": {
+                "max_position_weight": 0.35,
+                "max_group_weight": 0.40,
+                "max_long_exposure": 0.60,
+                "max_short_exposure": 0.45,
+            }
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.portfolio.risk.max_position_weight == pytest.approx(0.35)
+    assert config.portfolio.risk.max_group_weight == pytest.approx(0.40)
+    assert config.portfolio.risk.max_long_exposure == pytest.approx(0.60)
+    assert config.portfolio.risk.max_short_exposure == pytest.approx(0.45)

@@ -15,7 +15,7 @@ This document ties the current pieces together and records the working rules tha
   - walk-forward fold generation with additive guardrails, embargo controls, and skipped-fold diagnostics
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
-  - score-to-weight ranking strategies for ML portfolios, including long-short, long-only, and confidence-gated cash-underfilled variants
+  - score-to-weight ranking strategies for ML portfolios, including long-short, long-only, confidence-gated cash-underfilled variants, and additive exposure caps
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
@@ -297,6 +297,7 @@ classDiagram
 
     class PortfolioConfig {
       +ranking: RankingConfig
+      +risk: RiskConfig
       +costs: CostsConfig
     }
 
@@ -308,6 +309,13 @@ classDiagram
       +mode: str
       +min_score_threshold: float
       +cash_when_underfilled: bool
+    }
+
+    class RiskConfig {
+      +max_position_weight: float | None
+      +max_group_weight: float | None
+      +max_long_exposure: float | None
+      +max_short_exposure: float | None
     }
 
     class CostsConfig {
@@ -411,6 +419,7 @@ classDiagram
     ExperimentConfig *-- ArtifactsConfig
     ExperimentConfig *-- ModelSpec
     PortfolioConfig *-- RankingConfig
+    PortfolioConfig *-- RiskConfig
     PortfolioConfig *-- CostsConfig
     BaselinesConfig *-- SMAConfig
     BaselinesConfig *-- AllocationConfig
@@ -676,6 +685,7 @@ Best practice:
 
 - Turns one model's fold predictions into a canonical `WeightsFrame`.
 - Supports `long_short` and `long_only` execution modes plus additive score-threshold gating.
+- Applies optional post-selection risk caps for single-name, group, and side exposure in weight space.
 - Uses `symbol` as the deterministic tie-breaker for both long and short candidate ranking.
 - Emits full-symbol weight rows with explicit zeros for non-selected names and can either zero the full basket or leave missing exposure in cash when the basket is underfilled.
 - Adds zero-weight boundary rows at the next rebalance `effective_date` when a later fold does not already begin there.

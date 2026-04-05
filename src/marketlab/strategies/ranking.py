@@ -67,15 +67,23 @@ def _validate_threshold(min_score_threshold: float) -> float:
     return float(min_score_threshold)
 
 
-def _strategy_threshold_token(min_score_threshold: float) -> str:
-    threshold_text = f"{min_score_threshold:.6f}".rstrip("0")
-    if threshold_text.endswith("."):
-        threshold_text += "0"
-    if "." in threshold_text and len(threshold_text.split(".", maxsplit=1)[1]) == 1:
-        threshold_text += "0"
-    if "." not in threshold_text:
-        threshold_text += ".00"
-    return threshold_text.replace(".", "p")
+def _validate_cap(label: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{label} must be between 0.0 and 1.0.")
+    return float(value)
+
+
+def _strategy_value_token(value: float) -> str:
+    value_text = f"{value:.6f}".rstrip("0")
+    if value_text.endswith("."):
+        value_text += "0"
+    if "." in value_text and len(value_text.split(".", maxsplit=1)[1]) == 1:
+        value_text += "0"
+    if "." not in value_text:
+        value_text += ".00"
+    return value_text.replace(".", "p")
 
 
 def _strategy_name(
@@ -83,17 +91,51 @@ def _strategy_name(
     mode: str,
     min_score_threshold: float,
     cash_when_underfilled: bool,
+    max_position_weight: float | None,
+    max_group_weight: float | None,
+    max_long_exposure: float | None,
+    max_short_exposure: float | None,
 ) -> str:
     base_name = f"ml_{model_name}"
     if mode == "long_short" and min_score_threshold == 0.0 and not cash_when_underfilled:
-        return base_name
+        strategy_name = base_name
+    else:
+        parts = [base_name, mode]
+        if min_score_threshold > 0.0:
+            parts.append(f"thr{_strategy_value_token(min_score_threshold)}")
+        if cash_when_underfilled:
+            parts.append("cash")
+        strategy_name = "__".join(parts)
 
-    parts = [base_name, mode]
-    if min_score_threshold > 0.0:
-        parts.append(f"thr{_strategy_threshold_token(min_score_threshold)}")
-    if cash_when_underfilled:
-        parts.append("cash")
-    return "__".join(parts)
+    cap_parts: list[str] = []
+    if max_position_weight is not None:
+        cap_parts.append(f"poscap{_strategy_value_token(max_position_weight)}")
+    if max_group_weight is not None:
+        cap_parts.append(f"groupcap{_strategy_value_token(max_group_weight)}")
+    if max_long_exposure is not None:
+        cap_parts.append(f"longcap{_strategy_value_token(max_long_exposure)}")
+    if max_short_exposure is not None:
+        cap_parts.append(f"shortcap{_strategy_value_token(max_short_exposure)}")
+
+    if not cap_parts:
+        return strategy_name
+    return "__".join([strategy_name, *cap_parts])
+
+
+def _weights_to_frame(
+    strategy_name: str,
+    effective_date: pd.Timestamp,
+    symbols: list[str],
+    weights: dict[str, float],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": strategy_name,
+            "effective_date": effective_date,
+            "symbol": symbols,
+            "weight": [weights[symbol] for symbol in symbols],
+        }
+    )
 
 
 def _zero_weight_frame(
@@ -101,14 +143,130 @@ def _zero_weight_frame(
     effective_date: pd.Timestamp,
     symbols: list[str],
 ) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "strategy": strategy_name,
-            "effective_date": pd.Timestamp(effective_date),
-            "symbol": symbols,
-            "weight": [0.0] * len(symbols),
-        }
+    return _weights_to_frame(
+        strategy_name,
+        pd.Timestamp(effective_date),
+        symbols,
+        {symbol: 0.0 for symbol in symbols},
     )
+
+
+def _clip_position_weights(
+    weights: dict[str, float],
+    max_position_weight: float | None,
+) -> dict[str, float]:
+    if max_position_weight is None:
+        return dict(weights)
+
+    clipped: dict[str, float] = {}
+    for symbol, weight in weights.items():
+        if weight > 0.0:
+            clipped[symbol] = min(weight, max_position_weight)
+        elif weight < 0.0:
+            clipped[symbol] = -min(abs(weight), max_position_weight)
+        else:
+            clipped[symbol] = 0.0
+    return clipped
+
+
+def _clip_group_weights(
+    weights: dict[str, float],
+    symbol_groups: dict[str, str],
+    max_group_weight: float | None,
+) -> dict[str, float]:
+    if max_group_weight is None:
+        return dict(weights)
+
+    clipped = dict(weights)
+    for side in (1.0, -1.0):
+        group_members: dict[str, list[str]] = {}
+        for symbol, weight in clipped.items():
+            if side > 0.0 and weight <= 0.0:
+                continue
+            if side < 0.0 and weight >= 0.0:
+                continue
+            group_name = symbol_groups[symbol]
+            group_members.setdefault(group_name, []).append(symbol)
+
+        for symbols_in_group in group_members.values():
+            group_total = sum(abs(clipped[symbol]) for symbol in symbols_in_group)
+            if group_total <= max_group_weight or group_total == 0.0:
+                continue
+            scale = max_group_weight / group_total
+            for symbol in symbols_in_group:
+                clipped[symbol] *= scale
+    return clipped
+
+
+def _clip_side_exposure(
+    weights: dict[str, float],
+    *,
+    positive_side: bool,
+    cap: float | None,
+) -> dict[str, float]:
+    if cap is None:
+        return dict(weights)
+
+    clipped = dict(weights)
+    if positive_side:
+        side_total = sum(weight for weight in clipped.values() if weight > 0.0)
+        if side_total <= cap or side_total == 0.0:
+            return clipped
+        scale = cap / side_total
+        for symbol, weight in clipped.items():
+            if weight > 0.0:
+                clipped[symbol] = weight * scale
+        return clipped
+
+    side_total = sum(abs(weight) for weight in clipped.values() if weight < 0.0)
+    if side_total <= cap or side_total == 0.0:
+        return clipped
+    scale = cap / side_total
+    for symbol, weight in clipped.items():
+        if weight < 0.0:
+            clipped[symbol] = weight * scale
+    return clipped
+
+
+def _validated_symbol_groups(
+    symbols: list[str],
+    symbol_groups: dict[str, str] | None,
+    max_group_weight: float | None,
+) -> dict[str, str]:
+    resolved_symbol_groups = symbol_groups or {}
+    if max_group_weight is None:
+        return resolved_symbol_groups
+
+    missing_group_symbols = sorted(set(symbols) - set(resolved_symbol_groups))
+    if missing_group_symbols:
+        joined = ", ".join(missing_group_symbols)
+        raise ValueError(
+            "Ranking max_group_weight requires symbol_groups for all symbols: "
+            f"{joined}"
+        )
+    return {symbol: resolved_symbol_groups[symbol] for symbol in symbols}
+
+
+def _apply_risk_caps(
+    weights: dict[str, float],
+    *,
+    symbols: list[str],
+    mode: str,
+    symbol_groups: dict[str, str] | None,
+    max_position_weight: float | None,
+    max_group_weight: float | None,
+    max_long_exposure: float | None,
+    max_short_exposure: float | None,
+) -> dict[str, float]:
+    if mode == "long_only" and max_short_exposure is not None:
+        raise ValueError("Ranking max_short_exposure is not allowed in long_only mode.")
+
+    clipped = _clip_position_weights(weights, max_position_weight)
+    resolved_symbol_groups = _validated_symbol_groups(symbols, symbol_groups, max_group_weight)
+    clipped = _clip_group_weights(clipped, resolved_symbol_groups, max_group_weight)
+    clipped = _clip_side_exposure(clipped, positive_side=True, cap=max_long_exposure)
+    clipped = _clip_side_exposure(clipped, positive_side=False, cap=max_short_exposure)
+    return clipped
 
 
 def _weight_frame(
@@ -122,6 +280,11 @@ def _weight_frame(
     long_n: int,
     short_n: int,
     cash_when_underfilled: bool,
+    symbol_groups: dict[str, str] | None,
+    max_position_weight: float | None,
+    max_group_weight: float | None,
+    max_long_exposure: float | None,
+    max_short_exposure: float | None,
 ) -> pd.DataFrame:
     if mode == "long_only":
         if len(long_symbols) != long_n and not cash_when_underfilled:
@@ -131,14 +294,17 @@ def _weight_frame(
         long_weight = 1.0 / float(long_n)
         for symbol in long_symbols:
             weights[symbol] = long_weight
-        return pd.DataFrame(
-            {
-                "strategy": strategy_name,
-                "effective_date": effective_date,
-                "symbol": symbols,
-                "weight": [weights[symbol] for symbol in symbols],
-            }
+        weights = _apply_risk_caps(
+            weights,
+            symbols=symbols,
+            mode=mode,
+            symbol_groups=symbol_groups,
+            max_position_weight=max_position_weight,
+            max_group_weight=max_group_weight,
+            max_long_exposure=max_long_exposure,
+            max_short_exposure=max_short_exposure,
         )
+        return _weights_to_frame(strategy_name, effective_date, symbols, weights)
 
     if (len(long_symbols) != long_n or len(short_symbols) != short_n) and not cash_when_underfilled:
         return _zero_weight_frame(strategy_name, effective_date, symbols)
@@ -151,14 +317,17 @@ def _weight_frame(
     for symbol in short_symbols:
         weights[symbol] = short_weight
 
-    return pd.DataFrame(
-        {
-            "strategy": strategy_name,
-            "effective_date": effective_date,
-            "symbol": symbols,
-            "weight": [weights[symbol] for symbol in symbols],
-        }
+    weights = _apply_risk_caps(
+        weights,
+        symbols=symbols,
+        mode=mode,
+        symbol_groups=symbol_groups,
+        max_position_weight=max_position_weight,
+        max_group_weight=max_group_weight,
+        max_long_exposure=max_long_exposure,
+        max_short_exposure=max_short_exposure,
     )
+    return _weights_to_frame(strategy_name, effective_date, symbols, weights)
 
 
 def _rank_signal_rows(
@@ -171,6 +340,11 @@ def _rank_signal_rows(
     mode: str,
     min_score_threshold: float,
     cash_when_underfilled: bool,
+    symbol_groups: dict[str, str] | None,
+    max_position_weight: float | None,
+    max_group_weight: float | None,
+    max_long_exposure: float | None,
+    max_short_exposure: float | None,
 ) -> pd.DataFrame:
     effective_dates = signal_rows["effective_date"].drop_duplicates().tolist()
     if len(effective_dates) != 1:
@@ -194,6 +368,11 @@ def _rank_signal_rows(
             long_n=long_n,
             short_n=short_n,
             cash_when_underfilled=cash_when_underfilled,
+            symbol_groups=symbol_groups,
+            max_position_weight=max_position_weight,
+            max_group_weight=max_group_weight,
+            max_long_exposure=max_long_exposure,
+            max_short_exposure=max_short_exposure,
         )
 
     short_threshold = 1.0 - min_score_threshold
@@ -215,6 +394,11 @@ def _rank_signal_rows(
         long_n=long_n,
         short_n=short_n,
         cash_when_underfilled=cash_when_underfilled,
+        symbol_groups=symbol_groups,
+        max_position_weight=max_position_weight,
+        max_group_weight=max_group_weight,
+        max_long_exposure=max_long_exposure,
+        max_short_exposure=max_short_exposure,
     )
 
 
@@ -256,9 +440,18 @@ def generate_weights(
     mode: str = "long_short",
     min_score_threshold: float = 0.0,
     cash_when_underfilled: bool = False,
+    symbol_groups: dict[str, str] | None = None,
+    max_position_weight: float | None = None,
+    max_group_weight: float | None = None,
+    max_long_exposure: float | None = None,
+    max_short_exposure: float | None = None,
 ) -> pd.DataFrame:
     mode = _validate_mode(mode)
     min_score_threshold = _validate_threshold(min_score_threshold)
+    max_position_weight = _validate_cap("Ranking max_position_weight", max_position_weight)
+    max_group_weight = _validate_cap("Ranking max_group_weight", max_group_weight)
+    max_long_exposure = _validate_cap("Ranking max_long_exposure", max_long_exposure)
+    max_short_exposure = _validate_cap("Ranking max_short_exposure", max_short_exposure)
     if long_n < 1:
         raise ValueError("long_n must be at least 1.")
     if mode == "long_short" and short_n < 1:
@@ -278,6 +471,10 @@ def generate_weights(
         mode=mode,
         min_score_threshold=min_score_threshold,
         cash_when_underfilled=cash_when_underfilled,
+        max_position_weight=max_position_weight,
+        max_group_weight=max_group_weight,
+        max_long_exposure=max_long_exposure,
+        max_short_exposure=max_short_exposure,
     )
     weight_frames = [
         _rank_signal_rows(
@@ -289,6 +486,11 @@ def generate_weights(
             mode=mode,
             min_score_threshold=min_score_threshold,
             cash_when_underfilled=cash_when_underfilled,
+            symbol_groups=symbol_groups,
+            max_position_weight=max_position_weight,
+            max_group_weight=max_group_weight,
+            max_long_exposure=max_long_exposure,
+            max_short_exposure=max_short_exposure,
         )
         for (_, _), signal_rows in working_predictions.groupby(["signal_date", "effective_date"], sort=True)
     ]

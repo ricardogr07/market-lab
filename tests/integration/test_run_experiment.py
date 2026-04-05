@@ -59,6 +59,7 @@ def _write_run_experiment_config(
     *,
     walk_forward: dict[str, int | float] | None = None,
     ranking: dict[str, object] | None = None,
+    risk: dict[str, object] | None = None,
     symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
@@ -141,6 +142,7 @@ def _write_run_experiment_config(
             },
             "portfolio": {
                 "ranking": ranking_payload,
+                "risk": risk or {},
                 "costs": {"bps_per_trade": 10},
             },
             "baselines": baselines_payload,
@@ -568,6 +570,73 @@ def test_run_experiment_supports_single_symbol_long_only_timing_runs(tmp_path: P
     assert "ml_logistic_regression__long_only" in report_text
     assert "- Best model by mean top-bucket return:" in report_text
 
+
+
+
+def test_run_experiment_supports_capped_long_short_strategy_variants(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_groups={
+            "AAA": "growth",
+            "BBB": "growth",
+            "CCC": "defensive",
+            "DDD": "defensive",
+        },
+        risk={
+            "max_position_weight": 0.20,
+            "max_group_weight": 0.30,
+            "max_long_exposure": 0.40,
+            "max_short_exposure": 0.40,
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategy = (
+        "ml_logistic_regression__poscap0p20__groupcap0p30__longcap0p40__shortcap0p40"
+    )
+    assert set(metrics["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert set(performance["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert set(strategy_summary["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert expected_strategy in report_text
+
+
+def test_run_experiment_supports_capped_long_only_strategy_variants(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        ranking={
+            "mode": "long_only",
+        },
+        risk={
+            "max_long_exposure": 0.60,
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategy = "ml_logistic_regression__long_only__longcap0p60"
+    assert set(metrics["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert set(performance["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert set(strategy_summary["strategy"]) == {"buy_hold", "sma", expected_strategy}
+    assert expected_strategy in report_text
 
 def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
