@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from marketlab.backtest.engine import WEIGHT_EPSILON
@@ -33,6 +35,14 @@ STRATEGY_SUMMARY_COLUMNS = [
     "avg_active_positions",
     "max_position_weight",
     "max_group_weight",
+    "benchmark_strategy",
+    "excess_cumulative_return",
+    "annualized_excess_return",
+    "tracking_error",
+    "information_ratio",
+    "correlation_to_benchmark",
+    "up_capture",
+    "down_capture",
 ]
 
 MONTHLY_RETURNS_COLUMNS = [
@@ -72,6 +82,18 @@ GROUP_EXPOSURE_COLUMNS = [
     "short_exposure",
     "gross_exposure",
     "net_exposure",
+]
+
+BENCHMARK_RELATIVE_COLUMNS = [
+    "date",
+    "strategy",
+    "benchmark_strategy",
+    "strategy_net_return",
+    "benchmark_net_return",
+    "excess_return",
+    "strategy_equity",
+    "benchmark_equity",
+    "relative_equity",
 ]
 
 
@@ -163,6 +185,23 @@ def _normalized_group_exposure(group_exposure: pd.DataFrame) -> pd.DataFrame:
         group_exposure.copy()
         .assign(date=lambda frame: pd.to_datetime(frame["date"]))
         .sort_values(["strategy", "date", "group_name"])
+        .reset_index(drop=True)
+    )
+
+
+def _normalized_benchmark_relative(benchmark_relative: pd.DataFrame) -> pd.DataFrame:
+    _require_columns(
+        benchmark_relative,
+        set(BENCHMARK_RELATIVE_COLUMNS),
+        "Benchmark-relative frame",
+    )
+    if benchmark_relative.empty:
+        return benchmark_relative.copy()
+
+    return (
+        benchmark_relative.copy()
+        .assign(date=lambda frame: pd.to_datetime(frame["date"]))
+        .sort_values(["strategy", "date"])
         .reset_index(drop=True)
     )
 
@@ -269,10 +308,84 @@ def build_group_exposure(
     return grouped.loc[:, GROUP_EXPOSURE_COLUMNS]
 
 
+def build_benchmark_relative(
+    performance: pd.DataFrame,
+    benchmark_strategy: str,
+) -> pd.DataFrame:
+    working = _normalized_performance(performance)
+    if working.empty or benchmark_strategy == "":
+        return pd.DataFrame(columns=BENCHMARK_RELATIVE_COLUMNS)
+
+    strategies = working["strategy"].drop_duplicates().tolist()
+    if benchmark_strategy not in set(strategies):
+        available = ", ".join(sorted(strategies))
+        raise ValueError(
+            "evaluation.benchmark_strategy='"
+            f"{benchmark_strategy}' is not present in run strategies. Available strategies: {available}"
+        )
+
+    benchmark_frame = (
+        working.loc[working["strategy"] == benchmark_strategy, ["date", "net_return", "equity"]]
+        .rename(
+            columns={
+                "net_return": "benchmark_net_return",
+                "equity": "benchmark_equity",
+            }
+        )
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    benchmark_relative = (
+        working.loc[:, ["date", "strategy", "net_return", "equity"]]
+        .rename(
+            columns={
+                "net_return": "strategy_net_return",
+                "equity": "strategy_equity",
+            }
+        )
+        .merge(
+            benchmark_frame,
+            on="date",
+            how="inner",
+            validate="many_to_one",
+        )
+        .sort_values(["strategy", "date"])
+        .reset_index(drop=True)
+    )
+    benchmark_relative["benchmark_strategy"] = benchmark_strategy
+    benchmark_relative["excess_return"] = (
+        benchmark_relative["strategy_net_return"] - benchmark_relative["benchmark_net_return"]
+    )
+    benchmark_relative["relative_equity"] = (
+        benchmark_relative["strategy_equity"] / benchmark_relative["benchmark_equity"]
+    )
+    return benchmark_relative.loc[:, BENCHMARK_RELATIVE_COLUMNS]
+
+
+def _capture_ratio(frame: pd.DataFrame, *, direction: str) -> float:
+    if direction == "up":
+        subset = frame.loc[frame["benchmark_net_return"] > 0.0]
+    else:
+        subset = frame.loc[frame["benchmark_net_return"] < 0.0]
+
+    if subset.empty:
+        return float("nan")
+
+    benchmark_return = float((1.0 + subset["benchmark_net_return"]).prod() - 1.0)
+    if abs(benchmark_return) <= WEIGHT_EPSILON:
+        return float("nan")
+
+    strategy_return = float((1.0 + subset["strategy_net_return"]).prod() - 1.0)
+    return strategy_return / benchmark_return
+
+
 def build_strategy_summary(
     performance: pd.DataFrame,
     daily_exposure: pd.DataFrame | None = None,
     group_exposure: pd.DataFrame | None = None,
+    benchmark_relative: pd.DataFrame | None = None,
+    benchmark_strategy: str = "",
 ) -> pd.DataFrame:
     working = _normalized_performance(performance)
     if working.empty:
@@ -375,9 +488,63 @@ def build_strategy_summary(
             .reset_index(drop=True)
         )
 
+    if benchmark_strategy == "" or benchmark_relative is None or benchmark_relative.empty:
+        benchmark_summary = pd.DataFrame(
+            {
+                "strategy": summary["strategy"],
+                "benchmark_strategy": "",
+                "excess_cumulative_return": float("nan"),
+                "annualized_excess_return": float("nan"),
+                "tracking_error": float("nan"),
+                "information_ratio": float("nan"),
+                "correlation_to_benchmark": float("nan"),
+                "up_capture": float("nan"),
+                "down_capture": float("nan"),
+            }
+        )
+    else:
+        normalized_benchmark_relative = _normalized_benchmark_relative(benchmark_relative)
+
+        def _benchmark_summary_row(frame: pd.DataFrame) -> pd.Series:
+            frame = frame.sort_values("date").reset_index(drop=True)
+            trading_days = len(frame)
+            relative_equity = float(frame["relative_equity"].iloc[-1]) if trading_days else float("nan")
+            tracking_error = float(frame["excess_return"].std(ddof=0) * math.sqrt(252.0))
+            information_ratio = float("nan")
+            if tracking_error > WEIGHT_EPSILON:
+                information_ratio = float(frame["excess_return"].mean() * 252.0 / tracking_error)
+
+            return pd.Series(
+                {
+                    "benchmark_strategy": str(frame["benchmark_strategy"].iat[0]),
+                    "excess_cumulative_return": relative_equity - 1.0,
+                    "annualized_excess_return": (
+                        float((relative_equity ** (252.0 / trading_days)) - 1.0)
+                        if trading_days and relative_equity > 0.0
+                        else float("nan")
+                    ),
+                    "tracking_error": tracking_error,
+                    "information_ratio": information_ratio,
+                    "correlation_to_benchmark": float(
+                        frame["strategy_net_return"].corr(frame["benchmark_net_return"])
+                    ),
+                    "up_capture": _capture_ratio(frame, direction="up"),
+                    "down_capture": _capture_ratio(frame, direction="down"),
+                }
+            )
+
+        benchmark_summary = (
+            normalized_benchmark_relative.groupby("strategy", sort=False)
+            .apply(_benchmark_summary_row, include_groups=False)
+            .reset_index()
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+
     summary = (
         summary.merge(exposure_summary, on="strategy", how="left", validate="one_to_one")
         .merge(group_summary, on="strategy", how="left", validate="one_to_one")
+        .merge(benchmark_summary, on="strategy", how="left", validate="one_to_one")
         .sort_values("strategy")
         .reset_index(drop=True)
     )
