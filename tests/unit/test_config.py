@@ -216,3 +216,4 @@ def test_load_config_accepts_valid_risk_caps(tmp_path: Path) -> None:
     assert config.portfolio.risk.max_group_weight == pytest.approx(0.40)
     assert config.portfolio.risk.max_long_exposure == pytest.approx(0.60)
     assert config.portfolio.risk.max_short_exposure == pytest.approx(0.45)
+

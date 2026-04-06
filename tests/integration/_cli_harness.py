@@ -24,6 +24,9 @@ from marketlab.models.evaluation import (
     THRESHOLD_DIAGNOSTICS_COLUMNS as _THRESHOLD_DIAGNOSTICS_COLUMNS,
 )
 from marketlab.reports.analytics import (
+    BENCHMARK_RELATIVE_COLUMNS as _BENCHMARK_RELATIVE_COLUMNS,
+)
+from marketlab.reports.analytics import (
     DAILY_EXPOSURE_COLUMNS as _DAILY_EXPOSURE_COLUMNS,
 )
 from marketlab.reports.analytics import (
@@ -56,6 +59,7 @@ RANKING_DIAGNOSTICS_COLUMNS = list(_RANKING_DIAGNOSTICS_COLUMNS)
 CALIBRATION_DIAGNOSTICS_COLUMNS = list(_CALIBRATION_DIAGNOSTICS_COLUMNS)
 SCORE_HISTOGRAM_COLUMNS = list(_SCORE_HISTOGRAM_COLUMNS)
 THRESHOLD_DIAGNOSTICS_COLUMNS = list(_THRESHOLD_DIAGNOSTICS_COLUMNS)
+BENCHMARK_RELATIVE_COLUMNS = list(_BENCHMARK_RELATIVE_COLUMNS)
 DAILY_EXPOSURE_COLUMNS = list(_DAILY_EXPOSURE_COLUMNS)
 GROUP_EXPOSURE_COLUMNS = list(_GROUP_EXPOSURE_COLUMNS)
 MONTHLY_RETURNS_COLUMNS = list(_MONTHLY_RETURNS_COLUMNS)
@@ -217,3 +221,4 @@ def latest_run_dir(run_root: Path) -> Path:
     run_dirs = sorted(path for path in run_root.iterdir() if path.is_dir())
     assert run_dirs, f"No run directories exist under {run_root}"
     return run_dirs[-1]
+

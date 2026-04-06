@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -64,6 +64,7 @@ def _write_run_experiment_config(
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
     models: list[dict[str, str]] | None = None,
+    evaluation: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
     resolved_symbol_specs = symbol_specs or (
@@ -149,6 +150,7 @@ def _write_run_experiment_config(
             "models": resolved_models,
             "evaluation": {
                 "walk_forward": walk_forward_payload,
+                **(evaluation or {}),
             },
             "artifacts": {
                 "output_dir": str(tmp_path / "runs"),
@@ -166,6 +168,7 @@ def _write_backtest_config(
     *,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
+    evaluation: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(load_fixture_panel(), cache_dir / "panel.csv")
@@ -200,6 +203,7 @@ def _write_backtest_config(
                 "costs": {"bps_per_trade": 10},
             },
             "baselines": baselines_payload,
+            "evaluation": evaluation or {},
             "artifacts": {
                 "output_dir": str(tmp_path / "runs"),
                 "save_predictions": False,
@@ -209,7 +213,6 @@ def _write_backtest_config(
             },
         },
     )
-
 def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(tmp_path)
 
@@ -674,4 +677,9 @@ def test_run_experiment_supports_gated_cash_strategy_variants(tmp_path: Path) ->
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert "ml_logistic_regression__long_short__thr0p99__cash" in report_text
     assert "ml_logistic_l1__long_short__thr0p99__cash" in report_text
+
+
+
+
+
 

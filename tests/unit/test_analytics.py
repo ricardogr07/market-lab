@@ -4,11 +4,13 @@ import pandas as pd
 import pytest
 
 from marketlab.reports.analytics import (
+    BENCHMARK_RELATIVE_COLUMNS,
     DAILY_EXPOSURE_COLUMNS,
     GROUP_EXPOSURE_COLUMNS,
     MONTHLY_RETURNS_COLUMNS,
     STRATEGY_SUMMARY_COLUMNS,
     TURNOVER_COSTS_COLUMNS,
+    build_benchmark_relative,
     build_daily_exposure,
     build_group_exposure,
     build_monthly_returns,
@@ -228,3 +230,92 @@ def test_build_strategy_summary_aggregates_one_row_per_strategy(
     assert beta_row["avg_engine_cash_weight"] == pytest.approx((1.0 + 0.98 + 1.02) / 3.0)
     assert beta_row["max_position_weight"] == pytest.approx(0.60)
     assert beta_row["max_group_weight"] == pytest.approx(0.60)
+
+
+def test_build_benchmark_relative_requires_present_benchmark(performance: pd.DataFrame) -> None:
+    with pytest.raises(
+        ValueError,
+        match="evaluation.benchmark_strategy='missing' is not present in run strategies",
+    ):
+        build_benchmark_relative(performance, "missing")
+
+
+def test_build_benchmark_relative_aligns_daily_paths(performance: pd.DataFrame) -> None:
+    benchmark_relative = build_benchmark_relative(performance, "beta")
+
+    assert list(benchmark_relative.columns) == BENCHMARK_RELATIVE_COLUMNS
+    assert set(benchmark_relative["strategy"]) == {"alpha", "beta"}
+    assert benchmark_relative["benchmark_strategy"].eq("beta").all()
+
+    alpha_last = benchmark_relative.loc[
+        benchmark_relative["strategy"] == "alpha"
+    ].sort_values("date").iloc[-1]
+    assert alpha_last["excess_return"] == pytest.approx(-0.03)
+    assert alpha_last["relative_equity"] == pytest.approx(
+        1.015863218 / 1.0327977695
+    )
+
+    beta_rows = benchmark_relative.loc[
+        benchmark_relative["strategy"] == "beta"
+    ].sort_values("date")
+    assert beta_rows["excess_return"].tolist() == pytest.approx([0.0, 0.0, 0.0])
+    assert beta_rows["relative_equity"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+
+
+def test_build_strategy_summary_appends_benchmark_relative_metrics(
+    performance: pd.DataFrame,
+    daily_holdings: pd.DataFrame,
+    daily_cash: pd.DataFrame,
+) -> None:
+    daily_exposure = build_daily_exposure(daily_holdings, daily_cash)
+    group_exposure = build_group_exposure(
+        daily_holdings,
+        {"AAA": "growth", "BBB": "defensive"},
+    )
+    benchmark_relative = build_benchmark_relative(performance, "beta")
+    summary = build_strategy_summary(
+        performance,
+        daily_exposure=daily_exposure,
+        group_exposure=group_exposure,
+        benchmark_relative=benchmark_relative,
+        benchmark_strategy="beta",
+    )
+
+    assert list(summary.columns) == STRATEGY_SUMMARY_COLUMNS
+
+    alpha_rows = performance.loc[performance["strategy"] == "alpha"].sort_values("date")
+    beta_rows = performance.loc[performance["strategy"] == "beta"].sort_values("date")
+    alpha_excess = alpha_rows["net_return"].reset_index(drop=True) - beta_rows["net_return"].reset_index(drop=True)
+    relative_equity = alpha_rows["equity"].iloc[-1] / beta_rows["equity"].iloc[-1]
+    tracking_error = float(alpha_excess.std(ddof=0) * (252.0 ** 0.5))
+    information_ratio = float(alpha_excess.mean() * 252.0 / tracking_error)
+    up_capture = float(
+        (((1.0 + alpha_rows["net_return"]).prod()) - 1.0)
+        / (((1.0 + beta_rows["net_return"]).prod()) - 1.0)
+    )
+
+    alpha_row = summary.loc[summary["strategy"] == "alpha"].iloc[0]
+    assert alpha_row["benchmark_strategy"] == "beta"
+    assert alpha_row["excess_cumulative_return"] == pytest.approx(relative_equity - 1.0)
+    assert alpha_row["annualized_excess_return"] == pytest.approx(
+        (relative_equity ** (252.0 / 3.0)) - 1.0
+    )
+    assert alpha_row["tracking_error"] == pytest.approx(tracking_error)
+    assert alpha_row["information_ratio"] == pytest.approx(information_ratio)
+    assert alpha_row["correlation_to_benchmark"] == pytest.approx(
+        alpha_rows["net_return"].reset_index(drop=True).corr(
+            beta_rows["net_return"].reset_index(drop=True)
+        )
+    )
+    assert alpha_row["up_capture"] == pytest.approx(up_capture)
+    assert pd.isna(alpha_row["down_capture"])
+
+    beta_row = summary.loc[summary["strategy"] == "beta"].iloc[0]
+    assert beta_row["benchmark_strategy"] == "beta"
+    assert beta_row["excess_cumulative_return"] == pytest.approx(0.0)
+    assert beta_row["tracking_error"] == pytest.approx(0.0)
+    assert pd.isna(beta_row["information_ratio"])
+    assert beta_row["correlation_to_benchmark"] == pytest.approx(1.0)
+    assert beta_row["up_capture"] == pytest.approx(1.0)
+    assert pd.isna(beta_row["down_capture"])
+
