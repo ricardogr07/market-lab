@@ -67,6 +67,14 @@ def _strategy_summary() -> pd.DataFrame:
             "avg_active_positions": [3.0],
             "max_position_weight": [0.40],
             "max_group_weight": [0.55],
+            "benchmark_strategy": [""],
+            "excess_cumulative_return": [float("nan")],
+            "annualized_excess_return": [float("nan")],
+            "tracking_error": [float("nan")],
+            "information_ratio": [float("nan")],
+            "correlation_to_benchmark": [float("nan")],
+            "up_capture": [float("nan")],
+            "down_capture": [float("nan")],
         }
     )
 
@@ -240,3 +248,37 @@ def test_write_markdown_report_adds_calibration_section_and_plot_links(tmp_path:
     assert "![Calibration Curves](calibration_curves.png)" in report_text
     assert "![Score Histograms](score_histograms.png)" in report_text
     assert "![Threshold Sweeps](threshold_sweeps.png)" in report_text
+
+
+
+def test_write_markdown_report_adds_benchmark_relative_summary_section(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+    strategy_summary = _strategy_summary()
+    strategy_summary.loc[:, "benchmark_strategy"] = "buy_hold"
+    strategy_summary.loc[:, "excess_cumulative_return"] = 0.02
+    strategy_summary.loc[:, "annualized_excess_return"] = 0.15
+    strategy_summary.loc[:, "tracking_error"] = 0.08
+    strategy_summary.loc[:, "information_ratio"] = 0.75
+    strategy_summary.loc[:, "correlation_to_benchmark"] = 0.92
+    strategy_summary.loc[:, "up_capture"] = 0.88
+    strategy_summary.loc[:, "down_capture"] = 0.70
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / "report.md",
+        strategy_summary=strategy_summary,
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+
+    assert "## Benchmark-Relative Summary" in report_text
+    assert (
+        "| strategy | benchmark_strategy | excess_cumulative_return | annualized_excess_return | tracking_error | information_ratio | correlation_to_benchmark | up_capture | down_capture |"
+        in report_text
+    )
+    assert "benchmark_relative.csv" in report_text
+    assert "active risk" in report_text

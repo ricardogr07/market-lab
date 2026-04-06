@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -22,6 +22,7 @@ from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
 from marketlab.reports.analytics import (
+    build_benchmark_relative,
     build_daily_exposure,
     build_group_exposure,
     build_monthly_returns,
@@ -58,6 +59,7 @@ class ExperimentArtifacts:
     turnover_costs_path: Path
     daily_exposure_path: Path
     group_exposure_path: Path | None
+    benchmark_relative_path: Path | None
     report_path: Path | None
     cumulative_plot_path: Path | None
     drawdown_plot_path: Path | None
@@ -171,10 +173,16 @@ def _persist_experiment_outputs(
     metrics = compute_strategy_metrics(performance)
     daily_exposure = build_daily_exposure(daily_holdings, daily_cash)
     group_exposure = build_group_exposure(daily_holdings, symbol_groups)
+    benchmark_relative = build_benchmark_relative(
+        performance,
+        config.evaluation.benchmark_strategy,
+    )
     strategy_summary = build_strategy_summary(
         performance,
         daily_exposure=daily_exposure,
         group_exposure=group_exposure,
+        benchmark_relative=benchmark_relative,
+        benchmark_strategy=config.evaluation.benchmark_strategy,
     )
     monthly_returns = build_monthly_returns(performance)
     turnover_costs = build_turnover_costs(performance)
@@ -196,6 +204,11 @@ def _persist_experiment_outputs(
     if not group_exposure.empty:
         group_exposure_path = artifact_run_dir / "group_exposure.csv"
         group_exposure.to_csv(group_exposure_path, index=False)
+
+    benchmark_relative_path: Path | None = None
+    if not benchmark_relative.empty:
+        benchmark_relative_path = artifact_run_dir / "benchmark_relative.csv"
+        benchmark_relative.to_csv(benchmark_relative_path, index=False)
 
     persisted_fold_diagnostics_path = fold_diagnostics_path
     if fold_diagnostics is not None and persisted_fold_diagnostics_path is None:
@@ -298,6 +311,7 @@ def _persist_experiment_outputs(
         turnover_costs_path=turnover_costs_path,
         daily_exposure_path=daily_exposure_path,
         group_exposure_path=group_exposure_path,
+        benchmark_relative_path=benchmark_relative_path,
         report_path=report_path,
         cumulative_plot_path=cumulative_plot_path,
         drawdown_plot_path=drawdown_plot_path,
@@ -667,4 +681,9 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
+
+
+
+
+
 

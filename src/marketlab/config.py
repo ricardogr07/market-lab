@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,6 +110,7 @@ class WalkForwardConfig:
 @dataclass(slots=True)
 class EvaluationConfig:
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
+    benchmark_strategy: str = ""
 
 
 @dataclass(slots=True)
@@ -309,7 +310,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
             walk_forward=_section(
                 WalkForwardConfig,
                 (payload.get("evaluation") or {}).get("walk_forward"),
-            )
+            ),
+            benchmark_strategy=(payload.get("evaluation") or {}).get("benchmark_strategy", ""),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
         base_dir=_config_base_dir(config_path),
@@ -317,3 +319,5 @@ def load_config(path: str | Path) -> ExperimentConfig:
     _normalize_mapping_sections(config)
     _validate_config(config)
     return config
+
+

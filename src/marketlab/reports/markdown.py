@@ -20,6 +20,18 @@ EXPOSURE_SUMMARY_COLUMNS = [
     "max_group_weight",
 ]
 
+BENCHMARK_SUMMARY_COLUMNS = [
+    "strategy",
+    "benchmark_strategy",
+    "excess_cumulative_return",
+    "annualized_excess_return",
+    "tracking_error",
+    "information_ratio",
+    "correlation_to_benchmark",
+    "up_capture",
+    "down_capture",
+]
+
 
 def _markdown_table(frame: pd.DataFrame) -> str:
     columns = list(frame.columns)
@@ -51,16 +63,24 @@ def _headline_lines(
         return []
 
     lines: list[str] = []
-    best_strategy = metrics.sort_values(["cumulative_return", "strategy"], ascending=[False, True]).iloc[0]
+    best_strategy = metrics.sort_values(
+        ["cumulative_return", "strategy"],
+        ascending=[False, True],
+    ).iloc[0]
     lines.append(
-        f"- Best overall strategy by cumulative return: `{best_strategy['strategy']}` ({best_strategy['cumulative_return']:.6f})"
+        "- Best overall strategy by cumulative return: "
+        f"`{best_strategy['strategy']}` ({best_strategy['cumulative_return']:.6f})"
     )
 
     ml_metrics = metrics.loc[metrics["strategy"].astype(str).str.startswith("ml_")]
     if not ml_metrics.empty:
-        best_ml = ml_metrics.sort_values(["cumulative_return", "strategy"], ascending=[False, True]).iloc[0]
+        best_ml = ml_metrics.sort_values(
+            ["cumulative_return", "strategy"],
+            ascending=[False, True],
+        ).iloc[0]
         lines.append(
-            f"- Best ML strategy by cumulative return: `{best_ml['strategy']}` ({best_ml['cumulative_return']:.6f})"
+            "- Best ML strategy by cumulative return: "
+            f"`{best_ml['strategy']}` ({best_ml['cumulative_return']:.6f})"
         )
 
     if model_summary is not None and not model_summary.empty:
@@ -74,11 +94,14 @@ def _headline_lines(
             else:
                 best_model = ranked_models.iloc[0]
                 lines.append(
-                    f"- Best model by mean ROC AUC: `{best_model['model_name']}` ({best_model['mean_roc_auc']:.6f})"
+                    "- Best model by mean ROC AUC: "
+                    f"`{best_model['model_name']}` ({best_model['mean_roc_auc']:.6f})"
                 )
 
         if {"model_name", "mean_top_bucket_return"}.issubset(model_summary.columns):
-            ranked_top_bucket = model_summary.dropna(subset=["mean_top_bucket_return"]).sort_values(
+            ranked_top_bucket = model_summary.dropna(
+                subset=["mean_top_bucket_return"]
+            ).sort_values(
                 ["mean_top_bucket_return", "model_name"],
                 ascending=[False, True],
             )
@@ -87,11 +110,14 @@ def _headline_lines(
             else:
                 best_top_bucket = ranked_top_bucket.iloc[0]
                 lines.append(
-                    f"- Best model by mean top-bucket return: `{best_top_bucket['model_name']}` ({best_top_bucket['mean_top_bucket_return']:.6f})"
+                    "- Best model by mean top-bucket return: "
+                    f"`{best_top_bucket['model_name']}` ({best_top_bucket['mean_top_bucket_return']:.6f})"
                 )
 
         if {"model_name", "mean_top_bottom_spread"}.issubset(model_summary.columns):
-            ranked_spread = model_summary.dropna(subset=["mean_top_bottom_spread"]).sort_values(
+            ranked_spread = model_summary.dropna(
+                subset=["mean_top_bottom_spread"]
+            ).sort_values(
                 ["mean_top_bottom_spread", "model_name"],
                 ascending=[False, True],
             )
@@ -100,7 +126,8 @@ def _headline_lines(
             else:
                 best_spread = ranked_spread.iloc[0]
                 lines.append(
-                    f"- Best model by mean top-bottom spread: `{best_spread['model_name']}` ({best_spread['mean_top_bottom_spread']:.6f})"
+                    "- Best model by mean top-bottom spread: "
+                    f"`{best_spread['model_name']}` ({best_spread['mean_top_bottom_spread']:.6f})"
                 )
 
     return lines
@@ -181,7 +208,10 @@ def _threshold_highlights(threshold_diagnostics: pd.DataFrame) -> pd.DataFrame:
             .sort_values("threshold")
             .reset_index(drop=True)
         )
-        best_f1 = aggregated.sort_values(["mean_f1", "threshold"], ascending=[False, True]).iloc[0]
+        best_f1 = aggregated.sort_values(
+            ["mean_f1", "threshold"],
+            ascending=[False, True],
+        ).iloc[0]
         best_balanced = aggregated.sort_values(
             ["mean_balanced_accuracy", "threshold"],
             ascending=[False, True],
@@ -215,7 +245,9 @@ def _exposure_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
     if not set(EXPOSURE_SUMMARY_COLUMNS).issubset(strategy_summary.columns):
         return []
 
-    lines = [_markdown_table(_display_frame(strategy_summary.loc[:, EXPOSURE_SUMMARY_COLUMNS]))]
+    lines = [
+        _markdown_table(_display_frame(strategy_summary.loc[:, EXPOSURE_SUMMARY_COLUMNS]))
+    ]
     lines.extend(
         [
             "",
@@ -225,6 +257,26 @@ def _exposure_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
     )
     if strategy_summary["max_group_weight"].notna().any():
         lines.append("- Group concentration details are also persisted in `group_exposure.csv`.")
+    return lines
+
+
+def _benchmark_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
+    if not set(BENCHMARK_SUMMARY_COLUMNS).issubset(strategy_summary.columns):
+        return []
+    if not strategy_summary["benchmark_strategy"].astype(str).str.len().gt(0).any():
+        return []
+
+    lines = [
+        _markdown_table(_display_frame(strategy_summary.loc[:, BENCHMARK_SUMMARY_COLUMNS]))
+    ]
+    lines.extend(
+        [
+            "",
+            "- Benchmark-relative metrics separate absolute return from active return and active risk.",
+            "- Lower tracking error does not imply outperformance; it only means the strategy stayed closer to the benchmark path.",
+            "- Daily active return and relative equity are also persisted in `benchmark_relative.csv`.",
+        ]
+    )
     return lines
 
 
@@ -280,16 +332,25 @@ def write_markdown_report(
     content_lines.extend(_section("Strategy Metrics", [metrics_table]))
 
     if strategy_summary is not None and not strategy_summary.empty:
-        content_lines.extend(_section("Strategy Summary", [_markdown_table(_display_frame(strategy_summary))]))
+        content_lines.extend(
+            _section("Strategy Summary", [_markdown_table(_display_frame(strategy_summary))])
+        )
         exposure_lines = _exposure_summary_lines(strategy_summary)
         if exposure_lines:
             content_lines.extend(_section("Exposure Summary", exposure_lines))
+        benchmark_lines = _benchmark_summary_lines(strategy_summary)
+        if benchmark_lines:
+            content_lines.extend(_section("Benchmark-Relative Summary", benchmark_lines))
 
     if monthly_returns is not None and not monthly_returns.empty:
-        content_lines.extend(_section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)]))
+        content_lines.extend(
+            _section("Monthly Net Returns", [_monthly_returns_table(monthly_returns)])
+        )
 
     if turnover_costs is not None and not turnover_costs.empty:
-        content_lines.extend(_section("Turnover And Costs", [_turnover_costs_table(turnover_costs)]))
+        content_lines.extend(
+            _section("Turnover And Costs", [_turnover_costs_table(turnover_costs)])
+        )
 
     if fold_diagnostics is not None and not fold_diagnostics.empty:
         content_lines.extend(
@@ -300,10 +361,14 @@ def write_markdown_report(
         )
 
     if model_summary is not None and not model_summary.empty:
-        content_lines.extend(_section("Model Summary", [_markdown_table(_display_frame(model_summary))]))
+        content_lines.extend(
+            _section("Model Summary", [_markdown_table(_display_frame(model_summary))])
+        )
 
     if fold_summary is not None and not fold_summary.empty:
-        content_lines.extend(_section("Fold Summary", [_markdown_table(_display_frame(fold_summary))]))
+        content_lines.extend(
+            _section("Fold Summary", [_markdown_table(_display_frame(fold_summary))])
+        )
 
     show_calibration_section = (
         model_summary is not None
@@ -313,18 +378,24 @@ def write_markdown_report(
     if show_calibration_section:
         calibration_lines = [_calibration_summary_table(model_summary)]
         if threshold_diagnostics is not None and not threshold_diagnostics.empty:
-            calibration_lines.extend([
-                "",
-                _markdown_table(_display_frame(_threshold_highlights(threshold_diagnostics))),
-            ])
+            calibration_lines.extend(
+                [
+                    "",
+                    _markdown_table(_display_frame(_threshold_highlights(threshold_diagnostics))),
+                ]
+            )
         for alt_text, plot_path in [
             ("Calibration Curves", calibration_curves_plot_path),
             ("Score Histograms", score_histograms_plot_path),
             ("Threshold Sweeps", threshold_sweeps_plot_path),
         ]:
             if plot_path is not None and plot_path.exists():
-                calibration_lines.extend(["", _relative_image_line(output_path, plot_path, alt_text)])
-        content_lines.extend(_section("Calibration And Threshold Diagnostics", calibration_lines))
+                calibration_lines.extend(
+                    ["", _relative_image_line(output_path, plot_path, alt_text)]
+                )
+        content_lines.extend(
+            _section("Calibration And Threshold Diagnostics", calibration_lines)
+        )
 
     output_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
     return output_path
