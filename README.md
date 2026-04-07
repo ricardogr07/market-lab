@@ -55,6 +55,7 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `strategy_summary.csv`
 - `monthly_returns.csv`
 - `turnover_costs.csv`
+- `cost_sensitivity.csv`
 - `daily_exposure.csv`
 - optional `group_exposure.csv`
 - optional `benchmark_relative.csv`
@@ -72,6 +73,7 @@ Writes a timestamped folder under `artifacts/runs/<experiment_name>/` containing
 - `strategy_summary.csv`
 - `monthly_returns.csv`
 - `turnover_costs.csv`
+- `cost_sensitivity.csv`
 - `daily_exposure.csv`
 - optional `group_exposure.csv`
 - optional `benchmark_relative.csv`
@@ -178,6 +180,17 @@ These analytics are interpretive, not predictive. Lower drawdown or volatility c
 - `report.md` includes a `Benchmark-Relative Summary` section when a benchmark is configured.
 
 These metrics are comparative, not causal. Higher absolute return and better benchmark-relative performance are separate questions, and lower active risk does not imply outperformance.
+
+## Turnover And Cost Sensitivity
+
+`backtest` and `run-experiment` now also support additive turnover-cost sensitivity diagnostics under `evaluation.cost_sensitivity_bps`.
+
+- `cost_sensitivity.csv` reprices each strategy path at `0.0` bps, the configured `portfolio.costs.bps_per_trade`, and any extra configured bps assumptions without rerunning the strategies.
+- The `0.0` bps rows are theoretical gross-return baselines, not executable outcomes.
+- The row at the configured trading-cost assumption matches the current net-return and cost-drag path already shown in `strategy_summary.csv`.
+- `report.md` includes a `Cost Sensitivity` section so implementation-cost assumptions can be reviewed alongside turnover.
+
+This remains a reporting-only diagnostic. It does not change weights, execution timing, or the backtest engine.
 
 ## Allocation Baselines And Symbol Groups
 

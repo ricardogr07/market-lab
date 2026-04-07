@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -22,7 +22,7 @@ This document ties the current pieces together and records the working rules tha
   - `buy_hold`, `sma`, and config-defined allocation baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
-  - metrics, exposure-aware and benchmark-relative strategy analytics CSVs, plots, and Markdown reporting
+  - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
   - release automation with a monthly-batching Release PR and a PyPI publish path
@@ -113,6 +113,14 @@ The required CI path stays offline and deterministic through tox. The Docker run
 - `strategy_summary.csv` appends benchmark-relative fields such as excess cumulative return, tracking error, information ratio, correlation, and capture ratios without changing the existing leading columns.
 - Benchmark-relative reporting applies to `backtest` and `run-experiment`, but not to `train-models`.
 
+## Cost Sensitivity Rules
+
+- Cost sensitivity is optional and configured under `evaluation.cost_sensitivity_bps`.
+- `cost_sensitivity.csv` is still written for `backtest` and `run-experiment` even when that list is empty; the default grid always includes `0.0` bps and the configured `portfolio.costs.bps_per_trade`.
+- Sensitivity rows are derived from the existing `PerformanceFrame` by repricing `gross_return` with the same linear turnover-cost model; MarketLab does not rerun strategies for alternate cost assumptions.
+- The `0.0` bps rows are theoretical gross-return baselines, while the row at the configured trading cost should match the current net-return path already reported elsewhere.
+- Cost-sensitivity reporting applies to `backtest` and `run-experiment`, but not to `train-models`.
+
 
 ## System Map
 
@@ -151,6 +159,7 @@ flowchart TD
     Summary --> FoldSummaryCsv[fold_summary.csv]
     Analytics --> StrategySummaryCsv[strategy_summary.csv]
     Analytics --> BenchmarkRelativeCsv[benchmark_relative.csv]
+    Analytics --> CostSensitivityCsv[cost_sensitivity.csv]
     Analytics --> MonthlyReturnsCsv[monthly_returns.csv]
     Analytics --> TurnoverCostsCsv[turnover_costs.csv]
     Pipeline --> Markdown[src/marketlab/reports/markdown.py]
@@ -223,7 +232,7 @@ sequenceDiagram
     B-->>P: metrics table
     P->>SUM: build_model_summary(...) and build_fold_summary(...)
     SUM-->>P: summary tables
-    P->>AN: build_strategy_summary(...) daily and grouped exposure monthly returns turnover costs benchmark-relative comparisons
+    P->>AN: build_strategy_summary(...) daily and grouped exposure monthly returns turnover costs cost-sensitivity benchmark-relative comparisons
     AN-->>P: analytics tables
     P->>R: write_markdown_report(...)
     P->>R: plot_cumulative_returns(...)
@@ -739,7 +748,7 @@ Best practice:
 ### `src/marketlab/reports/analytics.py`
 
 - Builds strategy-level analytics tables from the canonical `PerformanceFrame`.
-- Produces `strategy_summary.csv`, `monthly_returns.csv`, and `turnover_costs.csv`.
+- Produces `strategy_summary.csv`, `monthly_returns.csv`, `turnover_costs.csv`, and `cost_sensitivity.csv`.
 - Keeps analytics derived and deterministic rather than introducing new backtest state.
 
 Best practice:
@@ -750,7 +759,7 @@ Best practice:
 
 - Produces a compact Markdown report for each run.
 - Derives the strategy list from the actual `PerformanceFrame`.
-- Adds strategy summary, monthly net return, and turnover-and-cost sections when those analytics are available.
+- Adds strategy summary, monthly net return, turnover-and-cost, and cost-sensitivity sections when those analytics are available.
 - Switches scope text when ML strategies are present.
 - Reports the best model by mean ROC AUC, mean top-bucket return, and mean top-bottom spread when those model-summary fields are available.
 - Adds a compact calibration-and-threshold section when calibration summaries or threshold diagnostics are available, including relative links to the diagnostic plots.
