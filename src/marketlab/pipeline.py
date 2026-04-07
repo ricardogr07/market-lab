@@ -23,6 +23,7 @@ from marketlab.models import train_direction_models_on_folds
 from marketlab.rebalance import next_rebalance_effective_date
 from marketlab.reports.analytics import (
     build_benchmark_relative,
+    build_cost_sensitivity,
     build_daily_exposure,
     build_group_exposure,
     build_monthly_returns,
@@ -57,6 +58,7 @@ class ExperimentArtifacts:
     strategy_summary_path: Path
     monthly_returns_path: Path
     turnover_costs_path: Path
+    cost_sensitivity_path: Path
     daily_exposure_path: Path
     group_exposure_path: Path | None
     benchmark_relative_path: Path | None
@@ -186,18 +188,25 @@ def _persist_experiment_outputs(
     )
     monthly_returns = build_monthly_returns(performance)
     turnover_costs = build_turnover_costs(performance)
+    cost_sensitivity = build_cost_sensitivity(
+        performance,
+        base_cost_bps=config.portfolio.costs.bps_per_trade,
+        sensitivity_bps=config.evaluation.cost_sensitivity_bps,
+    )
 
     metrics_path = artifact_run_dir / "metrics.csv"
     performance_path = artifact_run_dir / "performance.csv"
     strategy_summary_path = artifact_run_dir / "strategy_summary.csv"
     monthly_returns_path = artifact_run_dir / "monthly_returns.csv"
     turnover_costs_path = artifact_run_dir / "turnover_costs.csv"
+    cost_sensitivity_path = artifact_run_dir / "cost_sensitivity.csv"
     daily_exposure_path = artifact_run_dir / "daily_exposure.csv"
     metrics.to_csv(metrics_path, index=False)
     performance.to_csv(performance_path, index=False)
     strategy_summary.to_csv(strategy_summary_path, index=False)
     monthly_returns.to_csv(monthly_returns_path, index=False)
     turnover_costs.to_csv(turnover_costs_path, index=False)
+    cost_sensitivity.to_csv(cost_sensitivity_path, index=False)
     daily_exposure.to_csv(daily_exposure_path, index=False)
 
     group_exposure_path: Path | None = None
@@ -294,6 +303,7 @@ def _persist_experiment_outputs(
             strategy_summary=strategy_summary,
             monthly_returns=monthly_returns,
             turnover_costs=turnover_costs,
+            cost_sensitivity=cost_sensitivity,
             fold_diagnostics=fold_diagnostics,
             threshold_diagnostics=threshold_diagnostics,
             calibration_curves_plot_path=calibration_curves_plot_path,
@@ -309,6 +319,7 @@ def _persist_experiment_outputs(
         strategy_summary_path=strategy_summary_path,
         monthly_returns_path=monthly_returns_path,
         turnover_costs_path=turnover_costs_path,
+        cost_sensitivity_path=cost_sensitivity_path,
         daily_exposure_path=daily_exposure_path,
         group_exposure_path=group_exposure_path,
         benchmark_relative_path=benchmark_relative_path,

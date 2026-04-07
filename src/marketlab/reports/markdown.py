@@ -32,6 +32,15 @@ BENCHMARK_SUMMARY_COLUMNS = [
     "down_capture",
 ]
 
+COST_SENSITIVITY_SUMMARY_COLUMNS = [
+    "strategy",
+    "bps_per_trade",
+    "cumulative_return",
+    "annualized_return",
+    "max_drawdown",
+    "cost_drag",
+]
+
 
 def _markdown_table(frame: pd.DataFrame) -> str:
     columns = list(frame.columns)
@@ -280,6 +289,23 @@ def _benchmark_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
     return lines
 
 
+def _cost_sensitivity_lines(cost_sensitivity: pd.DataFrame) -> list[str]:
+    if not set(COST_SENSITIVITY_SUMMARY_COLUMNS).issubset(cost_sensitivity.columns):
+        return []
+
+    lines = [
+        _markdown_table(_display_frame(cost_sensitivity.loc[:, COST_SENSITIVITY_SUMMARY_COLUMNS]))
+    ]
+    lines.extend(
+        [
+            "",
+            "- Zero-cost rows are theoretical gross-return baselines, not executable outcomes.",
+            "- Higher implementation cost can worsen return and drawdown without changing signal quality.",
+        ]
+    )
+    return lines
+
+
 def _section(title: str, body_lines: list[str]) -> list[str]:
     return [f"## {title}", "", *body_lines, ""]
 
@@ -294,6 +320,7 @@ def write_markdown_report(
     strategy_summary: pd.DataFrame | None = None,
     monthly_returns: pd.DataFrame | None = None,
     turnover_costs: pd.DataFrame | None = None,
+    cost_sensitivity: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     calibration_curves_plot_path: Path | None = None,
@@ -350,6 +377,11 @@ def write_markdown_report(
     if turnover_costs is not None and not turnover_costs.empty:
         content_lines.extend(
             _section("Turnover And Costs", [_turnover_costs_table(turnover_costs)])
+        )
+
+    if cost_sensitivity is not None and not cost_sensitivity.empty:
+        content_lines.extend(
+            _section("Cost Sensitivity", _cost_sensitivity_lines(cost_sensitivity))
         )
 
     if fold_diagnostics is not None and not fold_diagnostics.empty:
