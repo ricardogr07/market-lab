@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -111,6 +112,7 @@ class WalkForwardConfig:
 class EvaluationConfig:
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
     benchmark_strategy: str = ""
+    cost_sensitivity_bps: list[float] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -183,6 +185,9 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
     if config.baselines.allocation.group_weights is None:
         config.baselines.allocation.group_weights = {}
 
+    if config.evaluation.cost_sensitivity_bps is None:
+        config.evaluation.cost_sensitivity_bps = []
+
 
 def _validate_weights(label: str, weights: dict[str, float]) -> None:
     if any(value < 0.0 for value in weights.values()):
@@ -197,6 +202,12 @@ def _validate_cap(label: str, value: float | None) -> None:
         return
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{label} must be between 0.0 and 1.0.")
+
+
+def _validate_non_negative_bps_list(label: str, values: list[float]) -> None:
+    for value in values:
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{label} must contain only finite non-negative values.")
 
 
 def _validate_config(config: ExperimentConfig) -> None:
@@ -228,6 +239,11 @@ def _validate_config(config: ExperimentConfig) -> None:
                 "portfolio.risk.max_group_weight requires data.symbol_groups for all "
                 f"data.symbols: {joined}"
             )
+
+    _validate_non_negative_bps_list(
+        "evaluation.cost_sensitivity_bps",
+        config.evaluation.cost_sensitivity_bps,
+    )
 
     allocation = config.baselines.allocation
     if allocation.mode not in ALLOCATION_MODES:
@@ -312,6 +328,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
                 (payload.get("evaluation") or {}).get("walk_forward"),
             ),
             benchmark_strategy=(payload.get("evaluation") or {}).get("benchmark_strategy", ""),
+            cost_sensitivity_bps=(payload.get("evaluation") or {}).get("cost_sensitivity_bps", []),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
         base_dir=_config_base_dir(config_path),

@@ -61,6 +61,24 @@ TURNOVER_COSTS_COLUMNS = [
     "cost_return",
 ]
 
+COST_SENSITIVITY_COLUMNS = [
+    "strategy",
+    "bps_per_trade",
+    "gross_cumulative_return",
+    "cumulative_return",
+    "cost_drag",
+    "final_equity",
+    "annualized_return",
+    "annualized_volatility",
+    "sharpe_like",
+    "max_drawdown",
+    "hit_rate",
+    "avg_turnover",
+    "total_turnover",
+    "avg_cost_return",
+    "total_cost_return",
+]
+
 DAILY_EXPOSURE_COLUMNS = [
     "date",
     "strategy",
@@ -213,6 +231,92 @@ def build_turnover_costs(performance: pd.DataFrame) -> pd.DataFrame:
 
     working["cost_return"] = working["gross_return"] - working["net_return"]
     return working.loc[:, TURNOVER_COSTS_COLUMNS]
+
+
+def _cost_sensitivity_grid(
+    base_cost_bps: float,
+    sensitivity_bps: list[float] | None,
+) -> list[float]:
+    grid = {0.0, float(base_cost_bps)}
+    if sensitivity_bps is not None:
+        grid.update(float(value) for value in sensitivity_bps)
+    return sorted(grid)
+
+
+def _repriced_performance(working: pd.DataFrame, bps_per_trade: float) -> pd.DataFrame:
+    repriced = working.loc[:, ["date", "strategy", "gross_return", "turnover"]].copy()
+    repriced["net_return"] = repriced["gross_return"] - (repriced["turnover"] * (bps_per_trade / 10_000.0))
+    repriced["equity"] = (
+        repriced.groupby("strategy", sort=False)["net_return"]
+        .transform(lambda values: (1.0 + values).cumprod())
+        .astype(float)
+    )
+    return repriced.loc[:, ["date", "strategy", "gross_return", "net_return", "turnover", "equity"]]
+
+
+def build_cost_sensitivity(
+    performance: pd.DataFrame,
+    base_cost_bps: float,
+    sensitivity_bps: list[float] | None = None,
+) -> pd.DataFrame:
+    working = _normalized_performance(performance)
+    if working.empty:
+        return pd.DataFrame(columns=COST_SENSITIVITY_COLUMNS)
+
+    gross_summary = (
+        working.groupby("strategy", sort=False)
+        .apply(
+            lambda frame: pd.Series(
+                {
+                    "gross_cumulative_return": float((1.0 + frame["gross_return"]).cumprod().iloc[-1] - 1.0),
+                }
+            ),
+            include_groups=False,
+        )
+        .reset_index()
+        .sort_values("strategy")
+        .reset_index(drop=True)
+    )
+
+    scenario_frames: list[pd.DataFrame] = []
+    for bps_per_trade in _cost_sensitivity_grid(base_cost_bps, sensitivity_bps):
+        repriced = _repriced_performance(working, bps_per_trade)
+        metrics = compute_strategy_metrics(repriced)
+        final_equity = (
+            repriced.groupby("strategy", as_index=False)
+            .agg(final_equity=("equity", "last"))
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+        cost_summary = (
+            build_turnover_costs(repriced)
+            .groupby("strategy", as_index=False)
+            .agg(
+                avg_cost_return=("cost_return", "mean"),
+                total_cost_return=("cost_return", "sum"),
+            )
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+
+        scenario_summary = (
+            metrics.merge(gross_summary, on="strategy", how="inner", validate="one_to_one")
+            .merge(final_equity, on="strategy", how="inner", validate="one_to_one")
+            .merge(cost_summary, on="strategy", how="inner", validate="one_to_one")
+            .sort_values("strategy")
+            .reset_index(drop=True)
+        )
+        scenario_summary["bps_per_trade"] = float(bps_per_trade)
+        scenario_summary["cost_drag"] = (
+            scenario_summary["gross_cumulative_return"] - scenario_summary["cumulative_return"]
+        )
+        scenario_frames.append(scenario_summary.loc[:, COST_SENSITIVITY_COLUMNS])
+
+    return (
+        pd.concat(scenario_frames, ignore_index=True)
+        .sort_values(["strategy", "bps_per_trade"])
+        .reset_index(drop=True)
+    )
 
 
 def build_monthly_returns(performance: pd.DataFrame) -> pd.DataFrame:
