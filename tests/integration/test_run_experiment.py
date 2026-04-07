@@ -19,6 +19,7 @@ THRESHOLD_DIAGNOSTICS_COLUMNS = _cli_harness.THRESHOLD_DIAGNOSTICS_COLUMNS
 STRATEGY_SUMMARY_COLUMNS = _cli_harness.STRATEGY_SUMMARY_COLUMNS
 MONTHLY_RETURNS_COLUMNS = _cli_harness.MONTHLY_RETURNS_COLUMNS
 TURNOVER_COSTS_COLUMNS = _cli_harness.TURNOVER_COSTS_COLUMNS
+COST_SENSITIVITY_COLUMNS = _cli_harness.COST_SENSITIVITY_COLUMNS
 assert_command_ok = _cli_harness.assert_command_ok
 build_synthetic_panel = _cli_harness.build_synthetic_panel
 latest_run_dir = _cli_harness.latest_run_dir
@@ -229,6 +230,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
         "strategy_summary.csv",
         "monthly_returns.csv",
         "turnover_costs.csv",
+        "cost_sensitivity.csv",
         "daily_exposure.csv",
         "report.md",
         "cumulative_returns.png",
@@ -251,6 +253,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv", parse_dates=["start_date", "end_date"])
     monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
     turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv", parse_dates=["date"])
+    cost_sensitivity = pd.read_csv(run_dir / "cost_sensitivity.csv")
     fold_diagnostics = pd.read_csv(run_dir / "fold_diagnostics.csv")
     ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
     calibration_diagnostics = pd.read_csv(run_dir / "calibration_diagnostics.csv")
@@ -275,6 +278,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert list(strategy_summary.columns) == STRATEGY_SUMMARY_COLUMNS
     assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
     assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
+    assert list(cost_sensitivity.columns) == COST_SENSITIVITY_COLUMNS
     assert list(fold_diagnostics.columns) == FOLD_DIAGNOSTICS_COLUMNS
     assert list(ranking_diagnostics.columns) == RANKING_DIAGNOSTICS_COLUMNS
     assert list(calibration_diagnostics.columns) == CALIBRATION_DIAGNOSTICS_COLUMNS
@@ -287,6 +291,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert set(strategy_summary["strategy"]) == expected_strategies
     assert set(monthly_returns["strategy"]) == expected_strategies
     assert set(turnover_costs["strategy"]) == expected_strategies
+    assert set(cost_sensitivity["strategy"]) == expected_strategies
     assert set(model_summary["model_name"]) == DEFAULT_MODEL_NAMES
     assert set(ranking_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
     assert set(calibration_diagnostics["model_name"]) == DEFAULT_MODEL_NAMES
@@ -319,6 +324,7 @@ def test_run_experiment_produces_baseline_and_ml_artifacts(tmp_path: Path) -> No
     assert "## Strategy Summary" in report_text
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
+    assert "## Cost Sensitivity" in report_text
     assert "## Walk-Forward Diagnostics" in report_text
     assert "## Model Summary" in report_text
     assert "## Fold Summary" in report_text
@@ -378,6 +384,7 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
         "strategy_summary.csv",
         "monthly_returns.csv",
         "turnover_costs.csv",
+        "cost_sensitivity.csv",
         "daily_exposure.csv",
         "report.md",
         "cumulative_returns.png",
@@ -389,6 +396,7 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
     monthly_returns = pd.read_csv(run_dir / "monthly_returns.csv")
     turnover_costs = pd.read_csv(run_dir / "turnover_costs.csv")
+    cost_sensitivity = pd.read_csv(run_dir / "cost_sensitivity.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
     assert list(metrics.columns) == EXPECTED_METRICS_COLUMNS
@@ -396,14 +404,17 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert list(strategy_summary.columns) == STRATEGY_SUMMARY_COLUMNS
     assert list(monthly_returns.columns) == MONTHLY_RETURNS_COLUMNS
     assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
+    assert list(cost_sensitivity.columns) == COST_SENSITIVITY_COLUMNS
     assert set(metrics["strategy"]) == {"buy_hold", "sma"}
     assert set(performance["strategy"]) == {"buy_hold", "sma"}
     assert set(strategy_summary["strategy"]) == {"buy_hold", "sma"}
     assert set(monthly_returns["strategy"]) == {"buy_hold", "sma"}
     assert set(turnover_costs["strategy"]) == {"buy_hold", "sma"}
+    assert set(cost_sensitivity["strategy"]) == {"buy_hold", "sma"}
     assert "## Strategy Summary" in report_text
     assert "## Monthly Net Returns" in report_text
     assert "## Turnover And Costs" in report_text
+    assert "## Cost Sensitivity" in report_text
     assert not (run_dir / "group_exposure.csv").exists()
     assert not (run_dir / 'fold_diagnostics.csv').exists()
     assert not (run_dir / "ranking_diagnostics.csv").exists()

@@ -79,6 +79,28 @@ def _strategy_summary() -> pd.DataFrame:
     )
 
 
+def _cost_sensitivity() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": ["alpha", "alpha"],
+            "bps_per_trade": [0.0, 10.0],
+            "gross_cumulative_return": [0.0302, 0.0302],
+            "cumulative_return": [0.0302, 0.027162],
+            "cost_drag": [0.0, 0.003038],
+            "final_equity": [1.0302, 1.027162],
+            "annualized_return": [0.13, 0.12],
+            "annualized_volatility": [0.19, 0.20],
+            "sharpe_like": [0.68, 0.60],
+            "max_drawdown": [-0.04, -0.05],
+            "hit_rate": [0.55, 0.55],
+            "avg_turnover": [2.0, 2.0],
+            "total_turnover": [4.0, 4.0],
+            "avg_cost_return": [0.0, 0.0015],
+            "total_cost_return": [0.0, 0.003],
+        }
+    )
+
+
 def test_write_markdown_report_turnover_section_uses_turnover_costs_input(tmp_path: Path) -> None:
     config = ExperimentConfig(experiment_name="markdown_fixture")
     turnover_costs = pd.DataFrame(
@@ -109,6 +131,42 @@ def test_write_markdown_report_turnover_section_uses_turnover_costs_input(tmp_pa
     assert "| alpha | 2.0 | 4.0 | 0.0015 | 0.003 |" in turnover_section
     assert "999.0" not in turnover_section
     assert "0.5" not in turnover_section
+
+
+def test_write_markdown_report_adds_cost_sensitivity_section(tmp_path: Path) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / "report.md",
+        strategy_summary=_strategy_summary(),
+        turnover_costs=pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                "strategy": ["alpha", "alpha"],
+                "turnover": [1.0, 3.0],
+                "gross_return": [0.01, 0.02],
+                "net_return": [0.009, 0.018],
+                "cost_return": [0.001, 0.002],
+            }
+        ),
+        cost_sensitivity=_cost_sensitivity(),
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+    cost_section = report_text.split("## Cost Sensitivity", maxsplit=1)[1]
+
+    assert "## Cost Sensitivity" in report_text
+    assert (
+        "| strategy | bps_per_trade | cumulative_return | annualized_return | max_drawdown | cost_drag |"
+        in cost_section
+    )
+    assert "| alpha | 0.0 | 0.0302 | 0.13 | -0.04 | 0.0 |" in cost_section
+    assert "| alpha | 10.0 | 0.027162 | 0.12 | -0.05 | 0.003038 |" in cost_section
+    assert "Zero-cost rows are theoretical gross-return baselines" in cost_section
+    assert "Higher implementation cost can worsen return and drawdown" in cost_section
 
 
 def test_write_markdown_report_adds_exposure_summary_section(tmp_path: Path) -> None:

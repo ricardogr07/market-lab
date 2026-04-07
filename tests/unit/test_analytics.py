@@ -5,12 +5,14 @@ import pytest
 
 from marketlab.reports.analytics import (
     BENCHMARK_RELATIVE_COLUMNS,
+    COST_SENSITIVITY_COLUMNS,
     DAILY_EXPOSURE_COLUMNS,
     GROUP_EXPOSURE_COLUMNS,
     MONTHLY_RETURNS_COLUMNS,
     STRATEGY_SUMMARY_COLUMNS,
     TURNOVER_COSTS_COLUMNS,
     build_benchmark_relative,
+    build_cost_sensitivity,
     build_daily_exposure,
     build_group_exposure,
     build_monthly_returns,
@@ -107,6 +109,64 @@ def test_build_turnover_costs_derives_daily_cost_return(performance: pd.DataFram
 
     assert list(turnover_costs.columns) == TURNOVER_COSTS_COLUMNS
     assert turnover_costs["cost_return"].tolist() == pytest.approx([0.001, 0.002, 0.001, 0.0005, 0.001, 0.001])
+
+
+def test_build_cost_sensitivity_includes_zero_and_base_cost_rows(
+    performance: pd.DataFrame,
+) -> None:
+    cost_sensitivity = build_cost_sensitivity(
+        performance,
+        base_cost_bps=10.0,
+        sensitivity_bps=[],
+    )
+
+    assert list(cost_sensitivity.columns) == COST_SENSITIVITY_COLUMNS
+    assert set(cost_sensitivity["strategy"]) == {"alpha", "beta"}
+    assert set(cost_sensitivity["bps_per_trade"]) == {0.0, 10.0}
+
+    alpha_zero = cost_sensitivity.loc[
+        (cost_sensitivity["strategy"] == "alpha")
+        & (cost_sensitivity["bps_per_trade"] == 0.0)
+    ].iloc[0]
+    alpha_base = cost_sensitivity.loc[
+        (cost_sensitivity["strategy"] == "alpha")
+        & (cost_sensitivity["bps_per_trade"] == 10.0)
+    ].iloc[0]
+
+    assert alpha_zero["gross_cumulative_return"] == pytest.approx((1.01 * 1.02 * 0.99) - 1.0)
+    assert alpha_zero["cumulative_return"] == pytest.approx((1.01 * 1.02 * 0.99) - 1.0)
+    assert alpha_zero["final_equity"] == pytest.approx(1.01 * 1.02 * 0.99)
+    assert alpha_zero["cost_drag"] == pytest.approx(0.0)
+    assert alpha_zero["avg_cost_return"] == pytest.approx(0.0)
+    assert alpha_zero["total_cost_return"] == pytest.approx(0.0)
+
+    assert alpha_base["cumulative_return"] == pytest.approx((1.009 * 1.018 * 0.9885) - 1.0)
+    assert alpha_base["final_equity"] == pytest.approx(1.009 * 1.018 * 0.9885)
+    assert alpha_base["cost_drag"] == pytest.approx(alpha_base["gross_cumulative_return"] - alpha_base["cumulative_return"])
+    assert alpha_base["avg_cost_return"] == pytest.approx((0.001 + 0.002 + 0.0015) / 3.0)
+    assert alpha_base["total_cost_return"] == pytest.approx(0.0045)
+
+
+def test_build_cost_sensitivity_reprices_metrics_monotonically(
+    performance: pd.DataFrame,
+) -> None:
+    cost_sensitivity = build_cost_sensitivity(
+        performance,
+        base_cost_bps=10.0,
+        sensitivity_bps=[25.0],
+    )
+
+    alpha_rows = cost_sensitivity.loc[
+        cost_sensitivity["strategy"] == "alpha"
+    ].sort_values("bps_per_trade")
+
+    assert alpha_rows["bps_per_trade"].tolist() == [0.0, 10.0, 25.0]
+    assert alpha_rows["total_cost_return"].is_monotonic_increasing
+    assert alpha_rows["cost_drag"].is_monotonic_increasing
+    assert alpha_rows["cumulative_return"].tolist() == sorted(
+        alpha_rows["cumulative_return"].tolist(),
+        reverse=True,
+    )
 
 
 def test_build_monthly_returns_compounds_by_strategy_and_month(performance: pd.DataFrame) -> None:

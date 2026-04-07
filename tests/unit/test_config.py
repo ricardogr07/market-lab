@@ -14,6 +14,7 @@ def _write_config(
     data: dict[str, object] | None = None,
     portfolio: dict[str, object] | None = None,
     baselines: dict[str, object] | None = None,
+    evaluation: dict[str, object] | None = None,
 ) -> Path:
     payload = {
         "experiment_name": "config_fixture",
@@ -31,6 +32,8 @@ def _write_config(
         payload["portfolio"] = portfolio
     if baselines is not None:
         payload["baselines"] = baselines
+    if evaluation is not None:
+        payload["evaluation"] = evaluation
 
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return path
@@ -50,6 +53,7 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.portfolio.risk.max_group_weight is None
     assert config.portfolio.risk.max_long_exposure is None
     assert config.portfolio.risk.max_short_exposure is None
+    assert config.evaluation.cost_sensitivity_bps == []
 
 
 def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
@@ -63,6 +67,7 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
                 "group_weights": None,
             }
         },
+        evaluation={"cost_sensitivity_bps": None},
     )
 
     config = load_config(config_path)
@@ -70,6 +75,7 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
     assert config.data.symbol_groups == {}
     assert config.baselines.allocation.symbol_weights == {}
     assert config.baselines.allocation.group_weights == {}
+    assert config.evaluation.cost_sensitivity_bps == []
 
 
 def test_load_config_rejects_unknown_symbol_group_entries(tmp_path: Path) -> None:
@@ -216,4 +222,32 @@ def test_load_config_accepts_valid_risk_caps(tmp_path: Path) -> None:
     assert config.portfolio.risk.max_group_weight == pytest.approx(0.40)
     assert config.portfolio.risk.max_long_exposure == pytest.approx(0.60)
     assert config.portfolio.risk.max_short_exposure == pytest.approx(0.45)
+
+
+def test_load_config_accepts_cost_sensitivity_bps(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={"cost_sensitivity_bps": [25.0, 5.0]},
+    )
+
+    config = load_config(config_path)
+
+    assert config.evaluation.cost_sensitivity_bps == [25.0, 5.0]
+
+
+@pytest.mark.parametrize("values", [[-1.0], [float("inf")], [float("nan")]])
+def test_load_config_rejects_invalid_cost_sensitivity_bps(
+    tmp_path: Path,
+    values: list[float],
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={"cost_sensitivity_bps": values},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="evaluation.cost_sensitivity_bps must contain only finite non-negative values",
+    ):
+        load_config(config_path)
 
