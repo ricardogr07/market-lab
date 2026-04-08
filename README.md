@@ -216,6 +216,31 @@ Allocation semantics:
 
 This first Phase 5 step stays narrow: allocation baselines are long-only, fully invested target-weight portfolios. Optimizer methods, factor diagnostics, and broader scenario comparisons remain later work.
 
+## Optimizer Input Scaffold
+
+`backtest` and `run-experiment` now also accept a non-executable optimizer scaffold under `baselines.optimized`.
+
+Add to `baselines`:
+
+- `optimized.enabled`
+- `optimized.method`: `mean_variance`, `risk_parity`, or `black_litterman`
+- `optimized.lookback_days`
+- `optimized.rebalance_frequency`
+- `optimized.covariance_estimator`: `sample`, `ewma`, `diagonal_shrinkage`, or `external_csv`
+- `optimized.external_covariance_path`
+- `optimized.expected_return_source`: `historical_mean` or `external_csv`
+- `optimized.external_expected_returns_path`
+- `optimized.long_only`
+- `optimized.target_gross_exposure`
+
+This PR only adds the shared optimizer input seam and validates the external CSV contracts. It does not yet emit optimized strategy weights. If `baselines.optimized.enabled: true`, MarketLab now fails fast with a scaffold-only error instead of silently ignoring the config. The executable optimizer baselines remain later Phase 5 work.
+
+External input rules:
+
+- covariance CSVs must be square daily-return covariance matrices keyed by the configured symbols
+- expected-return CSVs must contain exactly `symbol,expected_return`, where `expected_return` is a daily decimal return
+- both loaders reorder to `data.symbols` and reject missing, extra, or non-numeric values
+
 ## Single-Symbol VOO Timing Example
 
 `configs/experiment.voo_long_only.ytd.yaml` is a tracked one-symbol directional timing example built around `VOO` from `2018-01-01` through `2026-04-03`. It currently compares five sklearn models, runs in `long_only` mode with `long_n: 1`, and lowers `min_test_rows` to `10` so quarterly test folds stay viable on a one-symbol weekly dataset.
@@ -277,15 +302,47 @@ powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1
 
 ```bash
 python -m uv sync --group dev
-python -m uv run tox -e lint
-python -m uv run tox -e docs
-python -m uv run tox -e package
-python -m uv run tox -e py312
-python -m tox -e integration
-python -m tox -e preflight
+py -3.12 -m tox -e lint
+py -3.12 -m tox -e docs
+py -3.12 -m tox -e py312
+py -3.12 -m tox -e package
+py -3.12 -m tox -e integration
+py -3.12 -m tox -e preflight-fast
+py -3.12 -m tox -e preflight-slow
+py -3.12 -m tox -e preflight
+py -3.12 scripts/profile_validation.py --env package --env integration
 ```
 
-Use `python -m tox -e preflight` as the canonical local pre-push gate. It runs the same lint, docs, packaging, unit-test, and offline integration checks that Phase 3 CI expects through one local entrypoint after the dev dependencies are installed.
+Use `py -3.12 -m tox -e preflight` as the canonical local pre-push gate so local validation matches the Python version used in GitHub Actions. For normal iteration, prefer the specific lane you touched or `preflight-fast`; leave `preflight-slow` and the full `preflight` run for packaging, artifact, or final push checks.
+
+Current measured local Windows budgets are roughly:
+
+- `lint`: under `30s`
+- `docs`: under `30s`
+- `py312`: under `60s`
+- `package`: about `4-6m`
+- `integration`: about `8-10m`
+- `preflight`: about `14-16m`
+
+That makes `preflight` intentionally long because it is the sum of the expensive packaging and integration lanes, not because the fast lanes are slow. Use `scripts/profile_validation.py` when you need per-lane timings or need to confirm which component is driving a slow local run.
+
+## Investigating Slow Local Validation
+
+Use this sequence when `preflight` feels slow or unstable:
+
+1. `py -3.12 -m tox -e lint`
+2. `py -3.12 -m tox -e docs`
+3. `py -3.12 -m tox -e py312`
+4. `py -3.12 -m tox -e package`
+5. `py -3.12 -m tox -e integration`
+6. `py -3.12 scripts/profile_validation.py --env package --env integration`
+7. `py -3.12 -m tox -e preflight`
+
+Interpret the result this way:
+
+- if only `package` is unstable or much slower than expected, inspect `scripts/check_package.py` and its scratch or virtualenv path handling next
+- if only `integration` dominates, profile that suite next, starting with pytest duration reporting inside the integration lane
+- if both are stable individually but `preflight` still feels killed, treat that as a tooling-timeout or UX problem rather than a MarketLab runtime failure
 
 The MkDocs site now builds directly from the `docs/` directory, which is the canonical home for the public documentation set.
 
@@ -293,7 +350,10 @@ The MkDocs site now builds directly from the `docs/` directory, which is the can
 
 - Branch from a refreshed `master` instead of working directly on the default branch.
 - Keep changes in small intentional commits so review scope stays clear.
-- Run `python -m tox -e preflight` before pushing.
+- Run `py -3.12 -m tox -e preflight-fast` during normal iteration.
+- Run `py -3.12 -m tox -e package` for packaging or installed-CLI work.
+- Run `py -3.12 -m tox -e integration` for pipeline, config, artifact, or report changes.
+- Run `py -3.12 -m tox -e preflight` before pushing.
 - Open a pull request for review instead of pushing directly to `master`.
 - Treat the `Docker Runner` workflow as an optional manual smoke path, not as a required pre-push step.
 - Keep Codex skills and other personal automation assets in the user-local Codex home rather than in the public repository or package surface.
@@ -341,6 +401,8 @@ Before the first automated public release:
 - create the GitHub Actions environment named `pypi`
 
 The first automated public release target remains `v0.1.0`.
+
+
 
 
 

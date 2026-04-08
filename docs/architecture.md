@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -19,7 +19,7 @@ This document ties the current pieces together and records the working rules tha
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
-  - `buy_hold`, `sma`, and config-defined allocation baselines
+  - `buy_hold`, `sma`, config-defined allocation baselines, and optimizer input scaffolding for later optimized baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
@@ -121,6 +121,15 @@ The required CI path stays offline and deterministic through tox. The Docker run
 - The `0.0` bps rows are theoretical gross-return baselines, while the row at the configured trading cost should match the current net-return path already reported elsewhere.
 - Cost-sensitivity reporting applies to `backtest` and `run-experiment`, but not to `train-models`.
 
+
+## Optimizer Scaffold Rules
+
+- `baselines.optimized` is a scaffold-only config surface in the current phase; it does not yet emit optimized strategy weights.
+- The scaffold exists to validate shared optimizer inputs, window timing, covariance estimation, and external file contracts before `mean_variance`, `risk_parity`, and `black_litterman` baselines land.
+- Trailing return windows are built from adjusted close data only, and the latest included return must end on the `signal_date`.
+- External covariance inputs must be square daily-return covariance matrices keyed by the configured symbols.
+- External expected-return inputs must contain exactly `symbol,expected_return` in daily decimal units.
+- If `baselines.optimized.enabled` is set today, the pipeline fails fast with a scaffold-only runtime error instead of pretending an optimizer baseline exists.
 
 ## System Map
 
@@ -353,6 +362,7 @@ classDiagram
       +buy_hold: bool
       +sma: SMAConfig
       +allocation: AllocationConfig
+      +optimized: OptimizedConfig
     }
 
     class SMAConfig {
@@ -367,6 +377,19 @@ classDiagram
       +symbol_weights: dict[str, float]
       +group_weights: dict[str, float]
     }
+    class OptimizedConfig {
+      +enabled: bool
+      +method: str
+      +lookback_days: int
+      +rebalance_frequency: str
+      +covariance_estimator: str
+      +external_covariance_path: str
+      +expected_return_source: str
+      +external_expected_returns_path: str
+      +long_only: bool
+      +target_gross_exposure: float
+    }
+
     class EvaluationConfig {
       +walk_forward: WalkForwardConfig
     }
@@ -697,6 +720,18 @@ Best practice:
 - Reuses the shared rebalance cadence and emits full-symbol target rows on the first trading date and each later effective rebalance date.
 - Supports equal, exact symbol-weight, and group-sleeve allocation modes.
 
+### `src/marketlab/strategies/optimized.py`
+
+- Builds reusable optimizer input windows from the daily adjusted-close panel without introducing look-ahead.
+- Produces trailing common-date daily return matrices keyed by `signal_date` and `effective_date`.
+- Provides covariance helpers for `sample`, `ewma`, `diagonal_shrinkage`, and `external_csv` inputs.
+- Provides expected-return helpers for `historical_mean` and `external_csv` inputs.
+- Reorders and validates external covariance and expected-return files against `data.symbols`.
+
+Best practice:
+- Keep this module limited to optimizer inputs and estimators until actual optimized baselines land.
+- Use adjusted close returns ending on the signal date and reject malformed external files early.
+
 ### `src/marketlab/strategies/buy_hold.py`
 
 - Emits one equal-weight allocation on the first available date and then lets weights drift until the backtest engine sees another target row.
@@ -833,6 +868,9 @@ Best practice:
 - Do not batch multiple strategies into a single `run_backtest(...)` call.
 - Do not redesign the current data layer just to support later model abstractions.
 - Preserve the local launcher and E2E runner as the default developer entrypoints.
+
+
+
 
 
 
