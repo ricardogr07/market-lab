@@ -251,4 +251,44 @@ def test_build_optimizer_inputs_supports_external_sources(tmp_path: Path) -> Non
     assert first_input.expected_returns.loc["AAA"] == pytest.approx(0.01)
     assert first_input.covariance.loc["BBB", "BBB"] == pytest.approx(0.04)
 
+def test_build_optimizer_inputs_validates_external_requirements_before_window_generation() -> None:
+    empty_panel = pd.DataFrame(columns=["symbol", "timestamp", "adj_close"])
 
+    with pytest.raises(
+        ValueError,
+        match="external_covariance_path is required when covariance_estimator='external_csv'",
+    ):
+        build_optimizer_inputs(
+            empty_panel,
+            symbols=["AAA", "BBB"],
+            lookback_days=3,
+            covariance_estimator="external_csv",
+        )
+
+
+def test_build_optimizer_inputs_rejects_unused_external_paths() -> None:
+    empty_panel = pd.DataFrame(columns=["symbol", "timestamp", "adj_close"])
+
+    with pytest.raises(
+        ValueError,
+        match="external_path must be omitted unless method='external_csv'",
+    ):
+        build_optimizer_inputs(
+            empty_panel,
+            symbols=["AAA", "BBB"],
+            lookback_days=3,
+            covariance_estimator="sample",
+            external_covariance_path="covariance.csv",
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="external_path must be omitted unless source='external_csv'",
+    ):
+        build_optimizer_inputs(
+            empty_panel,
+            symbols=["AAA", "BBB"],
+            lookback_days=3,
+            expected_return_source="historical_mean",
+            external_expected_returns_path="expected.csv",
+        )

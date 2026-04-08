@@ -245,14 +245,7 @@ def build_optimizer_inputs(
     expected_return_source: str = "historical_mean",
     external_expected_returns_path: Path | str | None = None,
 ) -> list[OptimizerInput]:
-    windows = build_optimizer_windows(
-        panel,
-        symbols=symbols,
-        lookback_days=lookback_days,
-        frequency=frequency,
-    )
-    if not windows:
-        return []
+    ordered_symbols = list(symbols)
 
     shared_covariance: pd.DataFrame | None = None
     if covariance_estimator == "external_csv":
@@ -260,7 +253,13 @@ def build_optimizer_inputs(
             raise ValueError("external_covariance_path is required when covariance_estimator='external_csv'.")
         shared_covariance = load_external_covariance(
             external_covariance_path,
-            symbols=windows[0].symbols,
+            symbols=ordered_symbols,
+        )
+    else:
+        estimate_covariance_matrix(
+            pd.DataFrame(columns=ordered_symbols, dtype=float),
+            method=covariance_estimator,
+            external_path=external_covariance_path,
         )
 
     shared_expected_returns: pd.Series | None = None
@@ -271,8 +270,23 @@ def build_optimizer_inputs(
             )
         shared_expected_returns = load_external_expected_returns(
             external_expected_returns_path,
-            symbols=windows[0].symbols,
+            symbols=ordered_symbols,
         )
+    else:
+        estimate_expected_returns(
+            pd.DataFrame(columns=ordered_symbols, dtype=float),
+            source=expected_return_source,
+            external_path=external_expected_returns_path,
+        )
+
+    windows = build_optimizer_windows(
+        panel,
+        symbols=ordered_symbols,
+        lookback_days=lookback_days,
+        frequency=frequency,
+    )
+    if not windows:
+        return []
 
     inputs: list[OptimizerInput] = []
     for window in windows:
