@@ -254,6 +254,46 @@ def _repriced_performance(working: pd.DataFrame, bps_per_trade: float) -> pd.Dat
     return repriced.loc[:, ["date", "strategy", "gross_return", "net_return", "turnover", "equity"]]
 
 
+def _compute_repriced_strategy_metrics(repriced: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, float | str]] = []
+    for strategy, frame in repriced.groupby("strategy", sort=False):
+        ordered = frame.sort_values("date").reset_index(drop=True)
+        returns = ordered["net_return"]
+        equity = ordered["equity"]
+        periods = len(ordered)
+        final_equity = float(equity.iloc[-1]) if periods else 1.0
+
+        annualized_return = float("nan")
+        if periods and final_equity > 0.0:
+            annualized_return = float((final_equity ** (252.0 / periods)) - 1.0)
+
+        annualized_volatility = float(returns.std(ddof=0) * math.sqrt(252.0))
+        if annualized_volatility > 0.0 and math.isfinite(annualized_return):
+            sharpe_like = annualized_return / annualized_volatility
+        elif math.isfinite(annualized_return):
+            sharpe_like = 0.0
+        else:
+            sharpe_like = float("nan")
+
+        drawdown = (equity / equity.cummax()) - 1.0
+        max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
+
+        rows.append(
+            {
+                "strategy": strategy,
+                "cumulative_return": (final_equity - 1.0) if periods else 0.0,
+                "annualized_return": annualized_return,
+                "annualized_volatility": annualized_volatility,
+                "sharpe_like": float(sharpe_like),
+                "max_drawdown": max_drawdown,
+                "hit_rate": float((returns > 0.0).mean()) if periods else 0.0,
+                "avg_turnover": float(ordered["turnover"].mean()) if periods else 0.0,
+                "total_turnover": float(ordered["turnover"].sum()) if periods else 0.0,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
 def build_cost_sensitivity(
     performance: pd.DataFrame,
     base_cost_bps: float,
@@ -281,7 +321,7 @@ def build_cost_sensitivity(
     scenario_frames: list[pd.DataFrame] = []
     for bps_per_trade in _cost_sensitivity_grid(base_cost_bps, sensitivity_bps):
         repriced = _repriced_performance(working, bps_per_trade)
-        metrics = compute_strategy_metrics(repriced)
+        metrics = _compute_repriced_strategy_metrics(repriced)
         final_equity = (
             repriced.groupby("strategy", as_index=False)
             .agg(final_equity=("equity", "last"))
@@ -653,3 +693,4 @@ def build_strategy_summary(
         .reset_index(drop=True)
     )
     return summary.loc[:, STRATEGY_SUMMARY_COLUMNS]
+

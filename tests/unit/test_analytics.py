@@ -169,6 +169,33 @@ def test_build_cost_sensitivity_reprices_metrics_monotonically(
     )
 
 
+def test_build_cost_sensitivity_handles_non_positive_equity() -> None:
+    stressed_performance = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-30"]),
+            "strategy": ["stress"],
+            "gross_return": [0.0],
+            "net_return": [0.0],
+            "turnover": [1.5],
+            "equity": [1.0],
+        }
+    )
+
+    cost_sensitivity = build_cost_sensitivity(
+        stressed_performance,
+        base_cost_bps=10_000.0,
+        sensitivity_bps=[],
+    )
+
+    stressed_row = cost_sensitivity.loc[
+        (cost_sensitivity["strategy"] == "stress")
+        & (cost_sensitivity["bps_per_trade"] == 10_000.0)
+    ].iloc[0]
+
+    assert stressed_row["final_equity"] == pytest.approx(-0.5)
+    assert stressed_row["cumulative_return"] == pytest.approx(-1.5)
+    assert pd.isna(stressed_row["annualized_return"])
+    assert pd.isna(stressed_row["sharpe_like"])
 def test_build_monthly_returns_compounds_by_strategy_and_month(performance: pd.DataFrame) -> None:
     monthly = build_monthly_returns(performance)
 
@@ -378,4 +405,6 @@ def test_build_strategy_summary_appends_benchmark_relative_metrics(
     assert beta_row["correlation_to_benchmark"] == pytest.approx(1.0)
     assert beta_row["up_capture"] == pytest.approx(1.0)
     assert pd.isna(beta_row["down_capture"])
+
+
 
