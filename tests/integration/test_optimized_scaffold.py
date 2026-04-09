@@ -18,7 +18,6 @@ run_marketlab_cli = getattr(
 )
 write_yaml_config = _cli_harness.write_yaml_config
 
-RISK_PARITY_ERROR = "baselines.optimized.method='risk_parity' is not implemented yet."
 BLACK_LITTERMAN_ERROR = "baselines.optimized.method='black_litterman' is not implemented yet."
 
 
@@ -206,21 +205,63 @@ def test_backtest_keeps_mean_variance_as_cash_when_no_windows_exist(tmp_path: Pa
     assert mean_variance_row["avg_cash_weight"] == 1.0
 
 
-def test_backtest_rejects_unimplemented_risk_parity_baseline(tmp_path: Path) -> None:
+def test_backtest_supports_risk_parity_optimized_baseline(tmp_path: Path) -> None:
     config_path = _write_backtest_config(
         tmp_path,
         optimized={
             "enabled": True,
             "method": "risk_parity",
+            "lookback_days": 3,
+            "target_gross_exposure": 0.6,
         },
     )
 
     result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
 
-    assert result.returncode != 0
-    combined_output = f"{result.stdout}\n{result.stderr}"
-    assert RISK_PARITY_ERROR in combined_output
-    assert not (tmp_path / "runs" / "optimized_scaffold_backtest").exists()
+    run_root = tmp_path / "runs" / "optimized_scaffold_backtest"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(metrics["strategy"]) == {"buy_hold", "sma", "risk_parity"}
+    assert set(strategy_summary["strategy"]) == {"buy_hold", "sma", "risk_parity"}
+    risk_parity_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "risk_parity"
+    ].iloc[0]
+    assert risk_parity_row["avg_gross_exposure"] <= 0.6 + 1e-6
+    assert "risk_parity" in report_text
+
+
+def test_backtest_keeps_risk_parity_as_cash_when_no_windows_exist(tmp_path: Path) -> None:
+    config_path = _write_backtest_config(
+        tmp_path,
+        optimized={
+            "enabled": True,
+            "method": "risk_parity",
+            "lookback_days": 10_000,
+            "target_gross_exposure": 0.6,
+        },
+        buy_hold=False,
+        sma_enabled=False,
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "optimized_scaffold_backtest"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+
+    assert set(metrics["strategy"]) == {"risk_parity"}
+    assert set(strategy_summary["strategy"]) == {"risk_parity"}
+    risk_parity_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "risk_parity"
+    ].iloc[0]
+    assert risk_parity_row["avg_gross_exposure"] == 0.0
+    assert risk_parity_row["avg_cash_weight"] == 1.0
 
 
 

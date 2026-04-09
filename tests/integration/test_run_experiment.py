@@ -502,6 +502,40 @@ def test_run_experiment_supports_mean_variance_baseline(tmp_path: Path) -> None:
     assert mean_variance_row["avg_gross_exposure"] <= 0.7 + 1e-6
     assert "mean_variance" in report_text
 
+
+def test_run_experiment_supports_risk_parity_baseline(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        optimized={
+            "enabled": True,
+            "method": "risk_parity",
+            "lookback_days": 5,
+            "target_gross_exposure": 0.7,
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategies = {"buy_hold", "sma", "risk_parity", "ml_logistic_regression"}
+    assert set(metrics["strategy"]) == expected_strategies
+    assert set(performance["strategy"]) == expected_strategies
+    assert set(strategy_summary["strategy"]) == expected_strategies
+    risk_parity_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "risk_parity"
+    ].iloc[0]
+    assert risk_parity_row["avg_gross_exposure"] <= 0.71
+    assert "risk_parity" in report_text
+
+
 def test_run_experiment_supports_group_weight_allocation_baseline(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
         tmp_path,

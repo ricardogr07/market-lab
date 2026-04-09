@@ -9,6 +9,7 @@ import pytest
 from marketlab.strategies.optimized import (
     DIAGONAL_SHRINKAGE_WEIGHT,
     EWMA_LAMBDA,
+    build_covariance_inputs,
     build_optimizer_inputs,
     build_optimizer_windows,
     estimate_covariance_matrix,
@@ -252,6 +253,33 @@ def test_build_optimizer_inputs_supports_external_sources(tmp_path: Path) -> Non
     assert first_input.expected_returns.loc["AAA"] == pytest.approx(0.01)
     assert first_input.covariance.loc["BBB", "BBB"] == pytest.approx(0.04)
 
+
+def test_build_covariance_inputs_supports_external_covariance_only(tmp_path: Path) -> None:
+    panel = _build_panel()
+    covariance_path = tmp_path / "covariance.csv"
+    pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB"],
+            "AAA": [0.09, 0.01],
+            "BBB": [0.01, 0.04],
+        }
+    ).to_csv(covariance_path, index=False)
+
+    optimizer_inputs = build_covariance_inputs(
+        panel,
+        symbols=["AAA", "BBB"],
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+    )
+
+    assert len(optimizer_inputs) >= 1
+    first_input = optimizer_inputs[0]
+    assert first_input.expected_returns is None
+    assert list(first_input.covariance.index) == ["AAA", "BBB"]
+    assert first_input.covariance.loc["BBB", "BBB"] == pytest.approx(0.04)
+
+
 def test_build_optimizer_inputs_validates_external_requirements_before_window_generation() -> None:
     empty_panel = pd.DataFrame(columns=["symbol", "timestamp", "adj_close"])
 
@@ -491,13 +519,185 @@ def test_generate_weights_respects_group_caps(tmp_path: Path) -> None:
     assert float(first_weights.sum()) == pytest.approx(0.8, abs=1e-5)
 
 
-def test_generate_weights_rejects_unimplemented_methods() -> None:
+def test_generate_weights_produces_equal_risk_parity_solution(tmp_path: Path) -> None:
     panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
 
-    with pytest.raises(RuntimeError, match="baselines.optimized.method='risk_parity' is not implemented yet"):
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="risk_parity",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+    )
+
+    assert set(weights["strategy"]) == {"risk_parity"}
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.5, abs=1e-6)
+    assert first_weights.loc["BBB"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_generate_weights_overweights_lower_volatility_in_risk_parity(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.01, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="risk_parity",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(2.0 / 3.0, abs=1e-3)
+    assert first_weights.loc["BBB"] == pytest.approx(1.0 / 3.0, abs=1e-3)
+
+
+def test_generate_weights_respects_target_gross_exposure_for_risk_parity(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="risk_parity",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        target_gross_exposure=0.6,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert float(first_weights.sum()) == pytest.approx(0.6, abs=1e-6)
+    assert first_weights.loc["AAA"] == pytest.approx(0.3, abs=1e-6)
+    assert first_weights.loc["BBB"] == pytest.approx(0.3, abs=1e-6)
+
+
+def test_generate_weights_respects_position_caps_for_risk_parity(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.01, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="risk_parity",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        max_position_weight=0.6,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.6, abs=1e-5)
+    assert first_weights.loc["BBB"] == pytest.approx(0.4, abs=1e-5)
+
+
+def test_generate_weights_respects_group_caps_for_risk_parity(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel(
+        (("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0), ("CCC", 140.0, 1.0))
+    )
+    covariance = pd.DataFrame(
+        np.diag([0.04, 0.04, 0.04]),
+        index=["AAA", "BBB", "CCC"],
+        columns=["AAA", "BBB", "CCC"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB", "CCC"],
+        method="risk_parity",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        symbol_groups={"AAA": "growth", "BBB": "growth", "CCC": "defensive"},
+        max_group_weight=0.4,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert float(first_weights.loc[["AAA", "BBB"]].sum()) == pytest.approx(0.4, abs=1e-5)
+    assert first_weights.loc["CCC"] == pytest.approx(0.4, abs=1e-5)
+    assert float(first_weights.sum()) == pytest.approx(0.8, abs=1e-5)
+
+
+def test_generate_weights_rejects_expected_return_inputs_for_risk_parity(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    with pytest.raises(
+        ValueError,
+        match="Risk-parity optimized baseline does not use expected returns",
+    ):
         generate_weights(
             panel,
             symbols=["AAA", "BBB"],
             method="risk_parity",
+            lookback_days=3,
+            covariance_estimator="external_csv",
+            external_covariance_path=covariance_path,
+            expected_return_source="external_csv",
+            external_expected_returns_path=tmp_path / "expected.csv",
+        )
+
+
+def test_generate_weights_rejects_unimplemented_methods() -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+
+    with pytest.raises(
+        RuntimeError,
+        match="baselines.optimized.method='black_litterman' is not implemented yet",
+    ):
+        generate_weights(
+            panel,
+            symbols=["AAA", "BBB"],
+            method="black_litterman",
             lookback_days=3,
         )

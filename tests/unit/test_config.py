@@ -307,6 +307,22 @@ def test_load_config_rejects_invalid_cost_sensitivity_bps(
             "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 when baselines.optimized.method='mean_variance'",
         ),
         (
+            {"method": "risk_parity", "long_only": False},
+            "baselines.optimized.long_only must be true when baselines.optimized.method='risk_parity'",
+        ),
+        (
+            {"method": "risk_parity", "target_gross_exposure": 1.2},
+            "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 when baselines.optimized.method='risk_parity'",
+        ),
+        (
+            {"method": "risk_parity", "expected_return_source": "external_csv"},
+            "baselines.optimized.expected_return_source must remain 'historical_mean' when baselines.optimized.method='risk_parity'",
+        ),
+        (
+            {"method": "risk_parity", "external_expected_returns_path": "expected.csv"},
+            "baselines.optimized.external_expected_returns_path must be empty when baselines.optimized.method='risk_parity'",
+        ),
+        (
             {"covariance_estimator": "external_csv"},
             "baselines.optimized.external_covariance_path is required when baselines.optimized.covariance_estimator='external_csv'",
         ),
