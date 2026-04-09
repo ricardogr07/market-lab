@@ -320,6 +320,27 @@ def _validate_config(config: ExperimentConfig) -> None:
                 "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 "
                 "when baselines.optimized.method='mean_variance'."
             )
+    if optimized.method == "risk_parity":
+        if not optimized.long_only:
+            raise ValueError(
+                "baselines.optimized.long_only must be true when "
+                "baselines.optimized.method='risk_parity'."
+            )
+        if optimized.target_gross_exposure > 1.0:
+            raise ValueError(
+                "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 "
+                "when baselines.optimized.method='risk_parity'."
+            )
+        if optimized.expected_return_source != "historical_mean":
+            raise ValueError(
+                "baselines.optimized.expected_return_source must remain 'historical_mean' "
+                "when baselines.optimized.method='risk_parity'."
+            )
+        if optimized.external_expected_returns_path != "":
+            raise ValueError(
+                "baselines.optimized.external_expected_returns_path must be empty when "
+                "baselines.optimized.method='risk_parity'."
+            )
     if optimized.covariance_estimator == "external_csv":
         if optimized.external_covariance_path == "":
             raise ValueError(

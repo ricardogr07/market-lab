@@ -19,6 +19,10 @@ WEIGHT_EPSILON = 1e-12
 REQUIRED_PANEL_COLUMNS = {"adj_close", "symbol", "timestamp"}
 WEIGHTS_COLUMNS = ["strategy", "effective_date", "symbol", "weight"]
 MEAN_VARIANCE_STRATEGY_NAME = "mean_variance"
+RISK_PARITY_STRATEGY_NAME = "risk_parity"
+EXECUTABLE_METHODS = frozenset(
+    {MEAN_VARIANCE_STRATEGY_NAME, RISK_PARITY_STRATEGY_NAME}
+)
 
 
 @dataclass(slots=True)
@@ -36,11 +40,49 @@ class OptimizerInput:
     symbols: list[str]
     returns: pd.DataFrame
     covariance: pd.DataFrame
-    expected_returns: pd.Series
+    expected_returns: pd.Series | None = None
+
+
+@dataclass(slots=True)
+class LongOnlyProblem:
+    symbols: list[str]
+    feasible_weights: np.ndarray
+    achieved_target_exposure: float
+    covariance: np.ndarray
+    upper_bounds: np.ndarray
+    grouped_indices: dict[str, np.ndarray]
 
 
 def _empty_weights_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=WEIGHTS_COLUMNS)
+
+
+def is_executable_method(method: str) -> bool:
+    return method in EXECUTABLE_METHODS
+
+
+def strategy_name_for_method(method: str) -> str:
+    if method == "mean_variance":
+        return MEAN_VARIANCE_STRATEGY_NAME
+    if method == "risk_parity":
+        return RISK_PARITY_STRATEGY_NAME
+    raise _unsupported_method_error(method)
+
+
+def generate_cash_only_weights(
+    method: str,
+    *,
+    effective_date: pd.Timestamp,
+    symbols: list[str],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": strategy_name_for_method(method),
+            "effective_date": pd.Timestamp(effective_date),
+            "symbol": symbols,
+            "weight": [0.0] * len(symbols),
+        }
+    )
 
 
 def _require_columns(panel: pd.DataFrame) -> None:
@@ -244,7 +286,7 @@ def estimate_expected_returns(
     return returns.loc[:, ordered_symbols].mean(axis=0).astype(float).rename("expected_return")
 
 
-def build_optimizer_inputs(
+def build_covariance_inputs(
     panel: pd.DataFrame,
     *,
     symbols: list[str],
@@ -252,8 +294,6 @@ def build_optimizer_inputs(
     frequency: str = "W-FRI",
     covariance_estimator: str = "sample",
     external_covariance_path: Path | str | None = None,
-    expected_return_source: str = "historical_mean",
-    external_expected_returns_path: Path | str | None = None,
 ) -> list[OptimizerInput]:
     ordered_symbols = list(symbols)
 
@@ -272,6 +312,58 @@ def build_optimizer_inputs(
             external_path=external_covariance_path,
         )
 
+    windows = build_optimizer_windows(
+        panel,
+        symbols=ordered_symbols,
+        lookback_days=lookback_days,
+        frequency=frequency,
+    )
+    if not windows:
+        return []
+
+    inputs: list[OptimizerInput] = []
+    for window in windows:
+        covariance = (
+            shared_covariance.copy()
+            if shared_covariance is not None
+            else estimate_covariance_matrix(window.returns, method=covariance_estimator)
+        )
+        inputs.append(
+            OptimizerInput(
+                signal_date=window.signal_date,
+                effective_date=window.effective_date,
+                symbols=window.symbols,
+                returns=window.returns.copy(),
+                covariance=covariance.loc[window.symbols, window.symbols].copy(),
+            )
+        )
+
+    return inputs
+
+
+def build_optimizer_inputs(
+    panel: pd.DataFrame,
+    *,
+    symbols: list[str],
+    lookback_days: int,
+    frequency: str = "W-FRI",
+    covariance_estimator: str = "sample",
+    external_covariance_path: Path | str | None = None,
+    expected_return_source: str = "historical_mean",
+    external_expected_returns_path: Path | str | None = None,
+) -> list[OptimizerInput]:
+    ordered_symbols = list(symbols)
+    covariance_inputs = build_covariance_inputs(
+        panel,
+        symbols=ordered_symbols,
+        lookback_days=lookback_days,
+        frequency=frequency,
+        covariance_estimator=covariance_estimator,
+        external_covariance_path=external_covariance_path,
+    )
+    if not covariance_inputs:
+        return []
+
     shared_expected_returns: pd.Series | None = None
     if expected_return_source == "external_csv":
         if external_expected_returns_path is None:
@@ -289,35 +381,24 @@ def build_optimizer_inputs(
             external_path=external_expected_returns_path,
         )
 
-    windows = build_optimizer_windows(
-        panel,
-        symbols=ordered_symbols,
-        lookback_days=lookback_days,
-        frequency=frequency,
-    )
-    if not windows:
-        return []
-
     inputs: list[OptimizerInput] = []
-    for window in windows:
-        covariance = (
-            shared_covariance.copy()
-            if shared_covariance is not None
-            else estimate_covariance_matrix(window.returns, method=covariance_estimator)
-        )
+    for optimizer_input in covariance_inputs:
         expected_returns = (
             shared_expected_returns.copy()
             if shared_expected_returns is not None
-            else estimate_expected_returns(window.returns, source=expected_return_source)
+            else estimate_expected_returns(
+                optimizer_input.returns,
+                source=expected_return_source,
+            )
         )
         inputs.append(
             OptimizerInput(
-                signal_date=window.signal_date,
-                effective_date=window.effective_date,
-                symbols=window.symbols,
-                returns=window.returns.copy(),
-                covariance=covariance.loc[window.symbols, window.symbols].copy(),
-                expected_returns=expected_returns.loc[window.symbols].copy(),
+                signal_date=optimizer_input.signal_date,
+                effective_date=optimizer_input.effective_date,
+                symbols=optimizer_input.symbols,
+                returns=optimizer_input.returns.copy(),
+                covariance=optimizer_input.covariance.copy(),
+                expected_returns=expected_returns.loc[optimizer_input.symbols].copy(),
             )
         )
 
@@ -447,6 +528,160 @@ def _optimizer_failure(
     )
 
 
+def _regularized_covariance_matrix(
+    optimizer_input: OptimizerInput,
+    *,
+    method: str,
+) -> np.ndarray:
+    covariance = optimizer_input.covariance.loc[
+        optimizer_input.symbols,
+        optimizer_input.symbols,
+    ].to_numpy(dtype=float)
+    if not np.isfinite(covariance).all():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="covariance contains non-finite values",
+        )
+    covariance = (covariance + covariance.T) / 2.0
+    covariance += np.eye(len(optimizer_input.symbols), dtype=float) * COVARIANCE_REGULARIZATION
+    if (np.diag(covariance) <= 0.0).any():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="covariance contains non-positive diagonal entries after regularization",
+        )
+    return covariance
+
+
+def _prepare_long_only_problem(
+    optimizer_input: OptimizerInput,
+    *,
+    method: str,
+    target_gross_exposure: float,
+    max_position_weight: float | None,
+    symbol_groups: dict[str, str] | None,
+    max_group_weight: float | None,
+) -> LongOnlyProblem:
+    symbols = optimizer_input.symbols
+    feasible_weights, achieved_target_exposure = _build_feasible_initializer(
+        symbols=symbols,
+        target_gross_exposure=target_gross_exposure,
+        max_position_weight=max_position_weight,
+        symbol_groups=symbol_groups,
+        max_group_weight=max_group_weight,
+    )
+    covariance = _regularized_covariance_matrix(
+        optimizer_input,
+        method=method,
+    )
+    upper_bounds = _position_upper_bounds(
+        symbols=symbols,
+        achieved_target_exposure=achieved_target_exposure,
+        max_position_weight=max_position_weight,
+        max_group_weight=max_group_weight,
+    )
+    resolved_symbol_groups = _validated_symbol_groups(
+        symbols,
+        symbol_groups,
+        max_group_weight,
+    )
+    grouped_indices = _group_indices(symbols, resolved_symbol_groups)
+    return LongOnlyProblem(
+        symbols=symbols,
+        feasible_weights=feasible_weights,
+        achieved_target_exposure=achieved_target_exposure,
+        covariance=covariance,
+        upper_bounds=upper_bounds,
+        grouped_indices=grouped_indices,
+    )
+
+
+def _constraints(
+    *,
+    achieved_target_exposure: float,
+    grouped_indices: dict[str, np.ndarray],
+    max_group_weight: float | None,
+) -> list[dict[str, object]]:
+    constraints: list[dict[str, object]] = [
+        {
+            "type": "eq",
+            "fun": lambda weights, target=achieved_target_exposure: float(
+                weights.sum() - target
+            ),
+        }
+    ]
+    if max_group_weight is None:
+        return constraints
+
+    for indices in grouped_indices.values():
+        constraints.append(
+            {
+                "type": "ineq",
+                "fun": lambda weights, idx=indices, cap=max_group_weight: float(
+                    cap - weights[idx].sum()
+                ),
+            }
+        )
+    return constraints
+
+
+def _finalize_optimized_weights(
+    *,
+    method: str,
+    optimizer_input: OptimizerInput,
+    problem: LongOnlyProblem,
+    weights: np.ndarray,
+    max_group_weight: float | None,
+) -> pd.Series:
+    if not np.isfinite(weights).all():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="solver returned non-finite weights",
+        )
+
+    weights = np.clip(np.asarray(weights, dtype=float), 0.0, problem.upper_bounds)
+    if abs(float(weights.sum()) - problem.achieved_target_exposure) > CONSTRAINT_TOLERANCE:
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="solver returned weights that violate the target exposure constraint",
+        )
+    if (weights > problem.upper_bounds + CONSTRAINT_TOLERANCE).any():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="solver returned weights that violate the position cap constraint",
+        )
+    if (weights < -CONSTRAINT_TOLERANCE).any():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="solver returned weights that violate the long-only constraint",
+        )
+    if max_group_weight is not None:
+        for group_name, indices in problem.grouped_indices.items():
+            group_weight = float(weights[indices].sum())
+            if group_weight > max_group_weight + CONSTRAINT_TOLERANCE:
+                raise _optimizer_failure(
+                    method=method,
+                    signal_date=optimizer_input.signal_date,
+                    effective_date=optimizer_input.effective_date,
+                    message=(
+                        "solver returned weights that violate the group cap constraint "
+                        f"for group '{group_name}'"
+                    ),
+                )
+    return pd.Series(weights, index=problem.symbols, dtype=float)
+
+
 def _solve_mean_variance_weights(
     optimizer_input: OptimizerInput,
     *,
@@ -456,56 +691,43 @@ def _solve_mean_variance_weights(
     symbol_groups: dict[str, str] | None,
     max_group_weight: float | None,
 ) -> pd.Series:
-    symbols = optimizer_input.symbols
-    feasible_weights, achieved_target_exposure = _build_feasible_initializer(
-        symbols=symbols,
+    if optimizer_input.expected_returns is None:
+        raise ValueError("Mean-variance optimized inputs require expected_returns.")
+
+    problem = _prepare_long_only_problem(
+        optimizer_input,
+        method="mean_variance",
         target_gross_exposure=target_gross_exposure,
         max_position_weight=max_position_weight,
         symbol_groups=symbol_groups,
         max_group_weight=max_group_weight,
     )
-    if achieved_target_exposure <= WEIGHT_EPSILON:
-        return pd.Series(0.0, index=symbols, dtype=float)
+    if problem.achieved_target_exposure <= WEIGHT_EPSILON:
+        return pd.Series(0.0, index=problem.symbols, dtype=float)
 
-    if len(symbols) == 1:
-        return pd.Series(feasible_weights, index=symbols, dtype=float)
+    if len(problem.symbols) == 1:
+        return pd.Series(problem.feasible_weights, index=problem.symbols, dtype=float)
 
-    covariance = optimizer_input.covariance.loc[symbols, symbols].to_numpy(dtype=float)
-    covariance = (covariance + covariance.T) / 2.0
-    covariance += np.eye(len(symbols), dtype=float) * COVARIANCE_REGULARIZATION
-    expected_returns = optimizer_input.expected_returns.loc[symbols].to_numpy(dtype=float)
-    upper_bounds = _position_upper_bounds(
-        symbols=symbols,
-        achieved_target_exposure=achieved_target_exposure,
-        max_position_weight=max_position_weight,
-        max_group_weight=max_group_weight,
+    expected_returns = optimizer_input.expected_returns.loc[problem.symbols].to_numpy(
+        dtype=float
     )
-    resolved_symbol_groups = _validated_symbol_groups(symbols, symbol_groups, max_group_weight)
-    grouped_indices = _group_indices(symbols, resolved_symbol_groups)
 
     def objective(weights: np.ndarray) -> float:
-        return float(0.5 * risk_aversion * (weights @ covariance @ weights) - (expected_returns @ weights))
-
-    constraints: list[dict[str, object]] = [
-        {
-            "type": "eq",
-            "fun": lambda weights: float(weights.sum() - achieved_target_exposure),
-        }
-    ]
-    for indices in grouped_indices.values():
-        constraints.append(
-            {
-                "type": "ineq",
-                "fun": lambda weights, idx=indices: float(max_group_weight - weights[idx].sum()),
-            }
+        return float(
+            0.5 * risk_aversion * (weights @ problem.covariance @ weights)
+            - (expected_returns @ weights)
         )
 
     result = minimize(
         objective,
-        x0=feasible_weights,
+        x0=problem.feasible_weights,
         method="SLSQP",
-        bounds=[(0.0, float(bound)) for bound in upper_bounds],
-        constraints=constraints,
+        bounds=[(0.0, float(bound)) for bound in problem.upper_bounds],
+        constraints=_constraints(
+            achieved_target_exposure=problem.achieved_target_exposure,
+            grouped_indices=problem.grouped_indices,
+            max_group_weight=max_group_weight,
+        ),
         options={"ftol": 1e-9, "maxiter": 500},
     )
     if not result.success:
@@ -516,44 +738,90 @@ def _solve_mean_variance_weights(
             message=result.message,
         )
 
-    weights = np.asarray(result.x, dtype=float)
-    if not np.isfinite(weights).all():
-        raise _optimizer_failure(
-            method="mean_variance",
-            signal_date=optimizer_input.signal_date,
-            effective_date=optimizer_input.effective_date,
-            message="solver returned non-finite weights",
-        )
+    return _finalize_optimized_weights(
+        method="mean_variance",
+        optimizer_input=optimizer_input,
+        problem=problem,
+        weights=np.asarray(result.x, dtype=float),
+        max_group_weight=max_group_weight,
+    )
 
-    weights = np.clip(weights, 0.0, upper_bounds)
-    if abs(float(weights.sum()) - achieved_target_exposure) > CONSTRAINT_TOLERANCE:
-        raise _optimizer_failure(
-            method="mean_variance",
-            signal_date=optimizer_input.signal_date,
-            effective_date=optimizer_input.effective_date,
-            message="solver returned weights that violate the target exposure constraint",
-        )
-    if (weights > upper_bounds + CONSTRAINT_TOLERANCE).any():
-        raise _optimizer_failure(
-            method="mean_variance",
-            signal_date=optimizer_input.signal_date,
-            effective_date=optimizer_input.effective_date,
-            message="solver returned weights that violate the position cap constraint",
-        )
-    for group_name, indices in grouped_indices.items():
-        group_weight = float(weights[indices].sum())
-        if group_weight > max_group_weight + CONSTRAINT_TOLERANCE:
+
+def _solve_risk_parity_weights(
+    optimizer_input: OptimizerInput,
+    *,
+    target_gross_exposure: float,
+    max_position_weight: float | None,
+    symbol_groups: dict[str, str] | None,
+    max_group_weight: float | None,
+) -> pd.Series:
+    problem = _prepare_long_only_problem(
+        optimizer_input,
+        method="risk_parity",
+        target_gross_exposure=target_gross_exposure,
+        max_position_weight=max_position_weight,
+        symbol_groups=symbol_groups,
+        max_group_weight=max_group_weight,
+    )
+    if problem.achieved_target_exposure <= WEIGHT_EPSILON:
+        return pd.Series(0.0, index=problem.symbols, dtype=float)
+
+    if len(problem.symbols) == 1:
+        return pd.Series(problem.feasible_weights, index=problem.symbols, dtype=float)
+
+    target_share = 1.0 / len(problem.symbols)
+
+    def objective(weights: np.ndarray) -> float:
+        portfolio_variance = float(weights @ problem.covariance @ weights)
+        if portfolio_variance <= 0.0:
             raise _optimizer_failure(
-                method="mean_variance",
+                method="risk_parity",
                 signal_date=optimizer_input.signal_date,
                 effective_date=optimizer_input.effective_date,
-                message=(
-                    "solver returned weights that violate the group cap constraint "
-                    f"for group '{group_name}'"
-                ),
+                message="covariance produced non-positive portfolio variance during optimization",
             )
+        marginal_contributions = problem.covariance @ weights
+        contribution_shares = (weights * marginal_contributions) / portfolio_variance
+        return float(np.square(contribution_shares - target_share).sum())
 
-    return pd.Series(weights, index=symbols, dtype=float)
+    result = minimize(
+        objective,
+        x0=problem.feasible_weights,
+        method="SLSQP",
+        bounds=[(0.0, float(bound)) for bound in problem.upper_bounds],
+        constraints=_constraints(
+            achieved_target_exposure=problem.achieved_target_exposure,
+            grouped_indices=problem.grouped_indices,
+            max_group_weight=max_group_weight,
+        ),
+        options={"ftol": 1e-9, "maxiter": 500},
+    )
+    if not result.success:
+        raise _optimizer_failure(
+            method="risk_parity",
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message=result.message,
+        )
+
+    weights = _finalize_optimized_weights(
+        method="risk_parity",
+        optimizer_input=optimizer_input,
+        problem=problem,
+        weights=np.asarray(result.x, dtype=float),
+        max_group_weight=max_group_weight,
+    )
+    portfolio_variance = float(
+        weights.to_numpy(dtype=float) @ problem.covariance @ weights.to_numpy(dtype=float)
+    )
+    if portfolio_variance <= 0.0:
+        raise _optimizer_failure(
+            method="risk_parity",
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="covariance produced non-positive portfolio variance for the final solution",
+        )
+    return weights
 
 
 def _weights_to_frame(
@@ -590,39 +858,74 @@ def generate_weights(
     max_position_weight: float | None = None,
     max_group_weight: float | None = None,
 ) -> pd.DataFrame:
-    if method != "mean_variance":
+    if method == "black_litterman":
+        raise _unsupported_method_error(method)
+    if method not in EXECUTABLE_METHODS:
         raise _unsupported_method_error(method)
     if not long_only:
-        raise ValueError("Mean-variance optimized baseline currently supports long_only=True only.")
+        raise ValueError(
+            f"{strategy_name_for_method(method)} optimized baseline currently supports long_only=True only."
+        )
+    if method == "risk_parity":
+        if expected_return_source != "historical_mean":
+            raise ValueError(
+                "Risk-parity optimized baseline does not use expected returns; "
+                "expected_return_source must remain 'historical_mean'."
+            )
+        if external_expected_returns_path is not None:
+            raise ValueError(
+                "Risk-parity optimized baseline does not use expected returns; "
+                "external_expected_returns_path must be omitted."
+            )
     if panel.empty:
         return _empty_weights_frame()
 
-    optimizer_inputs = build_optimizer_inputs(
-        panel,
-        symbols=list(symbols),
-        lookback_days=lookback_days,
-        frequency=frequency,
-        covariance_estimator=covariance_estimator,
-        external_covariance_path=external_covariance_path,
-        expected_return_source=expected_return_source,
-        external_expected_returns_path=external_expected_returns_path,
-    )
+    strategy_name = strategy_name_for_method(method)
+    if method == "mean_variance":
+        optimizer_inputs = build_optimizer_inputs(
+            panel,
+            symbols=list(symbols),
+            lookback_days=lookback_days,
+            frequency=frequency,
+            covariance_estimator=covariance_estimator,
+            external_covariance_path=external_covariance_path,
+            expected_return_source=expected_return_source,
+            external_expected_returns_path=external_expected_returns_path,
+        )
+    else:
+        optimizer_inputs = build_covariance_inputs(
+            panel,
+            symbols=list(symbols),
+            lookback_days=lookback_days,
+            frequency=frequency,
+            covariance_estimator=covariance_estimator,
+            external_covariance_path=external_covariance_path,
+        )
     if not optimizer_inputs:
         return _empty_weights_frame()
 
     weight_frames = []
     for optimizer_input in optimizer_inputs:
-        weights = _solve_mean_variance_weights(
-            optimizer_input,
-            target_gross_exposure=target_gross_exposure,
-            risk_aversion=risk_aversion,
-            max_position_weight=max_position_weight,
-            symbol_groups=symbol_groups,
-            max_group_weight=max_group_weight,
-        )
+        if method == "mean_variance":
+            weights = _solve_mean_variance_weights(
+                optimizer_input,
+                target_gross_exposure=target_gross_exposure,
+                risk_aversion=risk_aversion,
+                max_position_weight=max_position_weight,
+                symbol_groups=symbol_groups,
+                max_group_weight=max_group_weight,
+            )
+        else:
+            weights = _solve_risk_parity_weights(
+                optimizer_input,
+                target_gross_exposure=target_gross_exposure,
+                max_position_weight=max_position_weight,
+                symbol_groups=symbol_groups,
+                max_group_weight=max_group_weight,
+            )
         weight_frames.append(
             _weights_to_frame(
-                MEAN_VARIANCE_STRATEGY_NAME,
+                strategy_name,
                 optimizer_input.effective_date,
                 optimizer_input.symbols,
                 weights,
