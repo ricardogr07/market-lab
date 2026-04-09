@@ -1,6 +1,6 @@
 # MarketLab
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, an executable mean-variance baseline, shared out-of-sample experiments, and reviewable artifact summaries.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, and reviewable artifact summaries.
 
 See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
@@ -20,7 +20,7 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 ## What Each Command Does
 
 - `prepare-data`: build or reuse the cached prepared panel.
-- `backtest`: run the enabled baselines (`buy_hold`, `sma`, optional config-defined allocation baselines, and the optional `mean_variance` optimized baseline) and write performance, analytics summaries, report, and plots.
+- `backtest`: run the enabled baselines (`buy_hold`, `sma`, optional config-defined allocation baselines, and the optional executable optimized baseline) and write performance, analytics summaries, report, and plots.
 - `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summaries, ranking diagnostics, calibration diagnostics, threshold diagnostics, and review plots.
 - `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, calibration/threshold diagnostics, and review plots.
 
@@ -216,9 +216,9 @@ Allocation semantics:
 
 This first Phase 5 step stays narrow: allocation baselines are long-only, fully invested target-weight portfolios. Optimizer methods, factor diagnostics, and broader scenario comparisons remain later work.
 
-## Mean-Variance Optimizer Baseline
+## Optimized Baselines
 
-`backtest` and `run-experiment` now also support an executable long-only mean-variance baseline under `baselines.optimized`.
+`backtest` and `run-experiment` now also support executable long-only optimized baselines under `baselines.optimized`.
 
 Add to `baselines`:
 
@@ -236,12 +236,15 @@ Add to `baselines`:
 
 Current Phase 5 behavior is intentionally narrow:
 
-- `mean_variance` is the only executable optimized method in this PR
-- `risk_parity` and `black_litterman` still fail fast with explicit not-implemented errors
+- `mean_variance` and `risk_parity` are executable optimized methods
+- `black_litterman` still fails fast with an explicit not-implemented error
 - the optimizer uses trailing daily adjusted-close returns ending on the `signal_date` and applies the weights on the next market open
 - no allocation is emitted before the first rebalance window with a full optimizer lookback
 - `target_gross_exposure < 1.0` leaves the undeployed exposure in cash
 - `portfolio.risk.max_position_weight` and `portfolio.risk.max_group_weight` are enforced as hard long-only optimizer constraints
+- `risk_aversion` only applies to `mean_variance`
+- `risk_parity` uses only the configured covariance estimator and does not consume expected-return inputs
+- capped `risk_parity` portfolios are the best feasible approximation to equal risk contributions, not exact parity under binding caps
 
 External input rules:
 
