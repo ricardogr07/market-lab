@@ -59,6 +59,7 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.baselines.optimized.external_expected_returns_path == ""
     assert config.baselines.optimized.long_only is True
     assert config.baselines.optimized.target_gross_exposure == pytest.approx(1.0)
+    assert config.baselines.optimized.risk_aversion == pytest.approx(1.0)
     assert config.optimized_external_covariance_path is None
     assert config.optimized_external_expected_returns_path is None
     assert config.portfolio.risk.max_position_weight is None
@@ -292,6 +293,18 @@ def test_load_config_rejects_invalid_cost_sensitivity_bps(
         (
             {"target_gross_exposure": 0.0},
             "baselines.optimized.target_gross_exposure must be a finite positive value",
+        ),
+        (
+            {"risk_aversion": 0.0},
+            "baselines.optimized.risk_aversion must be a finite positive value",
+        ),
+        (
+            {"method": "mean_variance", "long_only": False},
+            "baselines.optimized.long_only must be true when baselines.optimized.method='mean_variance'",
+        ),
+        (
+            {"method": "mean_variance", "target_gross_exposure": 1.2},
+            "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 when baselines.optimized.method='mean_variance'",
         ),
         (
             {"covariance_estimator": "external_csv"},

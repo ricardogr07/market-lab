@@ -13,6 +13,7 @@ from marketlab.strategies.optimized import (
     build_optimizer_windows,
     estimate_covariance_matrix,
     estimate_expected_returns,
+    generate_weights,
     load_external_covariance,
     load_external_expected_returns,
 )
@@ -291,4 +292,211 @@ def test_build_optimizer_inputs_rejects_unused_external_paths() -> None:
             lookback_days=3,
             expected_return_source="historical_mean",
             external_expected_returns_path="expected.csv",
+        )
+
+def _build_optimizer_panel(
+    symbol_specs: tuple[tuple[str, float, float], ...],
+    *,
+    start_date: str = "2024-01-01",
+    end_date: str = "2024-01-26",
+) -> pd.DataFrame:
+    trading_dates = pd.bdate_range(start_date, end_date)
+    rows: list[dict[str, object]] = []
+    for symbol, base_price, daily_step in symbol_specs:
+        for index, timestamp in enumerate(trading_dates):
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "timestamp": timestamp,
+                    "adj_close": base_price + (daily_step * index),
+                }
+            )
+
+    return pd.DataFrame(rows).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+
+
+def _write_external_covariance(path: Path, covariance: pd.DataFrame) -> None:
+    covariance.reset_index(names="symbol").to_csv(path, index=False)
+
+
+def _write_external_expected_returns(path: Path, expected_returns: pd.Series) -> None:
+    expected_returns.rename("expected_return").rename_axis("symbol").reset_index().to_csv(
+        path,
+        index=False,
+    )
+
+
+def _first_effective_weights(weights: pd.DataFrame) -> pd.Series:
+    first_effective_date = pd.to_datetime(weights["effective_date"]).min()
+    first_frame = weights.loc[pd.to_datetime(weights["effective_date"]) == first_effective_date]
+    return first_frame.set_index("symbol")["weight"].astype(float)
+
+
+def test_generate_weights_produces_symmetric_mean_variance_solution(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    expected_returns = pd.Series({"AAA": 0.01, "BBB": 0.01}, dtype=float)
+    covariance_path = tmp_path / "covariance.csv"
+    expected_returns_path = tmp_path / "expected.csv"
+    _write_external_covariance(covariance_path, covariance)
+    _write_external_expected_returns(expected_returns_path, expected_returns)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="mean_variance",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        expected_return_source="external_csv",
+        external_expected_returns_path=expected_returns_path,
+    )
+
+    assert set(weights["strategy"]) == {"mean_variance"}
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.5, abs=1e-6)
+    assert first_weights.loc["BBB"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_generate_weights_prefers_higher_expected_return_assets(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    expected_returns = pd.Series({"AAA": 0.03, "BBB": 0.01}, dtype=float)
+    covariance_path = tmp_path / "covariance.csv"
+    expected_returns_path = tmp_path / "expected.csv"
+    _write_external_covariance(covariance_path, covariance)
+    _write_external_expected_returns(expected_returns_path, expected_returns)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="mean_variance",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        expected_return_source="external_csv",
+        external_expected_returns_path=expected_returns_path,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.75, abs=1e-3)
+    assert first_weights.loc["BBB"] == pytest.approx(0.25, abs=1e-3)
+
+
+def test_generate_weights_respects_target_gross_exposure(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    expected_returns = pd.Series({"AAA": 0.01, "BBB": 0.01}, dtype=float)
+    covariance_path = tmp_path / "covariance.csv"
+    expected_returns_path = tmp_path / "expected.csv"
+    _write_external_covariance(covariance_path, covariance)
+    _write_external_expected_returns(expected_returns_path, expected_returns)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="mean_variance",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        expected_return_source="external_csv",
+        external_expected_returns_path=expected_returns_path,
+        target_gross_exposure=0.6,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert float(first_weights.sum()) == pytest.approx(0.6, abs=1e-6)
+    assert first_weights.loc["AAA"] == pytest.approx(0.3, abs=1e-6)
+    assert first_weights.loc["BBB"] == pytest.approx(0.3, abs=1e-6)
+
+
+def test_generate_weights_respects_position_caps(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    expected_returns = pd.Series({"AAA": 0.03, "BBB": 0.01}, dtype=float)
+    covariance_path = tmp_path / "covariance.csv"
+    expected_returns_path = tmp_path / "expected.csv"
+    _write_external_covariance(covariance_path, covariance)
+    _write_external_expected_returns(expected_returns_path, expected_returns)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="mean_variance",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        expected_return_source="external_csv",
+        external_expected_returns_path=expected_returns_path,
+        max_position_weight=0.6,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.6, abs=1e-5)
+    assert first_weights.loc["BBB"] == pytest.approx(0.4, abs=1e-5)
+
+
+def test_generate_weights_respects_group_caps(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel(
+        (("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0), ("CCC", 140.0, 1.0))
+    )
+    covariance = pd.DataFrame(
+        np.diag([0.04, 0.04, 0.04]),
+        index=["AAA", "BBB", "CCC"],
+        columns=["AAA", "BBB", "CCC"],
+        dtype=float,
+    )
+    expected_returns = pd.Series({"AAA": 0.03, "BBB": 0.03, "CCC": 0.0}, dtype=float)
+    covariance_path = tmp_path / "covariance.csv"
+    expected_returns_path = tmp_path / "expected.csv"
+    _write_external_covariance(covariance_path, covariance)
+    _write_external_expected_returns(expected_returns_path, expected_returns)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB", "CCC"],
+        method="mean_variance",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        expected_return_source="external_csv",
+        external_expected_returns_path=expected_returns_path,
+        symbol_groups={"AAA": "growth", "BBB": "growth", "CCC": "defensive"},
+        max_group_weight=0.4,
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert float(first_weights.loc[["AAA", "BBB"]].sum()) == pytest.approx(0.4, abs=1e-5)
+    assert first_weights.loc["CCC"] == pytest.approx(0.6, abs=1e-5)
+
+
+def test_generate_weights_rejects_unimplemented_methods() -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+
+    with pytest.raises(RuntimeError, match="baselines.optimized.method='risk_parity' is not implemented yet"):
+        generate_weights(
+            panel,
+            symbols=["AAA", "BBB"],
+            method="risk_parity",
+            lookback_days=3,
         )
