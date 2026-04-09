@@ -353,16 +353,6 @@ def build_optimizer_inputs(
     external_expected_returns_path: Path | str | None = None,
 ) -> list[OptimizerInput]:
     ordered_symbols = list(symbols)
-    covariance_inputs = build_covariance_inputs(
-        panel,
-        symbols=ordered_symbols,
-        lookback_days=lookback_days,
-        frequency=frequency,
-        covariance_estimator=covariance_estimator,
-        external_covariance_path=external_covariance_path,
-    )
-    if not covariance_inputs:
-        return []
 
     shared_expected_returns: pd.Series | None = None
     if expected_return_source == "external_csv":
@@ -380,6 +370,17 @@ def build_optimizer_inputs(
             source=expected_return_source,
             external_path=external_expected_returns_path,
         )
+
+    covariance_inputs = build_covariance_inputs(
+        panel,
+        symbols=ordered_symbols,
+        lookback_days=lookback_days,
+        frequency=frequency,
+        covariance_estimator=covariance_estimator,
+        external_covariance_path=external_covariance_path,
+    )
+    if not covariance_inputs:
+        return []
 
     inputs: list[OptimizerInput] = []
     for optimizer_input in covariance_inputs:
