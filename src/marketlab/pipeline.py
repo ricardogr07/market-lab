@@ -42,6 +42,7 @@ from marketlab.reports.plots import (
 from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
+from marketlab.strategies.optimized import generate_weights as optimized_weights
 from marketlab.strategies.ranking import generate_weights as ranking_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
 from marketlab.targets.weekly import build_weekly_modeling_dataset
@@ -350,10 +351,6 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
     )
 
     backtest_results: list[BacktestResult] = []
-    if config.baselines.optimized.enabled:
-        raise RuntimeError(
-            "baselines.optimized is configured, but optimized baseline methods are not implemented yet."
-        )
     if config.baselines.buy_hold:
         weights = buy_hold_weights(featured)
         backtest_results.append(
@@ -372,6 +369,33 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
             symbol_weights=config.baselines.allocation.symbol_weights,
             symbol_groups=config.data.symbol_groups,
             group_weights=config.baselines.allocation.group_weights,
+        )
+        if not weights.empty:
+            backtest_results.append(
+                run_backtest_detailed(
+                    panel=featured,
+                    weights=weights,
+                    cost_bps=config.portfolio.costs.bps_per_trade,
+                )
+            )
+
+    if config.baselines.optimized.enabled:
+        weights = optimized_weights(
+            panel=featured,
+            symbols=config.data.symbols,
+            method=config.baselines.optimized.method,
+            lookback_days=config.baselines.optimized.lookback_days,
+            frequency=config.baselines.optimized.rebalance_frequency,
+            covariance_estimator=config.baselines.optimized.covariance_estimator,
+            external_covariance_path=config.optimized_external_covariance_path,
+            expected_return_source=config.baselines.optimized.expected_return_source,
+            external_expected_returns_path=config.optimized_external_expected_returns_path,
+            long_only=config.baselines.optimized.long_only,
+            target_gross_exposure=config.baselines.optimized.target_gross_exposure,
+            risk_aversion=config.baselines.optimized.risk_aversion,
+            symbol_groups=config.data.symbol_groups,
+            max_position_weight=config.portfolio.risk.max_position_weight,
+            max_group_weight=config.portfolio.risk.max_group_weight,
         )
         if not weights.empty:
             backtest_results.append(
@@ -454,10 +478,6 @@ def _run_ml_strategies(
     predictions: pd.DataFrame,
 ) -> BacktestResult:
     backtest_results: list[BacktestResult] = []
-    if config.baselines.optimized.enabled:
-        raise RuntimeError(
-            "baselines.optimized is configured, but optimized baseline methods are not implemented yet."
-        )
 
     for _, model_predictions in predictions.groupby("model_name", sort=True):
         weights = ranking_weights(
