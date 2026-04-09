@@ -26,12 +26,14 @@ def _write_backtest_config(
     tmp_path: Path,
     *,
     optimized: dict[str, object] | None = None,
+    buy_hold: bool = True,
+    sma_enabled: bool = True,
 ) -> Path:
     cache_dir = tmp_path / "cache"
     save_panel_csv(load_fixture_panel(), cache_dir / "panel.csv")
     baselines_payload: dict[str, object] = {
-        "buy_hold": True,
-        "sma": {"enabled": True, "fast_window": 2, "slow_window": 3},
+        "buy_hold": buy_hold,
+        "sma": {"enabled": sma_enabled, "fast_window": 2, "slow_window": 3},
     }
     if optimized is not None:
         baselines_payload["optimized"] = optimized
@@ -171,6 +173,37 @@ def test_backtest_supports_mean_variance_optimized_baseline(tmp_path: Path) -> N
     assert mean_variance_row["avg_gross_exposure"] <= 0.6 + 1e-6
     assert "mean_variance" in report_text
 
+
+
+def test_backtest_keeps_mean_variance_as_cash_when_no_windows_exist(tmp_path: Path) -> None:
+    config_path = _write_backtest_config(
+        tmp_path,
+        optimized={
+            "enabled": True,
+            "method": "mean_variance",
+            "lookback_days": 10_000,
+            "target_gross_exposure": 0.6,
+            "risk_aversion": 1.0,
+        },
+        buy_hold=False,
+        sma_enabled=False,
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "optimized_scaffold_backtest"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+
+    assert set(metrics["strategy"]) == {"mean_variance"}
+    assert set(strategy_summary["strategy"]) == {"mean_variance"}
+    mean_variance_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "mean_variance"
+    ].iloc[0]
+    assert mean_variance_row["avg_gross_exposure"] == 0.0
+    assert mean_variance_row["avg_cash_weight"] == 1.0
 
 
 def test_backtest_rejects_unimplemented_risk_parity_baseline(tmp_path: Path) -> None:

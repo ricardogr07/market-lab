@@ -42,7 +42,12 @@ from marketlab.reports.plots import (
 from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
-from marketlab.strategies.optimized import generate_weights as optimized_weights
+from marketlab.strategies.optimized import (
+    MEAN_VARIANCE_STRATEGY_NAME,
+)
+from marketlab.strategies.optimized import (
+    generate_weights as optimized_weights,
+)
 from marketlab.strategies.ranking import generate_weights as ranking_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
 from marketlab.targets.weekly import build_weekly_modeling_dataset
@@ -341,6 +346,22 @@ def _persist_experiment_outputs(
     )
 
 
+def _cash_only_weights(
+    *,
+    strategy_name: str,
+    effective_date: pd.Timestamp,
+    symbols: list[str],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": strategy_name,
+            "effective_date": pd.Timestamp(effective_date),
+            "symbol": symbols,
+            "weight": [0.0] * len(symbols),
+        }
+    )
+
+
 def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResult:
     featured = add_feature_set(
         panel=panel,
@@ -397,6 +418,12 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
             max_position_weight=config.portfolio.risk.max_position_weight,
             max_group_weight=config.portfolio.risk.max_group_weight,
         )
+        if weights.empty and config.baselines.optimized.method == "mean_variance":
+            weights = _cash_only_weights(
+                strategy_name=MEAN_VARIANCE_STRATEGY_NAME,
+                effective_date=pd.Timestamp(featured["timestamp"].min()),
+                symbols=config.data.symbols,
+            )
         if not weights.empty:
             backtest_results.append(
                 run_backtest_detailed(
