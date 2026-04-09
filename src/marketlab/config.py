@@ -99,6 +99,7 @@ class OptimizedConfig:
     external_expected_returns_path: str = ""
     long_only: bool = True
     target_gross_exposure: float = 1.0
+    risk_aversion: float = 1.0
 
 
 @dataclass(slots=True)
@@ -304,6 +305,21 @@ def _validate_config(config: ExperimentConfig) -> None:
         "baselines.optimized.target_gross_exposure",
         optimized.target_gross_exposure,
     )
+    _validate_positive_float(
+        "baselines.optimized.risk_aversion",
+        optimized.risk_aversion,
+    )
+    if optimized.method == "mean_variance":
+        if not optimized.long_only:
+            raise ValueError(
+                "baselines.optimized.long_only must be true when "
+                "baselines.optimized.method='mean_variance'."
+            )
+        if optimized.target_gross_exposure > 1.0:
+            raise ValueError(
+                "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 "
+                "when baselines.optimized.method='mean_variance'."
+            )
     if optimized.covariance_estimator == "external_csv":
         if optimized.external_covariance_path == "":
             raise ValueError(
