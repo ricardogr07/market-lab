@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, an executable long-only mean-variance baseline, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -19,7 +19,7 @@ This document ties the current pieces together and records the working rules tha
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
-  - `buy_hold`, `sma`, config-defined allocation baselines, and optimizer input scaffolding for later optimized baselines
+  - `buy_hold`, `sma`, config-defined allocation baselines, the executable `mean_variance` optimized baseline, and optimizer input scaffolding for later optimized baselines
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
@@ -122,14 +122,16 @@ The required CI path stays offline and deterministic through tox. The Docker run
 - Cost-sensitivity reporting applies to `backtest` and `run-experiment`, but not to `train-models`.
 
 
-## Optimizer Scaffold Rules
+## Optimized Baseline Rules
 
-- `baselines.optimized` is a scaffold-only config surface in the current phase; it does not yet emit optimized strategy weights.
-- The scaffold exists to validate shared optimizer inputs, window timing, covariance estimation, and external file contracts before `mean_variance`, `risk_parity`, and `black_litterman` baselines land.
+- `baselines.optimized.method="mean_variance"` is the only executable optimized baseline in the current phase.
+- `risk_parity` and `black_litterman` remain scaffold-only and fail fast with explicit not-implemented errors.
 - Trailing return windows are built from adjusted close data only, and the latest included return must end on the `signal_date`.
+- Mean-variance weights are applied on the next market open after the `signal_date`, and no allocation is emitted before the first full optimizer lookback window exists.
+- `target_gross_exposure` is a long-only invested-fraction request; any undeployed exposure remains cash in the backtest engine.
+- `portfolio.risk.max_position_weight` and `portfolio.risk.max_group_weight` are enforced as hard optimizer constraints for the long-only mean-variance method.
 - External covariance inputs must be square daily-return covariance matrices keyed by the configured symbols.
 - External expected-return inputs must contain exactly `symbol,expected_return` in daily decimal units.
-- If `baselines.optimized.enabled` is set today, the pipeline fails fast with a scaffold-only runtime error instead of pretending an optimizer baseline exists.
 
 ## System Map
 
@@ -388,6 +390,7 @@ classDiagram
       +external_expected_returns_path: str
       +long_only: bool
       +target_gross_exposure: float
+      +risk_aversion: float
     }
 
     class EvaluationConfig {
@@ -727,10 +730,12 @@ Best practice:
 - Provides covariance helpers for `sample`, `ewma`, `diagonal_shrinkage`, and `external_csv` inputs.
 - Provides expected-return helpers for `historical_mean` and `external_csv` inputs.
 - Reorders and validates external covariance and expected-return files against `data.symbols`.
+- Executes the long-only `mean_variance` baseline with hard position and group constraints, while leaving later optimized methods scaffold-only.
 
 Best practice:
-- Keep this module limited to optimizer inputs and estimators until actual optimized baselines land.
-- Use adjusted close returns ending on the signal date and reject malformed external files early.
+- Keep adjusted-close return windows and optimizer timing leakage-safe: signal on the close, execute on the next open.
+- Keep hard constraints explicit inside the solver instead of post-solve clipping.
+- Reject malformed external files early and keep unsupported optimized methods on explicit errors until they are implemented.
 
 ### `src/marketlab/strategies/buy_hold.py`
 
