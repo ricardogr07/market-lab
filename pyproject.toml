@@ -26,6 +26,7 @@ dependencies = [
   "PyYAML>=6.0",
   "yfinance>=0.2",
   "scikit-learn>=1.4",
+  "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
