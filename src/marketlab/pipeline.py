@@ -350,6 +350,10 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
     )
 
     backtest_results: list[BacktestResult] = []
+    if config.baselines.optimized.enabled:
+        raise RuntimeError(
+            "baselines.optimized is configured, but optimized baseline methods are not implemented yet."
+        )
     if config.baselines.buy_hold:
         weights = buy_hold_weights(featured)
         backtest_results.append(
@@ -450,6 +454,10 @@ def _run_ml_strategies(
     predictions: pd.DataFrame,
 ) -> BacktestResult:
     backtest_results: list[BacktestResult] = []
+    if config.baselines.optimized.enabled:
+        raise RuntimeError(
+            "baselines.optimized is configured, but optimized baseline methods are not implemented yet."
+        )
 
     for _, model_predictions in predictions.groupby("model_name", sort=True):
         weights = ranking_weights(
@@ -692,6 +700,8 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
     )
+
+
 
 
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
@@ -8,6 +8,9 @@ from typing import Any
 import yaml
 
 ALLOCATION_MODES = {"equal", "group_weights", "symbol_weights"}
+OPTIMIZED_METHODS = {"black_litterman", "mean_variance", "risk_parity"}
+COVARIANCE_ESTIMATORS = {"diagonal_shrinkage", "ewma", "external_csv", "sample"}
+EXPECTED_RETURN_SOURCES = {"external_csv", "historical_mean"}
 WEIGHT_TOLERANCE = 1e-6
 
 
@@ -85,10 +88,25 @@ class AllocationConfig:
 
 
 @dataclass(slots=True)
+class OptimizedConfig:
+    enabled: bool = False
+    method: str = "mean_variance"
+    lookback_days: int = 252
+    rebalance_frequency: str = "W-FRI"
+    covariance_estimator: str = "sample"
+    external_covariance_path: str = ""
+    expected_return_source: str = "historical_mean"
+    external_expected_returns_path: str = ""
+    long_only: bool = True
+    target_gross_exposure: float = 1.0
+
+
+@dataclass(slots=True)
 class BaselinesConfig:
     buy_hold: bool = True
     sma: SMAConfig = field(default_factory=SMAConfig)
     allocation: AllocationConfig = field(default_factory=AllocationConfig)
+    optimized: OptimizedConfig = field(default_factory=OptimizedConfig)
 
 
 @dataclass(slots=True)
@@ -161,6 +179,20 @@ class ExperimentConfig:
     def output_dir(self) -> Path:
         return self.resolve_path(self.artifacts.output_dir)
 
+    @property
+    def optimized_external_covariance_path(self) -> Path | None:
+        path = self.baselines.optimized.external_covariance_path
+        if path == "":
+            return None
+        return self.resolve_path(path)
+
+    @property
+    def optimized_external_expected_returns_path(self) -> Path | None:
+        path = self.baselines.optimized.external_expected_returns_path
+        if path == "":
+            return None
+        return self.resolve_path(path)
+
 
 def _section(cls: type[Any], data: dict[str, Any] | None) -> Any:
     values = data or {}
@@ -188,6 +220,12 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
     if config.evaluation.cost_sensitivity_bps is None:
         config.evaluation.cost_sensitivity_bps = []
 
+    optimized = config.baselines.optimized
+    if optimized.external_covariance_path is None:
+        optimized.external_covariance_path = ""
+    if optimized.external_expected_returns_path is None:
+        optimized.external_expected_returns_path = ""
+
 
 def _validate_weights(label: str, weights: dict[str, float]) -> None:
     if any(value < 0.0 for value in weights.values()):
@@ -208,6 +246,11 @@ def _validate_non_negative_bps_list(label: str, values: list[float]) -> None:
     for value in values:
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"{label} must contain only finite non-negative values.")
+
+
+def _validate_positive_float(label: str, value: float) -> None:
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{label} must be a finite positive value.")
 
 
 def _validate_config(config: ExperimentConfig) -> None:
@@ -244,6 +287,45 @@ def _validate_config(config: ExperimentConfig) -> None:
         "evaluation.cost_sensitivity_bps",
         config.evaluation.cost_sensitivity_bps,
     )
+
+    optimized = config.baselines.optimized
+    if optimized.method not in OPTIMIZED_METHODS:
+        allowed = ", ".join(sorted(OPTIMIZED_METHODS))
+        raise ValueError(f"baselines.optimized.method must be one of: {allowed}")
+    if optimized.covariance_estimator not in COVARIANCE_ESTIMATORS:
+        allowed = ", ".join(sorted(COVARIANCE_ESTIMATORS))
+        raise ValueError(f"baselines.optimized.covariance_estimator must be one of: {allowed}")
+    if optimized.expected_return_source not in EXPECTED_RETURN_SOURCES:
+        allowed = ", ".join(sorted(EXPECTED_RETURN_SOURCES))
+        raise ValueError(f"baselines.optimized.expected_return_source must be one of: {allowed}")
+    if optimized.lookback_days < 2:
+        raise ValueError("baselines.optimized.lookback_days must be at least 2.")
+    _validate_positive_float(
+        "baselines.optimized.target_gross_exposure",
+        optimized.target_gross_exposure,
+    )
+    if optimized.covariance_estimator == "external_csv":
+        if optimized.external_covariance_path == "":
+            raise ValueError(
+                "baselines.optimized.external_covariance_path is required when "
+                "baselines.optimized.covariance_estimator='external_csv'."
+            )
+    elif optimized.external_covariance_path != "":
+        raise ValueError(
+            "baselines.optimized.external_covariance_path must be empty unless "
+            "baselines.optimized.covariance_estimator='external_csv'."
+        )
+    if optimized.expected_return_source == "external_csv":
+        if optimized.external_expected_returns_path == "":
+            raise ValueError(
+                "baselines.optimized.external_expected_returns_path is required when "
+                "baselines.optimized.expected_return_source='external_csv'."
+            )
+    elif optimized.external_expected_returns_path != "":
+        raise ValueError(
+            "baselines.optimized.external_expected_returns_path must be empty unless "
+            "baselines.optimized.expected_return_source='external_csv'."
+        )
 
     allocation = config.baselines.allocation
     if allocation.mode not in ALLOCATION_MODES:
@@ -317,6 +399,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
                 AllocationConfig,
                 (payload.get("baselines") or {}).get("allocation"),
             ),
+            optimized=_section(
+                OptimizedConfig,
+                (payload.get("baselines") or {}).get("optimized"),
+            ),
         ),
         models=[
             _section(ModelSpec, item)
@@ -336,5 +422,3 @@ def load_config(path: str | Path) -> ExperimentConfig:
     _normalize_mapping_sections(config)
     _validate_config(config)
     return config
-
-
