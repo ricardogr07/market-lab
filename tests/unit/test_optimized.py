@@ -487,7 +487,8 @@ def test_generate_weights_respects_group_caps(tmp_path: Path) -> None:
 
     first_weights = _first_effective_weights(weights)
     assert float(first_weights.loc[["AAA", "BBB"]].sum()) == pytest.approx(0.4, abs=1e-5)
-    assert first_weights.loc["CCC"] == pytest.approx(0.6, abs=1e-5)
+    assert first_weights.loc["CCC"] == pytest.approx(0.4, abs=1e-5)
+    assert float(first_weights.sum()) == pytest.approx(0.8, abs=1e-5)
 
 
 def test_generate_weights_rejects_unimplemented_methods() -> None:
