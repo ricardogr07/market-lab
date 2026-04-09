@@ -64,6 +64,7 @@ def _write_run_experiment_config(
     symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
+    optimized: dict[str, object] | None = None,
     models: list[dict[str, str]] | None = None,
     evaluation: dict[str, object] | None = None,
 ) -> Path:
@@ -118,6 +119,8 @@ def _write_run_experiment_config(
     }
     if allocation is not None:
         baselines_payload["allocation"] = allocation
+    if optimized is not None:
+        baselines_payload["optimized"] = optimized
 
     return write_yaml_config(
         tmp_path / "integration.yaml",
@@ -169,6 +172,7 @@ def _write_backtest_config(
     *,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
+    optimized: dict[str, object] | None = None,
     evaluation: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
@@ -180,6 +184,8 @@ def _write_backtest_config(
     }
     if allocation is not None:
         baselines_payload["allocation"] = allocation
+    if optimized is not None:
+        baselines_payload["optimized"] = optimized
 
     return write_yaml_config(
         tmp_path / "backtest.yaml",
@@ -461,6 +467,40 @@ def test_backtest_supports_config_defined_allocation_baseline(tmp_path: Path) ->
     )
     assert "allocation_equal" in report_text
 
+
+
+def test_run_experiment_supports_mean_variance_baseline(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        optimized={
+            "enabled": True,
+            "method": "mean_variance",
+            "lookback_days": 5,
+            "target_gross_exposure": 0.7,
+            "risk_aversion": 1.0,
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategies = {"buy_hold", "sma", "mean_variance", "ml_logistic_regression"}
+    assert set(metrics["strategy"]) == expected_strategies
+    assert set(performance["strategy"]) == expected_strategies
+    assert set(strategy_summary["strategy"]) == expected_strategies
+    mean_variance_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "mean_variance"
+    ].iloc[0]
+    assert mean_variance_row["avg_gross_exposure"] <= 0.7 + 1e-6
+    assert "mean_variance" in report_text
 
 def test_run_experiment_supports_group_weight_allocation_baseline(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
