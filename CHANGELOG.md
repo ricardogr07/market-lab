@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.2.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.1.0...marketlab-v0.2.0) (2026-04-10)
+
+
+### Features
+
+* add benchmark-relative comparison reporting ([#48](https://github.com/ricardogr07/market-lab/issues/48)) ([84e4c18](https://github.com/ricardogr07/market-lab/commit/84e4c183373abc8b07ff707367fe8438b11fd6e9))
+* add black-litterman config surface ([518229e](https://github.com/ricardogr07/market-lab/commit/518229efd4f3b81dd8228f568acb653dd41f2aea))
+* add canonical phase 5 scenario configs ([c5a061b](https://github.com/ricardogr07/market-lab/commit/c5a061b6adce987e876f4caa3d05e6668754ef2e))
+* add config-defined allocation baselines ([#45](https://github.com/ricardogr07/market-lab/issues/45)) ([41515c1](https://github.com/ricardogr07/market-lab/commit/41515c11b57342c16b86f045e610d804f231fa2a))
+* add cost sensitivity config and analytics ([bb08cc3](https://github.com/ricardogr07/market-lab/commit/bb08cc3ce35989391cf5f0d0a9c96ad55e87bb0c))
+* add embargo-aware fold diagnostics builder ([5f2fb73](https://github.com/ricardogr07/market-lab/commit/5f2fb7364d7f631aedc9d2ea4453b3d453a39cac))
+* add exposure and concentration caps to ranking strategies ([#46](https://github.com/ricardogr07/market-lab/issues/46)) ([abf5516](https://github.com/ricardogr07/market-lab/commit/abf551629ddac615ef26a21437fb720ae2637902))
+* add exposure-aware analytics and reporting ([#47](https://github.com/ricardogr07/market-lab/issues/47)) ([e028147](https://github.com/ricardogr07/market-lab/commit/e02814709f39d0fad5a409343e9240738693ba06))
+* add factor-model config seam ([f527e46](https://github.com/ricardogr07/market-lab/commit/f527e46fe7f57e4aaf3a3e84718155d76fef4af4))
+* add lightweight sklearn comparison models ([40a223b](https://github.com/ricardogr07/market-lab/commit/40a223bad2c6ea69ca91037f87d0a3f837e6a682))
+* add mean-variance optimizer config and solver ([84a4533](https://github.com/ricardogr07/market-lab/commit/84a45330d5e2b1ffae100d08ecc819cb751b411c))
+* add optimizer input and covariance scaffolding ([#50](https://github.com/ricardogr07/market-lab/issues/50)) ([2fd54ae](https://github.com/ricardogr07/market-lab/commit/2fd54aed43e0bfe6b600804a9ea5a42b75669d3d))
+* add ranking strategy modes ([#30](https://github.com/ricardogr07/market-lab/issues/30)) ([4294b80](https://github.com/ricardogr07/market-lab/commit/4294b80d948a37a849778a2c86b42765f1e8cc41))
+* add ranking-aware fold evaluation builders ([e5a126c](https://github.com/ricardogr07/market-lab/commit/e5a126c4d0c6d16178e8e71066deb0559e0a8fad))
+* add risk diagnostics artifacts ([baa909d](https://github.com/ricardogr07/market-lab/commit/baa909d3cbd0f38ec2f82b9ce850f93eef31e651))
+* add single-symbol VOO long-only evaluation support ([6981c7d](https://github.com/ricardogr07/market-lab/commit/6981c7d79d3a52c391d5e6ad29fe83051f4d38b3))
+* add walk-forward guardrail config and template defaults ([4715291](https://github.com/ricardogr07/market-lab/commit/47152917d04194a2df6f0b97b298851e5cb5a033))
+* expose phase 5 scenarios as packaged templates ([138784a](https://github.com/ricardogr07/market-lab/commit/138784a2b0c6fd0554d1d47e5bab83fe642a82b6))
+* extend summaries with ranking-aware and downside metrics ([06817a5](https://github.com/ricardogr07/market-lab/commit/06817a576c23ac5d73f63b108f9b9e866c0f6157))
+* implement black-litterman optimizer baseline ([dae1f3e](https://github.com/ricardogr07/market-lab/commit/dae1f3eac061d9be9e69b2b74d26127b47e8c71a))
+* persist cost sensitivity artifacts and report section ([d9d99da](https://github.com/ricardogr07/market-lab/commit/d9d99da78e2f4b24ba61986cb31a96bd5e402475))
+* persist fold diagnostics across training and experiment runs ([2756e02](https://github.com/ricardogr07/market-lab/commit/2756e02216700c64fd8358a1b3430ab26930ed69))
+* persist ranking diagnostics in experiment artifacts and report headlines ([c5cfa64](https://github.com/ricardogr07/market-lab/commit/c5cfa64b7a2c6299bb4cf6164de17d6902e2f4f7))
+* surface walk-forward diagnostics in reporting ([b53b273](https://github.com/ricardogr07/market-lab/commit/b53b2735aa0667d1f24af0b7e42c21aa6b8f5a1e))
+* wire mean-variance baseline into experiment flows ([8317591](https://github.com/ricardogr07/market-lab/commit/8317591fbb007298984f7e9046bd71286465b872))
+* wire risk parity baseline into baseline flows ([097f095](https://github.com/ricardogr07/market-lab/commit/097f0955182c94040c03a325e0a452b4c82b6e07))
+
+
+### Bug Fixes
+
+* correct mean-variance group cap expectation ([b31ccf8](https://github.com/ricardogr07/market-lab/commit/b31ccf857087ed75a3d92019ed4ca380eb6fcb85))
+* handle non-positive cost sensitivity equity ([22aa252](https://github.com/ricardogr07/market-lab/commit/22aa252b1ba4d2dbdcf88c4d90eab2295b28e2cd))
+* preserve empty mean-variance baselines as cash ([ab0b01f](https://github.com/ricardogr07/market-lab/commit/ab0b01fb3455d4827d100b96dd242242d4ce82d5))
+* retain active covariance window at oos start ([80f9cee](https://github.com/ricardogr07/market-lab/commit/80f9cee3f6d638ff4182e0fb3a1af5588098a851))
+* validate optimizer input paths before empty windows ([91c9f82](https://github.com/ricardogr07/market-lab/commit/91c9f827a2564a6ebc4071c5bf96b84368eb721b))
+
+
+### Documentation
+
+* add phase 5 comparison guide ([2487962](https://github.com/ricardogr07/market-lab/commit/2487962de8f224bbd8310246f6d036add6dc1bf5))
+* consolidate public docs under docs ([ad7abb4](https://github.com/ricardogr07/market-lab/commit/ad7abb4b31d19128a9dc9ec87f38ae6694a3bdc7))
+* document black-litterman baseline semantics ([90e9c80](https://github.com/ricardogr07/market-lab/commit/90e9c8038200388cb8763c17787288c86e19f44a))
+* document cost sensitivity diagnostics ([c6abf23](https://github.com/ricardogr07/market-lab/commit/c6abf23299b5c8b565b4c72faea9964f2dd82276))
+* document factor and covariance diagnostics ([fd49c1a](https://github.com/ricardogr07/market-lab/commit/fd49c1aa8d1968787f8fd076544a0a39c044fd69))
+* document ranking-aware evaluation artifacts ([73c5ac9](https://github.com/ricardogr07/market-lab/commit/73c5ac96a6e1a17bd6b5b7b787e6a890db3c6dbf))
+* document the mean-variance baseline ([3594a8b](https://github.com/ricardogr07/market-lab/commit/3594a8bc1c50dc258f93fc8e31e84b8851aabeb5))
+* document the risk parity baseline ([87d6306](https://github.com/ricardogr07/market-lab/commit/87d6306b0aa1ac97de031eeb3bacdeed8dbbb4af))
+* refresh project plan for phase 4 roadmap ([110b9fc](https://github.com/ricardogr07/market-lab/commit/110b9fc858b7c9f7358d2013805e963bc0eb6f91))
+
 ## 0.1.0 (2026-03-29)
 
 
