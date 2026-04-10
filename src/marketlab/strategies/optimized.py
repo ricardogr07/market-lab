@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,8 +21,18 @@ REQUIRED_PANEL_COLUMNS = {"adj_close", "symbol", "timestamp"}
 WEIGHTS_COLUMNS = ["strategy", "effective_date", "symbol", "weight"]
 MEAN_VARIANCE_STRATEGY_NAME = "mean_variance"
 RISK_PARITY_STRATEGY_NAME = "risk_parity"
+BLACK_LITTERMAN_STRATEGY_NAME = "black_litterman"
+BLACK_LITTERMAN_ASSUMPTIONS_COLUMNS = [
+    "signal_date",
+    "effective_date",
+    "symbol",
+    "equilibrium_weight",
+    "implied_prior_return",
+    "posterior_expected_return",
+    "tau",
+]
 EXECUTABLE_METHODS = frozenset(
-    {MEAN_VARIANCE_STRATEGY_NAME, RISK_PARITY_STRATEGY_NAME}
+    {MEAN_VARIANCE_STRATEGY_NAME, RISK_PARITY_STRATEGY_NAME, BLACK_LITTERMAN_STRATEGY_NAME}
 )
 
 
@@ -53,6 +64,12 @@ class LongOnlyProblem:
     grouped_indices: dict[str, np.ndarray]
 
 
+@dataclass(slots=True)
+class BlackLittermanOutput:
+    weights: pd.DataFrame
+    assumptions: pd.DataFrame
+
+
 def _empty_weights_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=WEIGHTS_COLUMNS)
 
@@ -66,6 +83,8 @@ def strategy_name_for_method(method: str) -> str:
         return MEAN_VARIANCE_STRATEGY_NAME
     if method == "risk_parity":
         return RISK_PARITY_STRATEGY_NAME
+    if method == "black_litterman":
+        return BLACK_LITTERMAN_STRATEGY_NAME
     raise _unsupported_method_error(method)
 
 
@@ -83,6 +102,173 @@ def generate_cash_only_weights(
             "weight": [0.0] * len(symbols),
         }
     )
+
+
+def _black_litterman_view_field(view: object, field: str) -> object:
+    if isinstance(view, dict):
+        return view.get(field)
+    return getattr(view, field, None)
+
+
+def _validated_black_litterman_inputs(
+    *,
+    symbols: list[str],
+    equilibrium_weights: dict[str, float] | None,
+    tau: float,
+    views: list[object] | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    symbol_set = set(symbols)
+    symbol_positions = {symbol: index for index, symbol in enumerate(symbols)}
+    if not isinstance(equilibrium_weights, Mapping) or set(equilibrium_weights) != symbol_set:
+        raise ValueError(
+            "baselines.optimized.equilibrium_weights must match data.symbols exactly when "
+            "baselines.optimized.method='black_litterman'."
+        )
+
+    try:
+        equilibrium_vector = np.asarray(
+            [float(equilibrium_weights[symbol]) for symbol in symbols],
+            dtype=float,
+        )
+    except (TypeError, ValueError):
+        raise ValueError("baselines.optimized.equilibrium_weights must contain only finite numeric values.")
+
+    if not np.isfinite(equilibrium_vector).all():
+        raise ValueError("baselines.optimized.equilibrium_weights must contain only finite numeric values.")
+    if (equilibrium_vector < 0.0).any():
+        raise ValueError("baselines.optimized.equilibrium_weights must contain non-negative weights.")
+    if abs(float(equilibrium_vector.sum()) - 1.0) > CONSTRAINT_TOLERANCE:
+        raise ValueError("baselines.optimized.equilibrium_weights must sum to 1.0.")
+    if not np.isfinite(tau) or tau <= 0.0:
+        raise ValueError("baselines.optimized.tau must be a finite positive value.")
+    if not views:
+        raise ValueError(
+            "baselines.optimized.views must be non-empty when "
+            "baselines.optimized.method='black_litterman'."
+        )
+
+    view_rows: list[np.ndarray] = []
+    view_returns: list[float] = []
+    for index, view in enumerate(views):
+        label = f"baselines.optimized.views[{index}]"
+        view_name = _black_litterman_view_field(view, "name")
+        if not view_name:
+            raise ValueError(f"{label}.name must be non-empty.")
+
+        view_weights = _black_litterman_view_field(view, "weights")
+        if not isinstance(view_weights, Mapping):
+            raise ValueError(f"{label}.weights must be a mapping of symbol to coefficient.")
+
+        view_weights = dict(view_weights)
+        unknown_view_symbols = sorted(set(view_weights) - symbol_set)
+        if unknown_view_symbols:
+            joined = ", ".join(unknown_view_symbols)
+            raise ValueError(f"{label}.weights contains unknown symbols: {joined}")
+        if not view_weights:
+            raise ValueError(f"{label}.weights must not be empty.")
+
+        view_row = np.zeros(len(symbols), dtype=float)
+        non_zero_weights = 0
+        for symbol, coefficient in view_weights.items():
+            try:
+                coefficient_value = float(coefficient)
+            except (TypeError, ValueError):
+                raise ValueError(f"{label}.weights[{symbol}] must be finite.")
+            if not np.isfinite(coefficient_value):
+                raise ValueError(f"{label}.weights[{symbol}] must be finite.")
+            view_row[symbol_positions[symbol]] = coefficient_value
+            if abs(coefficient_value) > WEIGHT_EPSILON:
+                non_zero_weights += 1
+
+        if non_zero_weights == 0:
+            raise ValueError(f"{label}.weights must contain at least one non-zero coefficient.")
+
+        view_return = _black_litterman_view_field(view, "view_return")
+        if view_return is None:
+            raise ValueError(f"{label}.view_return must be finite.")
+        try:
+            view_return_value = float(view_return)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label}.view_return must be finite.")
+        if not np.isfinite(view_return_value):
+            raise ValueError(f"{label}.view_return must be finite.")
+
+        view_rows.append(view_row)
+        view_returns.append(view_return_value)
+
+    return (
+        equilibrium_vector,
+        np.asarray(view_rows, dtype=float),
+        np.asarray(view_returns, dtype=float),
+        float(tau),
+    )
+
+
+def _black_litterman_expected_returns(
+    covariance: np.ndarray,
+    *,
+    symbols: list[str],
+    risk_aversion: float,
+    equilibrium_weights: np.ndarray,
+    tau: float,
+    view_matrix: np.ndarray,
+    view_returns: np.ndarray,
+) -> pd.Series:
+    covariance = np.asarray(covariance, dtype=float)
+    if not np.isfinite(covariance).all():
+        raise ValueError("Black-Litterman covariance contains non-finite values.")
+
+    tau_covariance = tau * covariance
+    implied_returns = risk_aversion * (covariance @ equilibrium_weights)
+    projected_variance = view_matrix @ tau_covariance @ view_matrix.T
+    omega_diagonal = np.diag(projected_variance).astype(float)
+    omega_diagonal = np.maximum(omega_diagonal, COVARIANCE_REGULARIZATION)
+    omega = np.diag(omega_diagonal)
+    middle = projected_variance + omega
+    rhs = view_returns - (view_matrix @ implied_returns)
+
+    try:
+        adjustment = np.linalg.solve(middle, rhs)
+    except np.linalg.LinAlgError:
+        adjustment = np.linalg.pinv(middle) @ rhs
+
+    posterior_expected_returns = implied_returns + (tau_covariance @ view_matrix.T @ adjustment)
+    if not np.isfinite(posterior_expected_returns).all():
+        raise ValueError("Black-Litterman posterior expected returns contain non-finite values.")
+
+    return (
+        pd.Series(implied_returns, index=symbols, dtype=float, name="implied_prior_return"),
+        pd.Series(
+            posterior_expected_returns,
+            index=symbols,
+            dtype=float,
+            name="expected_return",
+        ),
+    )
+
+
+def _black_litterman_assumptions_frame(
+    optimizer_input: OptimizerInput,
+    *,
+    equilibrium_weights: pd.Series,
+    prior_returns: pd.Series,
+    posterior_expected_returns: pd.Series,
+    tau: float,
+) -> pd.DataFrame:
+    rows = []
+    for symbol in optimizer_input.symbols:
+        rows.append(
+            {
+                "signal_date": pd.Timestamp(optimizer_input.signal_date),
+                "effective_date": pd.Timestamp(optimizer_input.effective_date),
+                "symbol": symbol,
+                "equilibrium_weight": float(equilibrium_weights.loc[symbol]),
+                "implied_prior_return": float(prior_returns.loc[symbol]),
+                "posterior_expected_return": float(posterior_expected_returns.loc[symbol]),
+                "tau": float(tau),
+            }
+        )
+    return pd.DataFrame(rows, columns=BLACK_LITTERMAN_ASSUMPTIONS_COLUMNS)
 
 
 def _require_columns(panel: pd.DataFrame) -> None:
@@ -406,6 +592,123 @@ def build_optimizer_inputs(
     return inputs
 
 
+def generate_black_litterman_output(
+    panel: pd.DataFrame,
+    *,
+    symbols: list[str],
+    lookback_days: int,
+    frequency: str = "W-FRI",
+    covariance_estimator: str = "sample",
+    external_covariance_path: Path | str | None = None,
+    long_only: bool = True,
+    target_gross_exposure: float = 1.0,
+    risk_aversion: float = 1.0,
+    symbol_groups: dict[str, str] | None = None,
+    max_position_weight: float | None = None,
+    max_group_weight: float | None = None,
+    equilibrium_weights: dict[str, float] | None = None,
+    tau: float = 0.05,
+    views: list[object] | None = None,
+) -> BlackLittermanOutput:
+    if not long_only:
+        raise ValueError(
+            f"{strategy_name_for_method(BLACK_LITTERMAN_STRATEGY_NAME)} optimized baseline currently supports long_only=True only."
+        )
+    if panel.empty:
+        return BlackLittermanOutput(
+            weights=_empty_weights_frame(),
+            assumptions=pd.DataFrame(columns=BLACK_LITTERMAN_ASSUMPTIONS_COLUMNS),
+        )
+
+    (
+        bl_equilibrium_weights,
+        bl_view_matrix,
+        bl_view_returns,
+        bl_tau,
+    ) = _validated_black_litterman_inputs(
+        symbols=list(symbols),
+        equilibrium_weights=equilibrium_weights,
+        tau=tau,
+        views=views,
+    )
+    equilibrium_weight_series = pd.Series(
+        bl_equilibrium_weights,
+        index=list(symbols),
+        dtype=float,
+        name="equilibrium_weight",
+    )
+
+    optimizer_inputs = build_covariance_inputs(
+        panel,
+        symbols=list(symbols),
+        lookback_days=lookback_days,
+        frequency=frequency,
+        covariance_estimator=covariance_estimator,
+        external_covariance_path=external_covariance_path,
+    )
+    if not optimizer_inputs:
+        return BlackLittermanOutput(
+            weights=_empty_weights_frame(),
+            assumptions=pd.DataFrame(columns=BLACK_LITTERMAN_ASSUMPTIONS_COLUMNS),
+        )
+
+    weight_frames: list[pd.DataFrame] = []
+    assumptions_frames: list[pd.DataFrame] = []
+    for optimizer_input in optimizer_inputs:
+        problem = _prepare_long_only_problem(
+            optimizer_input,
+            method=BLACK_LITTERMAN_STRATEGY_NAME,
+            target_gross_exposure=target_gross_exposure,
+            max_position_weight=max_position_weight,
+            symbol_groups=symbol_groups,
+            max_group_weight=max_group_weight,
+        )
+        prior_returns, posterior_expected_returns = _black_litterman_expected_returns(
+            problem.covariance,
+            symbols=problem.symbols,
+            risk_aversion=risk_aversion,
+            equilibrium_weights=bl_equilibrium_weights,
+            tau=bl_tau,
+            view_matrix=bl_view_matrix,
+            view_returns=bl_view_returns,
+        )
+        weights = _solve_long_only_expected_return_weights(
+            optimizer_input,
+            method=BLACK_LITTERMAN_STRATEGY_NAME,
+            problem=problem,
+            expected_returns=posterior_expected_returns,
+            risk_aversion=risk_aversion,
+            max_position_weight=max_position_weight,
+            max_group_weight=max_group_weight,
+        )
+        weight_frames.append(
+            _weights_to_frame(
+                BLACK_LITTERMAN_STRATEGY_NAME,
+                optimizer_input.effective_date,
+                optimizer_input.symbols,
+                weights,
+            )
+        )
+        assumptions_frames.append(
+            _black_litterman_assumptions_frame(
+                optimizer_input,
+                equilibrium_weights=equilibrium_weight_series,
+                prior_returns=prior_returns,
+                posterior_expected_returns=posterior_expected_returns,
+                tau=bl_tau,
+            )
+        )
+
+    return BlackLittermanOutput(
+        weights=pd.concat(weight_frames, ignore_index=True)
+        .sort_values(["effective_date", "symbol"])
+        .reset_index(drop=True),
+        assumptions=pd.concat(assumptions_frames, ignore_index=True)
+        .sort_values(["signal_date", "effective_date", "symbol"])
+        .reset_index(drop=True),
+    )
+
+
 def _unsupported_method_error(method: str) -> RuntimeError:
     return RuntimeError(f"baselines.optimized.method='{method}' is not implemented yet.")
 
@@ -636,7 +939,7 @@ def _finalize_optimized_weights(
     problem: LongOnlyProblem,
     weights: np.ndarray,
     max_group_weight: float | None,
-) -> pd.Series:
+    ) -> pd.Series:
     if not np.isfinite(weights).all():
         raise _optimizer_failure(
             method=method,
@@ -683,40 +986,35 @@ def _finalize_optimized_weights(
     return pd.Series(weights, index=problem.symbols, dtype=float)
 
 
-def _solve_mean_variance_weights(
+def _solve_long_only_expected_return_weights(
     optimizer_input: OptimizerInput,
     *,
-    target_gross_exposure: float,
+    method: str,
+    problem: LongOnlyProblem,
+    expected_returns: pd.Series,
     risk_aversion: float,
     max_position_weight: float | None,
-    symbol_groups: dict[str, str] | None,
     max_group_weight: float | None,
 ) -> pd.Series:
-    if optimizer_input.expected_returns is None:
-        raise ValueError("Mean-variance optimized inputs require expected_returns.")
-
-    problem = _prepare_long_only_problem(
-        optimizer_input,
-        method="mean_variance",
-        target_gross_exposure=target_gross_exposure,
-        max_position_weight=max_position_weight,
-        symbol_groups=symbol_groups,
-        max_group_weight=max_group_weight,
-    )
     if problem.achieved_target_exposure <= WEIGHT_EPSILON:
         return pd.Series(0.0, index=problem.symbols, dtype=float)
 
     if len(problem.symbols) == 1:
         return pd.Series(problem.feasible_weights, index=problem.symbols, dtype=float)
 
-    expected_returns = optimizer_input.expected_returns.loc[problem.symbols].to_numpy(
-        dtype=float
-    )
+    expected_returns_array = expected_returns.loc[problem.symbols].to_numpy(dtype=float)
+    if not np.isfinite(expected_returns_array).all():
+        raise _optimizer_failure(
+            method=method,
+            signal_date=optimizer_input.signal_date,
+            effective_date=optimizer_input.effective_date,
+            message="expected returns contain non-finite values",
+        )
 
     def objective(weights: np.ndarray) -> float:
         return float(
             0.5 * risk_aversion * (weights @ problem.covariance @ weights)
-            - (expected_returns @ weights)
+            - (expected_returns_array @ weights)
         )
 
     result = minimize(
@@ -733,17 +1031,49 @@ def _solve_mean_variance_weights(
     )
     if not result.success:
         raise _optimizer_failure(
-            method="mean_variance",
+            method=method,
             signal_date=optimizer_input.signal_date,
             effective_date=optimizer_input.effective_date,
             message=result.message,
         )
 
     return _finalize_optimized_weights(
-        method="mean_variance",
+        method=method,
         optimizer_input=optimizer_input,
         problem=problem,
         weights=np.asarray(result.x, dtype=float),
+        max_group_weight=max_group_weight,
+    )
+
+
+def _solve_mean_variance_weights(
+    optimizer_input: OptimizerInput,
+    *,
+    target_gross_exposure: float,
+    risk_aversion: float,
+    max_position_weight: float | None,
+    symbol_groups: dict[str, str] | None,
+    max_group_weight: float | None,
+    method: str = "mean_variance",
+) -> pd.Series:
+    if optimizer_input.expected_returns is None:
+        raise ValueError("Mean-variance optimized inputs require expected_returns.")
+
+    problem = _prepare_long_only_problem(
+        optimizer_input,
+        method="mean_variance",
+        target_gross_exposure=target_gross_exposure,
+        max_position_weight=max_position_weight,
+        symbol_groups=symbol_groups,
+        max_group_weight=max_group_weight,
+    )
+    return _solve_long_only_expected_return_weights(
+        optimizer_input,
+        method=method,
+        problem=problem,
+        expected_returns=optimizer_input.expected_returns,
+        risk_aversion=risk_aversion,
+        max_position_weight=max_position_weight,
         max_group_weight=max_group_weight,
     )
 
@@ -858,14 +1188,32 @@ def generate_weights(
     symbol_groups: dict[str, str] | None = None,
     max_position_weight: float | None = None,
     max_group_weight: float | None = None,
+    equilibrium_weights: dict[str, float] | None = None,
+    tau: float = 0.05,
+    views: list[object] | None = None,
 ) -> pd.DataFrame:
-    if method == "black_litterman":
-        raise _unsupported_method_error(method)
     if method not in EXECUTABLE_METHODS:
         raise _unsupported_method_error(method)
     if not long_only:
         raise ValueError(
             f"{strategy_name_for_method(method)} optimized baseline currently supports long_only=True only."
+        )
+    if method == BLACK_LITTERMAN_STRATEGY_NAME:
+        if expected_return_source != "historical_mean":
+            raise ValueError(
+                "Black-Litterman optimized baseline does not use external expected returns; "
+                "expected_return_source must remain 'historical_mean'."
+            )
+        if external_expected_returns_path is not None:
+            raise ValueError(
+                "Black-Litterman optimized baseline does not use external expected returns; "
+                "external_expected_returns_path must be omitted."
+            )
+        _validated_black_litterman_inputs(
+            symbols=list(symbols),
+            equilibrium_weights=equilibrium_weights,
+            tau=tau,
+            views=views,
         )
     if method == "risk_parity":
         if expected_return_source != "historical_mean":
@@ -880,6 +1228,24 @@ def generate_weights(
             )
     if panel.empty:
         return _empty_weights_frame()
+    if method == BLACK_LITTERMAN_STRATEGY_NAME:
+        return generate_black_litterman_output(
+            panel,
+            symbols=list(symbols),
+            lookback_days=lookback_days,
+            frequency=frequency,
+            covariance_estimator=covariance_estimator,
+            external_covariance_path=external_covariance_path,
+            long_only=long_only,
+            target_gross_exposure=target_gross_exposure,
+            risk_aversion=risk_aversion,
+            symbol_groups=symbol_groups,
+            max_position_weight=max_position_weight,
+            max_group_weight=max_group_weight,
+            equilibrium_weights=equilibrium_weights,
+            tau=tau,
+            views=views,
+        ).weights
 
     strategy_name = strategy_name_for_method(method)
     if method == "mean_variance":
@@ -915,6 +1281,7 @@ def generate_weights(
                 max_position_weight=max_position_weight,
                 symbol_groups=symbol_groups,
                 max_group_weight=max_group_weight,
+                method="mean_variance",
             )
         else:
             weights = _solve_risk_parity_weights(
@@ -933,6 +1300,6 @@ def generate_weights(
             )
         )
 
-    return pd.concat(weight_frames, ignore_index=True).sort_values(
-        ["effective_date", "symbol"]
-    ).reset_index(drop=True)
+    return pd.concat(weight_frames, ignore_index=True).sort_values(["effective_date", "symbol"]).reset_index(
+        drop=True
+    )

@@ -289,6 +289,47 @@ def _benchmark_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
     return lines
 
 
+def _black_litterman_view_lines(
+    config: ExperimentConfig,
+    report_path: Path,
+    black_litterman_assumptions_path: Path | None,
+) -> list[str]:
+    optimized = config.baselines.optimized
+    if (
+        optimized.method != "black_litterman"
+        or not optimized.views
+        or black_litterman_assumptions_path is None
+    ):
+        return []
+
+    rows = []
+    for view in optimized.views:
+        weights = ", ".join(
+            f"{symbol}:{view.weights[symbol]:+g}"
+            for symbol in config.data.symbols
+            if symbol in view.weights and abs(view.weights[symbol]) > 0.0
+        )
+        rows.append(
+            {
+                "name": view.name,
+                "weights": weights,
+                "view_return": view.view_return,
+            }
+        )
+
+    lines = [
+        _markdown_table(_display_frame(pd.DataFrame(rows))),
+        "",
+        "- View weights are signed basket coefficients and are used as written.",
+        "- The default view uncertainty rule is `Omega = diag(P * tau * Sigma * P^T)`.",
+    ]
+    relative_path = os.path.relpath(black_litterman_assumptions_path, start=report_path.parent)
+    lines.append(
+        f"- Assumptions artifact: [{black_litterman_assumptions_path.name}]({relative_path})"
+    )
+    return lines
+
+
 def _cost_sensitivity_lines(cost_sensitivity: pd.DataFrame) -> list[str]:
     if not set(COST_SENSITIVITY_SUMMARY_COLUMNS).issubset(cost_sensitivity.columns):
         return []
@@ -326,6 +367,7 @@ def write_markdown_report(
     calibration_curves_plot_path: Path | None = None,
     score_histograms_plot_path: Path | None = None,
     threshold_sweeps_plot_path: Path | None = None,
+    black_litterman_assumptions_path: Path | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,6 +410,14 @@ def write_markdown_report(
         benchmark_lines = _benchmark_summary_lines(strategy_summary)
         if benchmark_lines:
             content_lines.extend(_section("Benchmark-Relative Summary", benchmark_lines))
+
+    black_litterman_lines = _black_litterman_view_lines(
+        config,
+        output_path,
+        black_litterman_assumptions_path,
+    )
+    if black_litterman_lines:
+        content_lines.extend(_section("Black-Litterman Assumptions", black_litterman_lines))
 
     if monthly_returns is not None and not monthly_returns.empty:
         content_lines.extend(

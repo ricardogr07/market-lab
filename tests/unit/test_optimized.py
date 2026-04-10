@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from marketlab.config import BlackLittermanViewConfig
 from marketlab.strategies.optimized import (
     DIAGONAL_SHRINKAGE_WEIGHT,
     EWMA_LAMBDA,
@@ -14,9 +15,12 @@ from marketlab.strategies.optimized import (
     build_optimizer_windows,
     estimate_covariance_matrix,
     estimate_expected_returns,
+    generate_cash_only_weights,
     generate_weights,
+    is_executable_method,
     load_external_covariance,
     load_external_expected_returns,
+    strategy_name_for_method,
 )
 
 
@@ -519,6 +523,165 @@ def test_generate_weights_respects_group_caps(tmp_path: Path) -> None:
     assert float(first_weights.sum()) == pytest.approx(0.8, abs=1e-5)
 
 
+def test_generate_weights_produces_symmetric_black_litterman_solution(tmp_path: Path) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="black_litterman",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        equilibrium_weights={"AAA": 0.5, "BBB": 0.5},
+        views=[
+            BlackLittermanViewConfig(
+                name="balanced_basket",
+                weights={"AAA": 1.0, "BBB": 1.0},
+                view_return=0.04,
+            )
+        ],
+    )
+
+    assert set(weights["strategy"]) == {"black_litterman"}
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.5, abs=1e-6)
+    assert first_weights.loc["BBB"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_generate_weights_tilts_toward_view_favored_asset_in_black_litterman(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="black_litterman",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        equilibrium_weights={"AAA": 0.5, "BBB": 0.5},
+        views=[
+            BlackLittermanViewConfig(
+                name="AAA_over_BBB",
+                weights={"AAA": 1.0, "BBB": -1.0},
+                view_return=0.04,
+            )
+        ],
+    )
+
+    first_weights = _first_effective_weights(weights)
+    assert first_weights.loc["AAA"] == pytest.approx(0.75, abs=1e-3)
+    assert first_weights.loc["BBB"] == pytest.approx(0.25, abs=1e-3)
+    assert float(first_weights.sum()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_black_litterman_method_is_executable_and_uses_expected_strategy_name(
+    tmp_path: Path,
+) -> None:
+    assert is_executable_method("black_litterman") is True
+    assert strategy_name_for_method("black_litterman") == "black_litterman"
+
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    weights = generate_weights(
+        panel,
+        symbols=["AAA", "BBB"],
+        method="black_litterman",
+        lookback_days=3,
+        covariance_estimator="external_csv",
+        external_covariance_path=covariance_path,
+        equilibrium_weights={"AAA": 0.5, "BBB": 0.5},
+        views=[
+            BlackLittermanViewConfig(
+                name="balanced_basket",
+                weights={"AAA": 1.0, "BBB": 1.0},
+                view_return=0.04,
+            )
+        ],
+    )
+
+    assert not weights.empty
+    assert set(weights["strategy"]) == {"black_litterman"}
+    first_weights = _first_effective_weights(weights)
+    assert float(first_weights.sum()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_generate_cash_only_weights_supports_black_litterman_fallback() -> None:
+    weights = generate_cash_only_weights(
+        "black_litterman",
+        effective_date=pd.Timestamp("2024-01-08"),
+        symbols=["AAA", "BBB"],
+    )
+
+    assert set(weights["strategy"]) == {"black_litterman"}
+    assert list(weights["effective_date"]) == [pd.Timestamp("2024-01-08"), pd.Timestamp("2024-01-08")]
+    assert list(weights["symbol"]) == ["AAA", "BBB"]
+    assert list(weights["weight"]) == [0.0, 0.0]
+
+
+def test_generate_weights_rejects_external_expected_return_inputs_for_black_litterman(
+    tmp_path: Path,
+) -> None:
+    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
+    covariance = pd.DataFrame(
+        [[0.04, 0.0], [0.0, 0.04]],
+        index=["AAA", "BBB"],
+        columns=["AAA", "BBB"],
+        dtype=float,
+    )
+    covariance_path = tmp_path / "covariance.csv"
+    _write_external_covariance(covariance_path, covariance)
+
+    with pytest.raises(
+        ValueError,
+        match="Black-Litterman optimized baseline does not use external expected returns",
+    ):
+        generate_weights(
+            panel,
+            symbols=["AAA", "BBB"],
+            method="black_litterman",
+            lookback_days=3,
+            covariance_estimator="external_csv",
+            external_covariance_path=covariance_path,
+            expected_return_source="external_csv",
+            external_expected_returns_path=tmp_path / "expected.csv",
+            equilibrium_weights={"AAA": 0.5, "BBB": 0.5},
+            views=[
+                BlackLittermanViewConfig(
+                    name="AAA_over_BBB",
+                    weights={"AAA": 1.0, "BBB": -1.0},
+                    view_return=0.04,
+                )
+            ],
+        )
+
+
 def test_generate_weights_produces_equal_risk_parity_solution(tmp_path: Path) -> None:
     panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
     covariance = pd.DataFrame(
@@ -685,19 +848,4 @@ def test_generate_weights_rejects_expected_return_inputs_for_risk_parity(
             external_covariance_path=covariance_path,
             expected_return_source="external_csv",
             external_expected_returns_path=tmp_path / "expected.csv",
-        )
-
-
-def test_generate_weights_rejects_unimplemented_methods() -> None:
-    panel = _build_optimizer_panel((("AAA", 100.0, 1.0), ("BBB", 120.0, 1.0)))
-
-    with pytest.raises(
-        RuntimeError,
-        match="baselines.optimized.method='black_litterman' is not implemented yet",
-    ):
-        generate_weights(
-            panel,
-            symbols=["AAA", "BBB"],
-            method="black_litterman",
-            lookback_days=3,
         )

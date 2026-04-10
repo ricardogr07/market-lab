@@ -42,6 +42,7 @@ from marketlab.reports.plots import (
 from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
+from marketlab.strategies.optimized import generate_black_litterman_output
 from marketlab.strategies.optimized import (
     generate_cash_only_weights as optimized_cash_only_weights,
 )
@@ -85,6 +86,7 @@ class ExperimentArtifacts:
     threshold_diagnostics_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
+    black_litterman_assumptions_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -131,6 +133,23 @@ def _slice_backtest_result(
             backtest_result.daily_cash["date"].isin(oos_dates)
         ].copy(),
     )
+
+
+def _slice_black_litterman_assumptions(
+    assumptions: pd.DataFrame | None,
+    oos_dates: pd.Index,
+) -> pd.DataFrame | None:
+    if assumptions is None:
+        return None
+    if assumptions.empty:
+        return None
+
+    sliced = assumptions.loc[
+        pd.to_datetime(assumptions["effective_date"]).isin(oos_dates)
+    ].copy()
+    if sliced.empty:
+        return None
+    return sliced.reset_index(drop=True)
 
 def prepare_data(config: ExperimentConfig) -> tuple[pd.DataFrame, Path]:
     config.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +198,7 @@ def _persist_experiment_outputs(
     score_histograms_path: Path | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics_path: Path | None = None,
+    black_litterman_assumptions: pd.DataFrame | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(performance)
@@ -255,6 +275,15 @@ def _persist_experiment_outputs(
         persisted_threshold_diagnostics_path = artifact_run_dir / "threshold_diagnostics.csv"
         threshold_diagnostics.to_csv(persisted_threshold_diagnostics_path, index=False)
 
+    black_litterman_assumptions_path: Path | None = None
+    if black_litterman_assumptions is not None:
+        black_litterman_assumptions_path = artifact_run_dir / "black_litterman_assumptions.csv"
+        black_litterman_assumptions.to_csv(
+            black_litterman_assumptions_path,
+            index=False,
+            date_format="%Y-%m-%d",
+        )
+
     model_summary_path: Path | None = None
     if model_summary is not None:
         model_summary_path = artifact_run_dir / "model_summary.csv"
@@ -318,6 +347,7 @@ def _persist_experiment_outputs(
             calibration_curves_plot_path=calibration_curves_plot_path,
             score_histograms_plot_path=score_histograms_plot_path,
             threshold_sweeps_plot_path=threshold_sweeps_plot_path,
+            black_litterman_assumptions_path=black_litterman_assumptions_path,
         )
 
     return ExperimentArtifacts(
@@ -346,10 +376,51 @@ def _persist_experiment_outputs(
         threshold_diagnostics_path=persisted_threshold_diagnostics_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
+        black_litterman_assumptions_path=black_litterman_assumptions_path,
     )
 
 
-def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResult:
+def _run_black_litterman_baseline(
+    panel: pd.DataFrame,
+    *,
+    symbols: list[str],
+    lookback_days: int,
+    frequency: str,
+    covariance_estimator: str,
+    external_covariance_path: Path | None,
+    target_gross_exposure: float,
+    risk_aversion: float,
+    equilibrium_weights: dict[str, float],
+    tau: float,
+    views: list,
+    symbol_groups: dict[str, str],
+    max_position_weight: float | None,
+    max_group_weight: float | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    output = generate_black_litterman_output(
+        panel,
+        symbols=symbols,
+        lookback_days=lookback_days,
+        frequency=frequency,
+        covariance_estimator=covariance_estimator,
+        external_covariance_path=external_covariance_path,
+        long_only=True,
+        target_gross_exposure=target_gross_exposure,
+        risk_aversion=risk_aversion,
+        symbol_groups=symbol_groups,
+        max_position_weight=max_position_weight,
+        max_group_weight=max_group_weight,
+        equilibrium_weights=equilibrium_weights,
+        tau=tau,
+        views=views,
+    )
+    return output.weights, output.assumptions
+
+
+def run_baselines(
+    config: ExperimentConfig,
+    panel: pd.DataFrame,
+) -> tuple[BacktestResult, pd.DataFrame | None]:
     featured = add_feature_set(
         panel=panel,
         return_windows=config.features.return_windows,
@@ -387,26 +458,47 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
                 )
             )
 
+    black_litterman_assumptions: pd.DataFrame | None = None
     if config.baselines.optimized.enabled:
         optimized_method = config.baselines.optimized.method
-        weights = optimized_weights(
-            panel=featured,
-            symbols=config.data.symbols,
-            method=optimized_method,
-            lookback_days=config.baselines.optimized.lookback_days,
-            frequency=config.baselines.optimized.rebalance_frequency,
-            covariance_estimator=config.baselines.optimized.covariance_estimator,
-            external_covariance_path=config.optimized_external_covariance_path,
-            expected_return_source=config.baselines.optimized.expected_return_source,
-            external_expected_returns_path=config.optimized_external_expected_returns_path,
-            long_only=config.baselines.optimized.long_only,
-            target_gross_exposure=config.baselines.optimized.target_gross_exposure,
-            risk_aversion=config.baselines.optimized.risk_aversion,
-            symbol_groups=config.data.symbol_groups,
-            max_position_weight=config.portfolio.risk.max_position_weight,
-            max_group_weight=config.portfolio.risk.max_group_weight,
-        )
+        if optimized_method == "black_litterman":
+            weights, black_litterman_assumptions = _run_black_litterman_baseline(
+                featured,
+                symbols=config.data.symbols,
+                lookback_days=config.baselines.optimized.lookback_days,
+                frequency=config.baselines.optimized.rebalance_frequency,
+                covariance_estimator=config.baselines.optimized.covariance_estimator,
+                external_covariance_path=config.optimized_external_covariance_path,
+                target_gross_exposure=config.baselines.optimized.target_gross_exposure,
+                risk_aversion=config.baselines.optimized.risk_aversion,
+                equilibrium_weights=config.baselines.optimized.equilibrium_weights,
+                tau=config.baselines.optimized.tau,
+                views=config.baselines.optimized.views,
+                symbol_groups=config.data.symbol_groups,
+                max_position_weight=config.portfolio.risk.max_position_weight,
+                max_group_weight=config.portfolio.risk.max_group_weight,
+            )
+        else:
+            weights = optimized_weights(
+                panel=featured,
+                symbols=config.data.symbols,
+                method=optimized_method,
+                lookback_days=config.baselines.optimized.lookback_days,
+                frequency=config.baselines.optimized.rebalance_frequency,
+                covariance_estimator=config.baselines.optimized.covariance_estimator,
+                external_covariance_path=config.optimized_external_covariance_path,
+                expected_return_source=config.baselines.optimized.expected_return_source,
+                external_expected_returns_path=config.optimized_external_expected_returns_path,
+                long_only=config.baselines.optimized.long_only,
+                target_gross_exposure=config.baselines.optimized.target_gross_exposure,
+                risk_aversion=config.baselines.optimized.risk_aversion,
+                symbol_groups=config.data.symbol_groups,
+                max_position_weight=config.portfolio.risk.max_position_weight,
+                max_group_weight=config.portfolio.risk.max_group_weight,
+            )
         if weights.empty and optimized_method_is_executable(optimized_method):
+            if optimized_method == "black_litterman":
+                black_litterman_assumptions = None
             weights = optimized_cash_only_weights(
                 optimized_method,
                 effective_date=pd.Timestamp(featured["timestamp"].min()),
@@ -436,7 +528,7 @@ def run_baselines(config: ExperimentConfig, panel: pd.DataFrame) -> BacktestResu
                 )
             )
 
-    return _concat_backtest_results(backtest_results)
+    return _concat_backtest_results(backtest_results), black_litterman_assumptions
 
 def _shared_oos_dates(
     panel: pd.DataFrame,
@@ -636,7 +728,7 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
 
 def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    baseline_outputs = run_baselines(config, panel)
+    baseline_outputs, black_litterman_assumptions = run_baselines(config, panel)
     return _persist_experiment_outputs(
         config=config,
         panel_path=panel_path,
@@ -644,12 +736,13 @@ def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
         daily_holdings=baseline_outputs.daily_holdings,
         daily_cash=baseline_outputs.daily_cash,
         symbol_groups=config.data.symbol_groups,
+        black_litterman_assumptions=black_litterman_assumptions,
     )
 
 
 def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    baseline_outputs = run_baselines(config, panel)
+    baseline_outputs, black_litterman_assumptions = run_baselines(config, panel)
 
     if not config.models:
         return _persist_experiment_outputs(
@@ -659,6 +752,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
             daily_holdings=baseline_outputs.daily_holdings,
             daily_cash=baseline_outputs.daily_cash,
             symbol_groups=config.data.symbol_groups,
+            black_litterman_assumptions=black_litterman_assumptions,
         )
 
     modeling_dataset = build_weekly_modeling_dataset(panel, config)
@@ -709,6 +803,10 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     )
     combined_outputs = _concat_backtest_results([baseline_outputs, ml_outputs])
     oos_outputs = _slice_backtest_result(combined_outputs, oos_dates)
+    black_litterman_assumptions = _slice_black_litterman_assumptions(
+        black_litterman_assumptions,
+        oos_dates,
+    )
     model_summary = build_model_summary(
         model_metrics=training_outputs.metrics,
         model_manifest=training_outputs.manifest,
@@ -734,6 +832,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         calibration_diagnostics=training_outputs.calibration_diagnostics,
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
+        black_litterman_assumptions=black_litterman_assumptions,
     )
 
 

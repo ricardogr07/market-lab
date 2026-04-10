@@ -18,7 +18,32 @@ run_marketlab_cli = getattr(
 )
 write_yaml_config = _cli_harness.write_yaml_config
 
-BLACK_LITTERMAN_ERROR = "baselines.optimized.method='black_litterman' is not implemented yet."
+
+def _black_litterman_optimized(symbols: list[str]) -> dict[str, object]:
+    equilibrium = {symbol: round(1.0 / len(symbols), 6) for symbol in symbols}
+    first, second, third = symbols[:3]
+    last = symbols[-1]
+    return {
+        "enabled": True,
+        "method": "black_litterman",
+        "lookback_days": 3,
+        "target_gross_exposure": 0.6,
+        "risk_aversion": 1.0,
+        "equilibrium_weights": equilibrium,
+        "tau": 0.05,
+        "views": [
+            {
+                "name": "growth_over_defensive",
+                "weights": {first: 1.0, second: 1.0, third: -1.0},
+                "view_return": 0.0025,
+            },
+            {
+                "name": "core_over_tail",
+                "weights": {first: 1.0, last: -1.0},
+                "view_return": 0.001,
+            },
+        ],
+    }
 
 
 def _write_backtest_config(
@@ -171,6 +196,7 @@ def test_backtest_supports_mean_variance_optimized_baseline(tmp_path: Path) -> N
     ].iloc[0]
     assert mean_variance_row["avg_gross_exposure"] <= 0.6 + 1e-6
     assert "mean_variance" in report_text
+    assert not (run_dir / "black_litterman_assumptions.csv").exists()
 
 
 
@@ -264,19 +290,98 @@ def test_backtest_keeps_risk_parity_as_cash_when_no_windows_exist(tmp_path: Path
     assert risk_parity_row["avg_cash_weight"] == 1.0
 
 
-
-def test_run_experiment_rejects_unimplemented_black_litterman_baseline(tmp_path: Path) -> None:
+def test_backtest_supports_black_litterman_optimized_baseline(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
         tmp_path,
-        optimized={
-            "enabled": True,
-            "method": "black_litterman",
-        },
+        optimized=_black_litterman_optimized(["AAA", "BBB", "CCC", "DDD"]),
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "optimized_scaffold_experiment"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    assumptions = pd.read_csv(run_dir / "black_litterman_assumptions.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "black_litterman" in set(metrics["strategy"])
+    assert "black_litterman" in set(strategy_summary["strategy"])
+    assert not assumptions.empty
+    assert set(assumptions.columns) >= {
+        "signal_date",
+        "effective_date",
+        "symbol",
+        "equilibrium_weight",
+        "implied_prior_return",
+        "posterior_expected_return",
+        "tau",
+    }
+    assert assumptions["tau"].eq(0.05).all()
+    assert "Black-Litterman Assumptions" in report_text
+    assert "growth_over_defensive" in report_text
+    assert "black_litterman_assumptions.csv" in report_text
+
+
+def test_backtest_black_litterman_cash_fallback_skips_assumptions_artifact(tmp_path: Path) -> None:
+    optimized = _black_litterman_optimized(["VOO", "QQQ", "SMH", "XLV", "IEMG"])
+    optimized["lookback_days"] = 10_000
+    config_path = _write_backtest_config(
+        tmp_path,
+        optimized=optimized,
+        buy_hold=False,
+        sma_enabled=False,
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "optimized_scaffold_backtest"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(metrics["strategy"]) == {"black_litterman"}
+    assert set(strategy_summary["strategy"]) == {"black_litterman"}
+    black_litterman_row = strategy_summary.loc[
+        strategy_summary["strategy"] == "black_litterman"
+    ].iloc[0]
+    assert black_litterman_row["avg_gross_exposure"] == 0.0
+    assert black_litterman_row["avg_cash_weight"] == 1.0
+    assert not (run_dir / "black_litterman_assumptions.csv").exists()
+    assert "Black-Litterman Assumptions" not in report_text
+
+
+def test_run_experiment_supports_black_litterman_optimized_baseline(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        optimized=_black_litterman_optimized(["AAA", "BBB", "CCC", "DDD"]),
     )
 
     result = run_marketlab_cli("run-experiment", config_path)
 
-    assert result.returncode != 0
-    combined_output = f"{result.stdout}\n{result.stderr}"
-    assert BLACK_LITTERMAN_ERROR in combined_output
-    assert not (tmp_path / "runs" / "optimized_scaffold_experiment").exists()
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "optimized_scaffold_experiment"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv", parse_dates=["date"])
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    assumptions = pd.read_csv(
+        run_dir / "black_litterman_assumptions.csv",
+        parse_dates=["signal_date", "effective_date"],
+    )
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "black_litterman" in set(metrics["strategy"])
+    assert "black_litterman" in set(strategy_summary["strategy"])
+    assert not assumptions.empty
+    assert assumptions["tau"].eq(0.05).all()
+    assert assumptions["effective_date"].min() >= performance["date"].min()
+    assert assumptions["effective_date"].max() <= performance["date"].max()
+    assert set(assumptions["effective_date"]) <= set(performance["date"])
+    assert "Black-Litterman Assumptions" in report_text
+    assert "core_over_tail" in report_text
+    assert "black_litterman_assumptions.csv" in report_text
