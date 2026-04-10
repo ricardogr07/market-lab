@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance and risk-parity baselines, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -76,9 +76,9 @@ flowchart TD
     Launcher --> Experiment[run-experiment]
 
     Prepare --> Panel[prepared panel cache]
-    Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots]
+    Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots black_litterman_assumptions.csv when applicable]
     Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv ranking_diagnostics.csv calibration_diagnostics.csv score_histograms.csv threshold_diagnostics.csv manifest metrics predictions summaries plots models/]
-    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md strategy plots calibration plots diagnostics summaries optional models/]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md strategy plots calibration plots diagnostics summaries optional models/black_litterman_assumptions.csv when applicable]
 ```
 
 ## Automation Split
@@ -124,13 +124,16 @@ The required CI path stays offline and deterministic through tox. The Docker run
 
 ## Optimized Baseline Rules
 
-- `baselines.optimized.method="mean_variance"` and `baselines.optimized.method="risk_parity"` are executable optimized baselines in the current phase.
-- `black_litterman` remains scaffold-only and fails fast with an explicit not-implemented error.
+- `baselines.optimized.method="mean_variance"`, `baselines.optimized.method="risk_parity"`, and `baselines.optimized.method="black_litterman"` are executable optimized baselines in the current phase.
+- Black-Litterman views are signed basket weights over configured symbols; MarketLab uses them as written and does not renormalize them.
+- Black-Litterman posterior uncertainty defaults to the diagonal `Omega = diag(P * tau * Sigma * P^T)` rule.
+- Successful Black-Litterman runs persist `black_litterman_assumptions.csv` and reference it from `report.md`.
 - Trailing return windows are built from adjusted close data only, and the latest included return must end on the `signal_date`.
 - Optimized weights are applied on the next market open after the `signal_date`, and no allocation is emitted before the first full optimizer lookback window exists.
 - `target_gross_exposure` is a long-only invested-fraction request; any undeployed exposure remains cash in the backtest engine.
 - `portfolio.risk.max_position_weight` and `portfolio.risk.max_group_weight` are enforced as hard optimizer constraints for the long-only optimized methods.
-- `risk_aversion` applies only to `mean_variance`.
+- `long_only` and `target_gross_exposure <= 1.0` remain mandatory for the executable optimized baselines.
+- `risk_aversion` applies to `mean_variance` and is also reused as the market-implied prior scalar for `black_litterman`.
 - `risk_parity` uses only the configured covariance estimator and does not consume expected-return inputs.
 - Binding position or group caps turn `risk_parity` into the best feasible approximation to equal risk contributions rather than exact parity.
 - External covariance inputs must be square daily-return covariance matrices keyed by the configured symbols.
@@ -439,6 +442,7 @@ classDiagram
       +ranking_diagnostics_path: Path | None
       +fold_summary_path: Path | None
       +report_path: Path | None
+      +black_litterman_assumptions_path: Path | None
       +cumulative_plot_path: Path | None
       +drawdown_plot_path: Path | None
       +turnover_plot_path: Path | None
@@ -733,11 +737,12 @@ Best practice:
 - Provides covariance helpers for `sample`, `ewma`, `diagonal_shrinkage`, and `external_csv` inputs.
 - Provides expected-return helpers for `historical_mean` and `external_csv` inputs.
 - Reorders and validates external covariance and expected-return files against `data.symbols`.
-- Executes the long-only `mean_variance` and `risk_parity` baselines with hard position and group constraints, while leaving `black_litterman` scaffold-only.
+- Provides the solver plumbing reused by the executable long-only optimized baselines, including the Black-Litterman posterior-return and assumptions builders.
 
 Best practice:
 - Keep adjusted-close return windows and optimizer timing leakage-safe: signal on the close, execute on the next open.
 - Keep hard constraints explicit inside the solver instead of post-solve clipping.
+- Keep Black-Litterman views signed, maintain the diagonal `Omega` default, and preserve the long-only execution scope.
 - Reject malformed external files early and keep unsupported optimized methods on explicit errors until they are implemented.
 
 ### `src/marketlab/strategies/buy_hold.py`

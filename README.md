@@ -233,16 +233,21 @@ Add to `baselines`:
 - `optimized.long_only`
 - `optimized.target_gross_exposure`
 - `optimized.risk_aversion`
+- `optimized.equilibrium_weights`
+- `optimized.tau`
+- `optimized.views`
 
 Current Phase 5 behavior is intentionally narrow:
 
-- `mean_variance` and `risk_parity` are executable optimized methods
-- `black_litterman` still fails fast with an explicit not-implemented error
+- `mean_variance`, `risk_parity`, and `black_litterman` are executable optimized methods
+- `black_litterman` uses signed basket views as written, does not renormalize them, and defaults to the diagonal `Omega = diag(P * tau * Sigma * P^T)` uncertainty rule
+- successful Black-Litterman runs write `black_litterman_assumptions.csv` alongside the other run artifacts and reference it from `report.md`
 - the optimizer uses trailing daily adjusted-close returns ending on the `signal_date` and applies the weights on the next market open
 - no allocation is emitted before the first rebalance window with a full optimizer lookback
 - `target_gross_exposure < 1.0` leaves the undeployed exposure in cash
 - `portfolio.risk.max_position_weight` and `portfolio.risk.max_group_weight` are enforced as hard long-only optimizer constraints
-- `risk_aversion` only applies to `mean_variance`
+- `long_only` and `target_gross_exposure <= 1.0` remain mandatory for all executable optimized methods
+- `risk_aversion` applies to `mean_variance` and is also reused as the market-implied prior scalar for `black_litterman`
 - `risk_parity` uses only the configured covariance estimator and does not consume expected-return inputs
 - capped `risk_parity` portfolios are the best feasible approximation to equal risk contributions, not exact parity under binding caps
 
@@ -250,6 +255,7 @@ External input rules:
 
 - covariance CSVs must be square daily-return covariance matrices keyed by the configured symbols
 - expected-return CSVs must contain exactly `symbol,expected_return`, where `expected_return` is a daily decimal return
+- Black-Litterman views are signed basket weights over configured symbols; the loader rejects unknown symbols, empty views, and all-zero coefficients
 - both loaders reorder to `data.symbols` and reject missing, extra, or non-numeric values
 
 ## Single-Symbol VOO Timing Example
