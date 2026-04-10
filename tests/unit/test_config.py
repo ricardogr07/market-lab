@@ -60,6 +60,9 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.baselines.optimized.long_only is True
     assert config.baselines.optimized.target_gross_exposure == pytest.approx(1.0)
     assert config.baselines.optimized.risk_aversion == pytest.approx(1.0)
+    assert config.baselines.optimized.equilibrium_weights == {}
+    assert config.baselines.optimized.tau == pytest.approx(0.05)
+    assert config.baselines.optimized.views == []
     assert config.optimized_external_covariance_path is None
     assert config.optimized_external_expected_returns_path is None
     assert config.portfolio.risk.max_position_weight is None
@@ -82,6 +85,8 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
             "optimized": {
                 "external_covariance_path": None,
                 "external_expected_returns_path": None,
+                "equilibrium_weights": None,
+                "views": None,
             },
         },
         evaluation={"cost_sensitivity_bps": None},
@@ -94,6 +99,8 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
     assert config.baselines.allocation.group_weights == {}
     assert config.baselines.optimized.external_covariance_path == ""
     assert config.baselines.optimized.external_expected_returns_path == ""
+    assert config.baselines.optimized.equilibrium_weights == {}
+    assert config.baselines.optimized.views == []
     assert config.evaluation.cost_sensitivity_bps == []
 
 
@@ -243,6 +250,41 @@ def test_load_config_accepts_valid_risk_caps(tmp_path: Path) -> None:
     assert config.portfolio.risk.max_short_exposure == pytest.approx(0.45)
 
 
+def test_load_config_accepts_valid_black_litterman_settings(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["AAA", "BBB", "CCC"]},
+        baselines={
+            "optimized": {
+                "enabled": True,
+                "method": "black_litterman",
+                "covariance_estimator": "sample",
+                "equilibrium_weights": {"AAA": 0.4, "BBB": 0.4, "CCC": 0.2},
+                "tau": 0.10,
+                "views": [
+                    {
+                        "name": "growth_over_defensive",
+                        "weights": {"AAA": 1.0, "BBB": 1.0, "CCC": -1.0},
+                        "view_return": 0.0025,
+                    }
+                ],
+            }
+        },
+    )
+
+    config = load_config(config_path)
+
+    optimized = config.baselines.optimized
+    assert optimized.method == "black_litterman"
+    assert optimized.equilibrium_weights == {"AAA": 0.4, "BBB": 0.4, "CCC": 0.2}
+    assert optimized.tau == pytest.approx(0.10)
+    assert len(optimized.views) == 1
+    view = optimized.views[0]
+    assert view.name == "growth_over_defensive"
+    assert view.weights == {"AAA": 1.0, "BBB": 1.0, "CCC": -1.0}
+    assert view.view_return == pytest.approx(0.0025)
+
+
 def test_load_config_accepts_cost_sensitivity_bps(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "config.yaml",
@@ -323,6 +365,10 @@ def test_load_config_rejects_invalid_cost_sensitivity_bps(
             "baselines.optimized.external_expected_returns_path must be empty when baselines.optimized.method='risk_parity'",
         ),
         (
+            {"tau": 0.0},
+            "baselines.optimized.tau must be a finite positive value",
+        ),
+        (
             {"covariance_estimator": "external_csv"},
             "baselines.optimized.external_covariance_path is required when baselines.optimized.covariance_estimator='external_csv'",
         ),
@@ -338,9 +384,111 @@ def test_load_config_rejects_invalid_cost_sensitivity_bps(
             {"expected_return_source": "historical_mean", "external_expected_returns_path": "expected.csv"},
             "baselines.optimized.external_expected_returns_path must be empty unless baselines.optimized.expected_return_source='external_csv'",
         ),
+        (
+            {"method": "black_litterman", "long_only": False},
+            "baselines.optimized.long_only must be true when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {"method": "black_litterman", "target_gross_exposure": 1.2},
+            "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {"method": "black_litterman", "expected_return_source": "external_csv"},
+            "baselines.optimized.expected_return_source must remain 'historical_mean' when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {"method": "black_litterman", "external_expected_returns_path": "expected.csv"},
+            "baselines.optimized.external_expected_returns_path must be empty when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {"method": "black_litterman"},
+            "baselines.optimized.equilibrium_weights must match data.symbols exactly when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": float("nan"), "BBB": 1.0},
+                "views": [{"name": "good", "weights": {"AAA": 1.0}, "view_return": 0.01}],
+            },
+            "baselines.optimized.equilibrium_weights must contain only finite numeric values",
+        ),
     ],
 )
 def test_load_config_rejects_invalid_optimized_scaffold_settings(
+    tmp_path: Path,
+    optimized: dict[str, object],
+    message: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={"optimized": optimized},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("optimized", "message"),
+    [
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+            },
+            "baselines.optimized.views must be non-empty when baselines.optimized.method='black_litterman'",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "", "weights": {"AAA": 1.0}, "view_return": 0.01}],
+            },
+            r"baselines\.optimized\.views\[0\]\.name must be non-empty",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "bad", "weights": {"CCC": 1.0}, "view_return": 0.01}],
+            },
+            r"baselines\.optimized\.views\[0\]\.weights contains unknown symbols: CCC",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "bad", "weights": {}, "view_return": 0.01}],
+            },
+            r"baselines\.optimized\.views\[0\]\.weights must not be empty",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "bad", "weights": {"AAA": 0.0}, "view_return": 0.01}],
+            },
+            r"baselines\.optimized\.views\[0\]\.weights must contain at least one non-zero coefficient",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "bad", "weights": {"AAA": float("inf")}, "view_return": 0.01}],
+            },
+            r"baselines\.optimized\.views\[0\]\.weights\[AAA\] must be finite",
+        ),
+        (
+            {
+                "method": "black_litterman",
+                "equilibrium_weights": {"AAA": 0.5, "BBB": 0.5},
+                "views": [{"name": "bad", "weights": {"AAA": 1.0}, "view_return": float("nan")}],
+            },
+            r"baselines\.optimized\.views\[0\]\.view_return must be finite",
+        ),
+    ],
+)
+def test_load_config_rejects_invalid_black_litterman_view_settings(
     tmp_path: Path,
     optimized: dict[str, object],
     message: str,

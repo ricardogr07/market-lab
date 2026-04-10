@@ -88,6 +88,13 @@ class AllocationConfig:
 
 
 @dataclass(slots=True)
+class BlackLittermanViewConfig:
+    name: str = ""
+    weights: dict[str, float] = field(default_factory=dict)
+    view_return: float = 0.0
+
+
+@dataclass(slots=True)
 class OptimizedConfig:
     enabled: bool = False
     method: str = "mean_variance"
@@ -100,6 +107,9 @@ class OptimizedConfig:
     long_only: bool = True
     target_gross_exposure: float = 1.0
     risk_aversion: float = 1.0
+    equilibrium_weights: dict[str, float] = field(default_factory=dict)
+    tau: float = 0.05
+    views: list[BlackLittermanViewConfig] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -226,11 +236,18 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
         optimized.external_covariance_path = ""
     if optimized.external_expected_returns_path is None:
         optimized.external_expected_returns_path = ""
+    if optimized.equilibrium_weights is None:
+        optimized.equilibrium_weights = {}
+    if optimized.views is None:
+        optimized.views = []
 
 
 def _validate_weights(label: str, weights: dict[str, float]) -> None:
-    if any(value < 0.0 for value in weights.values()):
-        raise ValueError(f"{label} must contain non-negative weights.")
+    for value in weights.values():
+        if not math.isfinite(value):
+            raise ValueError(f"{label} must contain only finite numeric values.")
+        if value < 0.0:
+            raise ValueError(f"{label} must contain non-negative weights.")
 
     if abs(sum(weights.values()) - 1.0) > WEIGHT_TOLERANCE:
         raise ValueError(f"{label} must sum to 1.0.")
@@ -309,6 +326,7 @@ def _validate_config(config: ExperimentConfig) -> None:
         "baselines.optimized.risk_aversion",
         optimized.risk_aversion,
     )
+    _validate_positive_float("baselines.optimized.tau", optimized.tau)
     if optimized.method == "mean_variance":
         if not optimized.long_only:
             raise ValueError(
@@ -341,6 +359,61 @@ def _validate_config(config: ExperimentConfig) -> None:
                 "baselines.optimized.external_expected_returns_path must be empty when "
                 "baselines.optimized.method='risk_parity'."
             )
+    if optimized.method == "black_litterman":
+        if not optimized.long_only:
+            raise ValueError(
+                "baselines.optimized.long_only must be true when "
+                "baselines.optimized.method='black_litterman'."
+            )
+        if optimized.target_gross_exposure > 1.0:
+            raise ValueError(
+                "baselines.optimized.target_gross_exposure must be less than or equal to 1.0 "
+                "when baselines.optimized.method='black_litterman'."
+            )
+        if optimized.expected_return_source != "historical_mean":
+            raise ValueError(
+                "baselines.optimized.expected_return_source must remain 'historical_mean' "
+                "when baselines.optimized.method='black_litterman'."
+            )
+        if optimized.external_expected_returns_path != "":
+            raise ValueError(
+                "baselines.optimized.external_expected_returns_path must be empty when "
+                "baselines.optimized.method='black_litterman'."
+            )
+        if set(optimized.equilibrium_weights) != symbol_set:
+            raise ValueError(
+                "baselines.optimized.equilibrium_weights must match data.symbols exactly "
+                "when baselines.optimized.method='black_litterman'."
+            )
+        _validate_weights(
+            "baselines.optimized.equilibrium_weights",
+            optimized.equilibrium_weights,
+        )
+        if not optimized.views:
+            raise ValueError(
+                "baselines.optimized.views must be non-empty when "
+                "baselines.optimized.method='black_litterman'."
+            )
+        for index, view in enumerate(optimized.views):
+            label = f"baselines.optimized.views[{index}]"
+            if not view.name:
+                raise ValueError(f"{label}.name must be non-empty.")
+            unknown_view_symbols = sorted(set(view.weights) - symbol_set)
+            if unknown_view_symbols:
+                joined = ", ".join(unknown_view_symbols)
+                raise ValueError(f"{label}.weights contains unknown symbols: {joined}")
+            if not view.weights:
+                raise ValueError(f"{label}.weights must not be empty.")
+            if not math.isfinite(view.view_return):
+                raise ValueError(f"{label}.view_return must be finite.")
+            non_zero_weights = 0
+            for symbol, coefficient in view.weights.items():
+                if not math.isfinite(coefficient):
+                    raise ValueError(f"{label}.weights[{symbol}] must be finite.")
+                if abs(coefficient) > WEIGHT_TOLERANCE:
+                    non_zero_weights += 1
+            if non_zero_weights == 0:
+                raise ValueError(f"{label}.weights must contain at least one non-zero coefficient.")
     if optimized.covariance_estimator == "external_csv":
         if optimized.external_covariance_path == "":
             raise ValueError(
@@ -457,5 +530,9 @@ def load_config(path: str | Path) -> ExperimentConfig:
         base_dir=_config_base_dir(config_path),
     )
     _normalize_mapping_sections(config)
+    config.baselines.optimized.views = [
+        _section(BlackLittermanViewConfig, view)
+        for view in config.baselines.optimized.views
+    ]
     _validate_config(config)
     return config
