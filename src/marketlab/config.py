@@ -142,6 +142,7 @@ class EvaluationConfig:
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
     benchmark_strategy: str = ""
     cost_sensitivity_bps: list[float] = field(default_factory=list)
+    factor_model_path: str = ""
 
 
 @dataclass(slots=True)
@@ -204,6 +205,13 @@ class ExperimentConfig:
             return None
         return self.resolve_path(path)
 
+    @property
+    def factor_model_path(self) -> Path | None:
+        path = self.evaluation.factor_model_path
+        if path == "":
+            return None
+        return self.resolve_path(path)
+
 
 def _section(cls: type[Any], data: dict[str, Any] | None) -> Any:
     values = data or {}
@@ -230,6 +238,8 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
 
     if config.evaluation.cost_sensitivity_bps is None:
         config.evaluation.cost_sensitivity_bps = []
+    if config.evaluation.factor_model_path is None:
+        config.evaluation.factor_model_path = ""
 
     optimized = config.baselines.optimized
     if optimized.external_covariance_path is None:
@@ -525,6 +535,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
             ),
             benchmark_strategy=(payload.get("evaluation") or {}).get("benchmark_strategy", ""),
             cost_sensitivity_bps=(payload.get("evaluation") or {}).get("cost_sensitivity_bps", []),
+            factor_model_path=(payload.get("evaluation") or {}).get("factor_model_path", ""),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
         base_dir=_config_base_dir(config_path),

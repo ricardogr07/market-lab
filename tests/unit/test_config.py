@@ -70,6 +70,8 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.portfolio.risk.max_long_exposure is None
     assert config.portfolio.risk.max_short_exposure is None
     assert config.evaluation.cost_sensitivity_bps == []
+    assert config.evaluation.factor_model_path == ""
+    assert config.factor_model_path is None
 
 
 def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
@@ -89,7 +91,7 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
                 "views": None,
             },
         },
-        evaluation={"cost_sensitivity_bps": None},
+        evaluation={"cost_sensitivity_bps": None, "factor_model_path": None},
     )
 
     config = load_config(config_path)
@@ -102,6 +104,24 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
     assert config.baselines.optimized.equilibrium_weights == {}
     assert config.baselines.optimized.views == []
     assert config.evaluation.cost_sensitivity_bps == []
+    assert config.evaluation.factor_model_path == ""
+    assert config.factor_model_path is None
+
+
+def test_load_config_resolves_factor_model_path_relative_to_config(tmp_path: Path) -> None:
+    config_dir = tmp_path / "configs"
+    factors_path = tmp_path / "inputs" / "factor_returns.csv"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    factors_path.parent.mkdir(parents=True, exist_ok=True)
+    factors_path.write_text("date,MKT\n2024-01-02,0.01\n", encoding="utf-8")
+    config_path = _write_config(
+        config_dir / "config.yaml",
+        evaluation={"factor_model_path": "inputs/factor_returns.csv"},
+    )
+
+    config = load_config(config_path)
+
+    assert config.factor_model_path == factors_path.resolve()
 
 
 def test_load_config_rejects_unknown_symbol_group_entries(tmp_path: Path) -> None:
