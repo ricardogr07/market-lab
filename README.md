@@ -332,6 +332,39 @@ marketlab run-experiment --config weekly_rank.yaml
 
 `list-configs` shows the bundled example templates, and `write-config` exports one of those templates into your working directory. That keeps the installed package self-contained without requiring a checkout of this repository.
 
+## Canonical Phase 5 Scenario Pack
+
+MarketLab now ships a canonical Phase 5 scenario pack as both checked-in repo configs and installed-package templates.
+
+Repo configs:
+
+- `configs/experiment.phase5.allocation_equal.yaml`
+- `configs/experiment.phase5.allocation_group.yaml`
+- `configs/experiment.phase5.ranking_default.yaml`
+- `configs/experiment.phase5.ranking_capped.yaml`
+- `configs/experiment.phase5.mean_variance.yaml`
+- `configs/experiment.phase5.risk_parity.yaml`
+- `configs/experiment.phase5.black_litterman.yaml`
+
+Installed template names:
+
+- `phase5_allocation_equal`
+- `phase5_allocation_group`
+- `phase5_ranking_default`
+- `phase5_ranking_capped`
+- `phase5_mean_variance`
+- `phase5_risk_parity`
+- `phase5_black_litterman`
+
+Each scenario is still a single config run through `run-experiment`; there is no multi-scenario runner in this phase.
+
+```bash
+marketlab write-config --name phase5_black_litterman --output phase5_black_litterman.yaml
+marketlab run-experiment --config phase5_black_litterman.yaml
+```
+
+For the comparison rules and the recommended artifact fields to inspect, see [docs/phase5-scenarios.md](docs/phase5-scenarios.md).
+
 ## Local Validation
 
 ```bash

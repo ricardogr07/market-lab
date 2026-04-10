@@ -5,6 +5,7 @@ nav:
   - Overview: index.md
   - How It Works: how-it-works.md
   - Architecture: architecture.md
+  - Phase 5 Scenarios: phase5-scenarios.md
   - Plan: PLAN.md
 plugins:
   - search
