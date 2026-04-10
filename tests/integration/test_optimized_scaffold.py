@@ -196,6 +196,9 @@ def test_backtest_supports_mean_variance_optimized_baseline(tmp_path: Path) -> N
     ].iloc[0]
     assert mean_variance_row["avg_gross_exposure"] <= 0.6 + 1e-6
     assert "mean_variance" in report_text
+    assert "Covariance Diagnostics" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+    assert (run_dir / "covariance_diagnostics.csv").exists()
     assert not (run_dir / "black_litterman_assumptions.csv").exists()
 
 
@@ -229,6 +232,7 @@ def test_backtest_keeps_mean_variance_as_cash_when_no_windows_exist(tmp_path: Pa
     ].iloc[0]
     assert mean_variance_row["avg_gross_exposure"] == 0.0
     assert mean_variance_row["avg_cash_weight"] == 1.0
+    assert not (run_dir / "covariance_diagnostics.csv").exists()
 
 
 def test_backtest_supports_risk_parity_optimized_baseline(tmp_path: Path) -> None:
@@ -258,6 +262,9 @@ def test_backtest_supports_risk_parity_optimized_baseline(tmp_path: Path) -> Non
     ].iloc[0]
     assert risk_parity_row["avg_gross_exposure"] <= 0.6 + 1e-6
     assert "risk_parity" in report_text
+    assert "Covariance Diagnostics" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+    assert (run_dir / "covariance_diagnostics.csv").exists()
 
 
 def test_backtest_keeps_risk_parity_as_cash_when_no_windows_exist(tmp_path: Path) -> None:
@@ -288,6 +295,7 @@ def test_backtest_keeps_risk_parity_as_cash_when_no_windows_exist(tmp_path: Path
     ].iloc[0]
     assert risk_parity_row["avg_gross_exposure"] == 0.0
     assert risk_parity_row["avg_cash_weight"] == 1.0
+    assert not (run_dir / "covariance_diagnostics.csv").exists()
 
 
 def test_backtest_supports_black_litterman_optimized_baseline(tmp_path: Path) -> None:
@@ -319,9 +327,12 @@ def test_backtest_supports_black_litterman_optimized_baseline(tmp_path: Path) ->
         "tau",
     }
     assert assumptions["tau"].eq(0.05).all()
+    assert (run_dir / "covariance_diagnostics.csv").exists()
     assert "Black-Litterman Assumptions" in report_text
+    assert "Covariance Diagnostics" in report_text
     assert "growth_over_defensive" in report_text
     assert "black_litterman_assumptions.csv" in report_text
+    assert "covariance_diagnostics.csv" in report_text
 
 
 def test_backtest_black_litterman_cash_fallback_skips_assumptions_artifact(tmp_path: Path) -> None:
@@ -351,7 +362,9 @@ def test_backtest_black_litterman_cash_fallback_skips_assumptions_artifact(tmp_p
     assert black_litterman_row["avg_gross_exposure"] == 0.0
     assert black_litterman_row["avg_cash_weight"] == 1.0
     assert not (run_dir / "black_litterman_assumptions.csv").exists()
+    assert not (run_dir / "covariance_diagnostics.csv").exists()
     assert "Black-Litterman Assumptions" not in report_text
+    assert "Covariance Diagnostics" not in report_text
 
 
 def test_run_experiment_supports_black_litterman_optimized_baseline(tmp_path: Path) -> None:
@@ -382,6 +395,17 @@ def test_run_experiment_supports_black_litterman_optimized_baseline(tmp_path: Pa
     assert assumptions["effective_date"].min() >= performance["date"].min()
     assert assumptions["effective_date"].max() <= performance["date"].max()
     assert set(assumptions["effective_date"]) <= set(performance["date"])
+    covariance = pd.read_csv(
+        run_dir / "covariance_diagnostics.csv",
+        parse_dates=["signal_date", "effective_date"],
+    )
+    assert not covariance.empty
+    assert set(covariance["strategy"]) == {"black_litterman"}
+    assert covariance["effective_date"].min() >= performance["date"].min()
+    assert covariance["effective_date"].max() <= performance["date"].max()
+    assert set(covariance["effective_date"]) <= set(performance["date"])
     assert "Black-Litterman Assumptions" in report_text
+    assert "Covariance Diagnostics" in report_text
     assert "core_over_tail" in report_text
     assert "black_litterman_assumptions.csv" in report_text
+    assert "covariance_diagnostics.csv" in report_text

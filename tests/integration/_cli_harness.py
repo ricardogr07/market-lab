@@ -44,6 +44,12 @@ from marketlab.reports.analytics import (
 from marketlab.reports.analytics import (
     TURNOVER_COSTS_COLUMNS as _TURNOVER_COSTS_COLUMNS,
 )
+from marketlab.reports.risk_diagnostics import (
+    COVARIANCE_DIAGNOSTICS_COLUMNS as _COVARIANCE_DIAGNOSTICS_COLUMNS,
+)
+from marketlab.reports.risk_diagnostics import (
+    FACTOR_DIAGNOSTICS_COLUMNS as _FACTOR_DIAGNOSTICS_COLUMNS,
+)
 from marketlab.reports.summary import (
     FOLD_SUMMARY_COLUMNS as _FOLD_SUMMARY_COLUMNS,
 )
@@ -69,6 +75,8 @@ GROUP_EXPOSURE_COLUMNS = list(_GROUP_EXPOSURE_COLUMNS)
 MONTHLY_RETURNS_COLUMNS = list(_MONTHLY_RETURNS_COLUMNS)
 STRATEGY_SUMMARY_COLUMNS = list(_STRATEGY_SUMMARY_COLUMNS)
 TURNOVER_COSTS_COLUMNS = list(_TURNOVER_COSTS_COLUMNS)
+FACTOR_DIAGNOSTICS_COLUMNS = list(_FACTOR_DIAGNOSTICS_COLUMNS)
+COVARIANCE_DIAGNOSTICS_COLUMNS = list(_COVARIANCE_DIAGNOSTICS_COLUMNS)
 FOLD_DIAGNOSTICS_COLUMNS = [
     "candidate_id",
     "fold_id",
@@ -187,6 +195,12 @@ def write_raw_symbol_cache(
 def write_yaml_config(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def write_factor_model_csv(path: Path, frame: pd.DataFrame) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, date_format="%Y-%m-%d")
     return path
 
 

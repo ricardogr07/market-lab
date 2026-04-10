@@ -16,6 +16,7 @@ from marketlab.strategies.optimized import (
     estimate_covariance_matrix,
     estimate_expected_returns,
     generate_cash_only_weights,
+    generate_covariance_diagnostic_windows,
     generate_weights,
     is_executable_method,
     load_external_covariance,
@@ -643,6 +644,30 @@ def test_generate_cash_only_weights_supports_black_litterman_fallback() -> None:
     assert list(weights["effective_date"]) == [pd.Timestamp("2024-01-08"), pd.Timestamp("2024-01-08")]
     assert list(weights["symbol"]) == ["AAA", "BBB"]
     assert list(weights["weight"]) == [0.0, 0.0]
+
+
+def test_generate_covariance_diagnostic_windows_use_regularized_optimizer_covariance() -> None:
+    windows = generate_covariance_diagnostic_windows(
+        _build_panel(),
+        symbols=["AAA", "BBB"],
+        method="risk_parity",
+        lookback_days=3,
+        frequency="W-FRI",
+    )
+
+    assert windows
+    first_window = windows[0]
+    assert first_window.strategy == "risk_parity"
+    assert first_window.signal_date == pd.Timestamp("2024-01-05")
+    assert first_window.effective_date == pd.Timestamp("2024-01-08")
+    assert list(first_window.covariance.index) == ["AAA", "BBB"]
+    assert list(first_window.covariance.columns) == ["AAA", "BBB"]
+    assert np.isfinite(first_window.covariance.to_numpy(dtype=float)).all()
+    assert np.allclose(
+        first_window.covariance.to_numpy(dtype=float),
+        first_window.covariance.to_numpy(dtype=float).T,
+    )
+    assert (np.diag(first_window.covariance.to_numpy(dtype=float)) > 0.0).all()
 
 
 def test_generate_weights_rejects_external_expected_return_inputs_for_black_litterman(

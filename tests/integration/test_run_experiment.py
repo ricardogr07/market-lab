@@ -20,10 +20,13 @@ STRATEGY_SUMMARY_COLUMNS = _cli_harness.STRATEGY_SUMMARY_COLUMNS
 MONTHLY_RETURNS_COLUMNS = _cli_harness.MONTHLY_RETURNS_COLUMNS
 TURNOVER_COSTS_COLUMNS = _cli_harness.TURNOVER_COSTS_COLUMNS
 COST_SENSITIVITY_COLUMNS = _cli_harness.COST_SENSITIVITY_COLUMNS
+FACTOR_DIAGNOSTICS_COLUMNS = _cli_harness.FACTOR_DIAGNOSTICS_COLUMNS
+COVARIANCE_DIAGNOSTICS_COLUMNS = _cli_harness.COVARIANCE_DIAGNOSTICS_COLUMNS
 assert_command_ok = _cli_harness.assert_command_ok
 build_synthetic_panel = _cli_harness.build_synthetic_panel
 latest_run_dir = _cli_harness.latest_run_dir
 load_fixture_panel = _cli_harness.load_fixture_panel
+write_factor_model_csv = _cli_harness.write_factor_model_csv
 write_yaml_config = _cli_harness.write_yaml_config
 run_marketlab_cli = getattr(
     _cli_harness,
@@ -53,6 +56,21 @@ DEFAULT_MODEL_NAMES = {
     "logistic_regression",
     "random_forest",
 }
+
+
+def _write_factor_model(
+    tmp_path: Path,
+    dates: pd.Series | pd.Index | list[pd.Timestamp],
+) -> Path:
+    ordered_dates = pd.Index(pd.to_datetime(dates)).drop_duplicates().sort_values()
+    frame = pd.DataFrame(
+        {
+            "date": ordered_dates,
+            "MKT": [0.001 + (0.0002 * index) for index in range(len(ordered_dates))],
+            "VALUE": [0.0005 * ((-1) ** index) for index in range(len(ordered_dates))],
+        }
+    )
+    return write_factor_model_csv(tmp_path / "inputs" / "factor_returns.csv", frame)
 
 
 def _write_run_experiment_config(
@@ -432,6 +450,8 @@ def test_backtest_remains_baseline_only(tmp_path: Path) -> None:
     assert not (run_dir / "calibration_curves.png").exists()
     assert not (run_dir / "score_histograms.png").exists()
     assert not (run_dir / "threshold_sweeps.png").exists()
+    assert not (run_dir / "factor_diagnostics.csv").exists()
+    assert not (run_dir / "covariance_diagnostics.csv").exists()
 
 
 def test_backtest_supports_config_defined_allocation_baseline(tmp_path: Path) -> None:
@@ -468,6 +488,50 @@ def test_backtest_supports_config_defined_allocation_baseline(tmp_path: Path) ->
     assert "allocation_equal" in report_text
 
 
+def test_backtest_supports_factor_and_covariance_diagnostics_for_optimized_baseline(
+    tmp_path: Path,
+) -> None:
+    factor_model_path = _write_factor_model(
+        tmp_path,
+        pd.bdate_range("2024-01-01", "2024-01-31"),
+    )
+    config_path = _write_backtest_config(
+        tmp_path,
+        optimized={
+            "enabled": True,
+            "method": "mean_variance",
+            "lookback_days": 3,
+            "target_gross_exposure": 0.7,
+            "risk_aversion": 1.0,
+        },
+        evaluation={"factor_model_path": str(factor_model_path)},
+    )
+
+    result = run_marketlab_cli("backtest", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_backtest_fixture"
+    run_dir = latest_run_dir(run_root)
+    factor_diagnostics = pd.read_csv(
+        run_dir / "factor_diagnostics.csv",
+        parse_dates=["start_date", "end_date"],
+    )
+    covariance_diagnostics = pd.read_csv(
+        run_dir / "covariance_diagnostics.csv",
+        parse_dates=["signal_date", "effective_date"],
+    )
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert list(factor_diagnostics.columns) == FACTOR_DIAGNOSTICS_COLUMNS
+    assert list(covariance_diagnostics.columns) == COVARIANCE_DIAGNOSTICS_COLUMNS
+    assert set(factor_diagnostics["strategy"]) == {"buy_hold", "sma", "mean_variance"}
+    assert set(covariance_diagnostics["strategy"]) == {"mean_variance"}
+    assert "## Factor Attribution Diagnostics" in report_text
+    assert "## Covariance Diagnostics" in report_text
+    assert "factor_diagnostics.csv" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+
+
 
 def test_run_experiment_supports_mean_variance_baseline(tmp_path: Path) -> None:
     config_path = _write_run_experiment_config(
@@ -501,6 +565,10 @@ def test_run_experiment_supports_mean_variance_baseline(tmp_path: Path) -> None:
     ].iloc[0]
     assert mean_variance_row["avg_gross_exposure"] <= 0.7 + 1e-6
     assert "mean_variance" in report_text
+    assert "Covariance Diagnostics" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+    assert (run_dir / "covariance_diagnostics.csv").exists()
+    assert not (run_dir / "factor_diagnostics.csv").exists()
 
 
 def test_run_experiment_supports_risk_parity_baseline(tmp_path: Path) -> None:
@@ -534,6 +602,60 @@ def test_run_experiment_supports_risk_parity_baseline(tmp_path: Path) -> None:
     ].iloc[0]
     assert risk_parity_row["avg_gross_exposure"] <= 0.71
     assert "risk_parity" in report_text
+    assert "Covariance Diagnostics" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+    assert (run_dir / "covariance_diagnostics.csv").exists()
+    assert not (run_dir / "factor_diagnostics.csv").exists()
+
+
+def test_run_experiment_adds_factor_diagnostics_for_all_strategies_and_covariance_for_optimized_only(
+    tmp_path: Path,
+) -> None:
+    factor_model_path = _write_factor_model(
+        tmp_path,
+        pd.bdate_range("2020-01-01", "2024-12-31"),
+    )
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        optimized={
+            "enabled": True,
+            "method": "mean_variance",
+            "lookback_days": 5,
+            "target_gross_exposure": 0.7,
+            "risk_aversion": 1.0,
+        },
+        evaluation={"factor_model_path": str(factor_model_path)},
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    performance = pd.read_csv(run_dir / "performance.csv", parse_dates=["date"])
+    factor_diagnostics = pd.read_csv(
+        run_dir / "factor_diagnostics.csv",
+        parse_dates=["start_date", "end_date"],
+    )
+    covariance_diagnostics = pd.read_csv(
+        run_dir / "covariance_diagnostics.csv",
+        parse_dates=["signal_date", "effective_date"],
+    )
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    expected_strategies = {"buy_hold", "sma", "mean_variance", "ml_logistic_regression"}
+    assert list(factor_diagnostics.columns) == FACTOR_DIAGNOSTICS_COLUMNS
+    assert list(covariance_diagnostics.columns) == COVARIANCE_DIAGNOSTICS_COLUMNS
+    assert set(factor_diagnostics["strategy"]) == expected_strategies
+    assert set(covariance_diagnostics["strategy"]) == {"mean_variance"}
+    assert covariance_diagnostics["effective_date"].min() >= performance["date"].min()
+    assert covariance_diagnostics["effective_date"].max() <= performance["date"].max()
+    assert set(covariance_diagnostics["effective_date"]) <= set(performance["date"])
+    assert "## Factor Attribution Diagnostics" in report_text
+    assert "## Covariance Diagnostics" in report_text
+    assert "factor_diagnostics.csv" in report_text
+    assert "covariance_diagnostics.csv" in report_text
 
 
 def test_run_experiment_supports_group_weight_allocation_baseline(tmp_path: Path) -> None:

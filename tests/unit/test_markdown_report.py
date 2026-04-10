@@ -101,6 +101,43 @@ def _cost_sensitivity() -> pd.DataFrame:
     )
 
 
+def _factor_diagnostics() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": ["alpha", "alpha", "beta"],
+            "start_date": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-02"]),
+            "end_date": pd.to_datetime(["2024-01-03", "2024-01-03", "2024-01-03"]),
+            "observations": [2, 2, 2],
+            "factor": ["MKT", "SMB", "MKT"],
+            "beta_like_exposure": [1.2, -0.3, 0.8],
+            "mean_factor_return": [0.01, -0.005, 0.01],
+            "mean_factor_contribution": [0.012, 0.0015, 0.008],
+            "alpha_like_intercept": [0.001, 0.001, 0.002],
+            "mean_strategy_return": [0.0135, 0.0135, 0.01],
+            "modeled_mean_return": [0.0145, 0.0145, 0.01],
+            "r_squared": [0.95, 0.95, 0.90],
+        }
+    )
+
+
+def _covariance_diagnostics() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "strategy": ["mean_variance"] * 8,
+            "signal_date": pd.to_datetime(
+                ["2024-01-05"] * 4 + ["2024-01-12"] * 4
+            ),
+            "effective_date": pd.to_datetime(
+                ["2024-01-08"] * 4 + ["2024-01-15"] * 4
+            ),
+            "row_symbol": ["AAA", "AAA", "BBB", "BBB"] * 2,
+            "column_symbol": ["AAA", "BBB", "AAA", "BBB"] * 2,
+            "covariance": [0.04, 0.01, 0.01, 0.09, 0.01, 0.002, 0.002, 0.04],
+            "correlation": [1.0, 0.166667, 0.166667, 1.0, 1.0, 0.1, 0.1, 1.0],
+        }
+    )
+
+
 def test_write_markdown_report_turnover_section_uses_turnover_costs_input(tmp_path: Path) -> None:
     config = ExperimentConfig(experiment_name="markdown_fixture")
     turnover_costs = pd.DataFrame(
@@ -340,3 +377,34 @@ def test_write_markdown_report_adds_benchmark_relative_summary_section(
     )
     assert "benchmark_relative.csv" in report_text
     assert "active risk" in report_text
+
+
+def test_write_markdown_report_adds_factor_and_covariance_sections(tmp_path: Path) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+    factor_path = tmp_path / "factor_diagnostics.csv"
+    covariance_path = tmp_path / "covariance_diagnostics.csv"
+    factor_path.write_text("placeholder", encoding="utf-8")
+    covariance_path.write_text("placeholder", encoding="utf-8")
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / "report.md",
+        factor_diagnostics=_factor_diagnostics(),
+        factor_diagnostics_path=factor_path,
+        covariance_diagnostics=_covariance_diagnostics(),
+        covariance_diagnostics_path=covariance_path,
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+
+    assert "## Factor Attribution Diagnostics" in report_text
+    assert "| strategy | start_date | end_date | observations | alpha_like_intercept | total_mean_factor_contribution | mean_strategy_return | modeled_mean_return | r_squared |" in report_text
+    assert "| strategy | factor | beta_like_exposure | mean_factor_return | mean_factor_contribution | alpha_like_intercept | mean_strategy_return | modeled_mean_return | r_squared |" in report_text
+    assert "factor_diagnostics.csv" in report_text
+    assert "These diagnostics do not feed optimizer weights" in report_text
+    assert "## Covariance Diagnostics" in report_text
+    assert "| strategy | rebalance_windows | avg_variance | avg_pairwise_correlation | max_pairwise_correlation | min_eigenvalue | worst_condition_number |" in report_text
+    assert "covariance_diagnostics.csv" in report_text
+    assert "regularized matrix used by the optimizer" in report_text
