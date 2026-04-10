@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input and covariance scaffolding for later optimized baselines, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input scaffolding, additive factor-attribution and covariance diagnostics, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -19,7 +19,7 @@ This document ties the current pieces together and records the working rules tha
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
-  - `buy_hold`, `sma`, config-defined allocation baselines, the executable `mean_variance` and `risk_parity` optimized baselines, and optimizer input scaffolding for later optimized baselines
+  - `buy_hold`, `sma`, config-defined allocation baselines, the executable `mean_variance`, `risk_parity`, and `black_litterman` optimized baselines, plus additive factor and covariance diagnostics for review
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
@@ -76,9 +76,9 @@ flowchart TD
     Launcher --> Experiment[run-experiment]
 
     Prepare --> Panel[prepared panel cache]
-    Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots black_litterman_assumptions.csv when applicable]
+    Backtest --> BaselineArtifacts[metrics.csv performance.csv analytics report.md plots factor_diagnostics.csv covariance_diagnostics.csv black_litterman_assumptions.csv when applicable]
     Train --> TrainingArtifacts[folds.csv fold_diagnostics.csv ranking_diagnostics.csv calibration_diagnostics.csv score_histograms.csv threshold_diagnostics.csv manifest metrics predictions summaries plots models/]
-    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md strategy plots calibration plots diagnostics summaries optional models/black_litterman_assumptions.csv when applicable]
+    Experiment --> ExperimentArtifacts[metrics.csv performance.csv analytics report.md strategy plots calibration plots diagnostics summaries optional factor_diagnostics.csv covariance_diagnostics.csv black_litterman_assumptions.csv models/ when applicable]
 ```
 
 ## Automation Split
@@ -128,6 +128,8 @@ The required CI path stays offline and deterministic through tox. The Docker run
 - Black-Litterman views are signed basket weights over configured symbols; MarketLab uses them as written and does not renormalize them.
 - Black-Litterman posterior uncertainty defaults to the diagonal `Omega = diag(P * tau * Sigma * P^T)` rule.
 - Successful Black-Litterman runs persist `black_litterman_assumptions.csv` and reference it from `report.md`.
+- Optimized runs with real solver windows persist `covariance_diagnostics.csv` and reference it from `report.md`.
+- `evaluation.factor_model_path` enables local factor attribution over the final persisted strategy returns and writes `factor_diagnostics.csv`.
 - Trailing return windows are built from adjusted close data only, and the latest included return must end on the `signal_date`.
 - Optimized weights are applied on the next market open after the `signal_date`, and no allocation is emitted before the first full optimizer lookback window exists.
 - `target_gross_exposure` is a long-only invested-fraction request; any undeployed exposure remains cash in the backtest engine.
@@ -138,6 +140,8 @@ The required CI path stays offline and deterministic through tox. The Docker run
 - Binding position or group caps turn `risk_parity` into the best feasible approximation to equal risk contributions rather than exact parity.
 - External covariance inputs must be square daily-return covariance matrices keyed by the configured symbols.
 - External expected-return inputs must contain exactly `symbol,expected_return` in daily decimal units.
+- Factor-model inputs must be local wide daily return CSVs with a required `date` column plus one or more numeric factor columns.
+- Factor attribution is descriptive only; it must not feed optimizer weights, model selection, or scenario selection.
 
 ## System Map
 
@@ -163,6 +167,7 @@ flowchart TD
     Predictions --> Ranking[src/marketlab/strategies/ranking.py]
     Pipeline --> Summary[src/marketlab/reports/summary.py]
     Pipeline --> Analytics[src/marketlab/reports/analytics.py]
+    Pipeline --> RiskDiagnostics[src/marketlab/reports/risk_diagnostics.py]
     Pipeline --> BuyHold[src/marketlab/strategies/buy_hold.py]
     Pipeline --> Allocation[src/marketlab/strategies/allocation.py]
     Pipeline --> SMA[src/marketlab/strategies/sma.py]
@@ -179,6 +184,8 @@ flowchart TD
     Analytics --> CostSensitivityCsv[cost_sensitivity.csv]
     Analytics --> MonthlyReturnsCsv[monthly_returns.csv]
     Analytics --> TurnoverCostsCsv[turnover_costs.csv]
+    RiskDiagnostics --> FactorDiagnosticsCsv[factor_diagnostics.csv]
+    RiskDiagnostics --> CovarianceDiagnosticsCsv[covariance_diagnostics.csv]
     Pipeline --> Markdown[src/marketlab/reports/markdown.py]
     Pipeline --> Plots[src/marketlab/reports/plots.py]
 
@@ -738,6 +745,7 @@ Best practice:
 - Provides expected-return helpers for `historical_mean` and `external_csv` inputs.
 - Reorders and validates external covariance and expected-return files against `data.symbols`.
 - Provides the solver plumbing reused by the executable long-only optimized baselines, including the Black-Litterman posterior-return and assumptions builders.
+- Exposes the regularized covariance windows used by the solver so reporting can persist reviewable covariance diagnostics.
 
 Best practice:
 - Keep adjusted-close return windows and optimizer timing leakage-safe: signal on the close, execute on the next open.
@@ -803,11 +811,21 @@ Best practice:
 - Keep analytics builders pure and schema-stable.
 - Derive analytics from the existing `PerformanceFrame`, not from alternate portfolio state.
 
+### `src/marketlab/reports/risk_diagnostics.py`
+
+- Loads local factor-model CSV inputs and builds additive factor-attribution tables from realized strategy `net_return`.
+- Shapes optimizer covariance windows into detailed `covariance_diagnostics.csv` rows and compact strategy-level covariance summaries.
+- Keeps factor attribution and covariance review separate from portfolio construction, backtest execution, and model selection.
+
+Best practice:
+- Treat factor and covariance diagnostics as descriptive review layers, not optimizer inputs.
+- Keep factor CSV validation strict and keep covariance summaries derived from the same persisted long-form artifact.
+
 ### `src/marketlab/reports/markdown.py`
 
 - Produces a compact Markdown report for each run.
 - Derives the strategy list from the actual `PerformanceFrame`.
-- Adds strategy summary, monthly net return, turnover-and-cost, and cost-sensitivity sections when those analytics are available.
+- Adds strategy summary, factor attribution, covariance diagnostics, monthly net return, turnover-and-cost, and cost-sensitivity sections when those analytics are available.
 - Switches scope text when ML strategies are present.
 - Reports the best model by mean ROC AUC, mean top-bucket return, and mean top-bottom spread when those model-summary fields are available.
 - Adds a compact calibration-and-threshold section when calibration summaries or threshold diagnostics are available, including relative links to the diagnostic plots.

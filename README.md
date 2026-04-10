@@ -214,7 +214,7 @@ Allocation semantics:
 - `allocation_symbol_weights` rebalances back to exact configured symbol weights.
 - `allocation_group_weights` rebalances back to configured group sleeves and splits each sleeve equally across the symbols in that group.
 
-This first Phase 5 step stays narrow: allocation baselines are long-only, fully invested target-weight portfolios. Optimizer methods, factor diagnostics, and broader scenario comparisons remain later work.
+This first Phase 5 step stays narrow: allocation baselines are long-only, fully invested target-weight portfolios. Broader scenario comparisons remain later work.
 
 ## Optimized Baselines
 
@@ -242,6 +242,7 @@ Current Phase 5 behavior is intentionally narrow:
 - `mean_variance`, `risk_parity`, and `black_litterman` are executable optimized methods
 - `black_litterman` uses signed basket views as written, does not renormalize them, and defaults to the diagonal `Omega = diag(P * tau * Sigma * P^T)` uncertainty rule
 - successful Black-Litterman runs write `black_litterman_assumptions.csv` alongside the other run artifacts and reference it from `report.md`
+- optimized runs with real solver windows write `covariance_diagnostics.csv` and add a `Covariance Diagnostics` section to `report.md`
 - the optimizer uses trailing daily adjusted-close returns ending on the `signal_date` and applies the weights on the next market open
 - no allocation is emitted before the first rebalance window with a full optimizer lookback
 - `target_gross_exposure < 1.0` leaves the undeployed exposure in cash
@@ -255,8 +256,30 @@ External input rules:
 
 - covariance CSVs must be square daily-return covariance matrices keyed by the configured symbols
 - expected-return CSVs must contain exactly `symbol,expected_return`, where `expected_return` is a daily decimal return
+- factor CSVs must be local wide daily return files with a required `date` column plus one or more numeric factor columns
 - Black-Litterman views are signed basket weights over configured symbols; the loader rejects unknown symbols, empty views, and all-zero coefficients
 - both loaders reorder to `data.symbols` and reject missing, extra, or non-numeric values
+
+## Factor And Covariance Diagnostics
+
+`backtest` and `run-experiment` now also support optional factor attribution and additive covariance diagnostics under `evaluation`.
+
+Add to `evaluation`:
+
+- `factor_model_path`
+
+Diagnostics behavior:
+
+- when `evaluation.factor_model_path` is configured, MarketLab loads a local wide daily factor-return CSV, aligns it to the final persisted `PerformanceFrame`, and writes `factor_diagnostics.csv`
+- factor attribution runs on realized `net_return` for every strategy in the persisted run, including ML strategies in `run-experiment`
+- `report.md` adds a `Factor Attribution Diagnostics` section with a strategy-level summary, a full factor exposure table, and a link to `factor_diagnostics.csv`
+- covariance diagnostics reflect the regularized matrix actually used by the optimizer, not the pre-regularization estimate
+- covariance diagnostics remain optimized-baseline-only; `buy_hold`, `sma`, allocation baselines, and ML strategies do not emit covariance artifacts
+
+Interpretation rules:
+
+- factor attribution is descriptive only; it does not feed optimizer weights, model ranking, or scenario selection
+- covariance and factor diagnostics are review layers for the current run, not new strategy inputs
 
 ## Single-Symbol VOO Timing Example
 
