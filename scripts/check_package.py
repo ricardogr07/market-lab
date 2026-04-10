@@ -13,8 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / 'dist'
 SCRATCH_DIR = ROOT / '.package-smoke'
 EXPECTED_TEMPLATES = (
-    'weekly_rank.yaml',
-    'weekly_rank_smoke.yaml',
+    ('weekly_rank', 'weekly_rank.yaml'),
+    ('weekly_rank_smoke', 'weekly_rank_smoke.yaml'),
+    ('phase5_allocation_equal', 'phase5_allocation_equal.yaml'),
+    ('phase5_allocation_group', 'phase5_allocation_group.yaml'),
+    ('phase5_ranking_default', 'phase5_ranking_default.yaml'),
+    ('phase5_ranking_capped', 'phase5_ranking_capped.yaml'),
+    ('phase5_mean_variance', 'phase5_mean_variance.yaml'),
+    ('phase5_risk_parity', 'phase5_risk_parity.yaml'),
+    ('phase5_black_litterman', 'phase5_black_litterman.yaml'),
 )
 
 
@@ -62,7 +69,7 @@ def _assert_wheel_contents(wheel_path: Path) -> None:
     if not any(name.endswith('dist-info/licenses/LICENSE') for name in names):
         raise RuntimeError('Wheel is missing LICENSE')
 
-    for template_name in EXPECTED_TEMPLATES:
+    for _, template_name in EXPECTED_TEMPLATES:
         template_path = f'marketlab/resources/config_templates/{template_name}'
         if template_path not in names:
             raise RuntimeError(f'Wheel is missing packaged template {template_path}')
@@ -75,7 +82,7 @@ def _assert_sdist_contents(sdist_path: Path) -> None:
     if not any(name.endswith('/LICENSE') for name in names):
         raise RuntimeError('sdist is missing LICENSE')
 
-    for template_name in EXPECTED_TEMPLATES:
+    for _, template_name in EXPECTED_TEMPLATES:
         suffix = f'/src/marketlab/resources/config_templates/{template_name}'
         if not any(name.endswith(suffix) for name in names):
             raise RuntimeError(f'sdist is missing packaged template {template_name}')
@@ -116,7 +123,7 @@ def _assert_installed_cli(wheel_path: Path, temp_dir: Path, env: dict[str, str])
 
     templates_run = _run([str(marketlab_path), 'list-configs'], env=env)
     template_lines = templates_run.stdout.strip().splitlines()
-    if template_lines != ['weekly_rank', 'weekly_rank_smoke']:
+    if template_lines != [name for name, _ in EXPECTED_TEMPLATES]:
         raise RuntimeError(f'Installed CLI list-configs output was {template_lines}')
 
     output_path = temp_dir / 'weekly_rank.yaml'
@@ -135,6 +142,25 @@ def _assert_installed_cli(wheel_path: Path, temp_dir: Path, env: dict[str, str])
         raise RuntimeError('Installed CLI write-config did not print the resolved output path')
     if 'experiment_name: weekly_rank_v1' not in output_path.read_text(encoding='utf-8'):
         raise RuntimeError('Installed CLI write-config did not write the expected template')
+
+    scenario_output_path = temp_dir / 'phase5_black_litterman.yaml'
+    scenario_write_run = _run(
+        [
+            str(marketlab_path),
+            'write-config',
+            '--name',
+            'phase5_black_litterman',
+            '--output',
+            str(scenario_output_path),
+        ],
+        env=env,
+    )
+    if scenario_output_path.resolve() != Path(scenario_write_run.stdout.strip()):
+        raise RuntimeError('Installed CLI phase5 write-config did not print the resolved output path')
+    if 'experiment_name: phase5_black_litterman' not in scenario_output_path.read_text(
+        encoding='utf-8'
+    ):
+        raise RuntimeError('Installed CLI phase5 write-config did not write the expected template')
 
 
 def main() -> int:

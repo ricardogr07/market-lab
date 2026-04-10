@@ -1,0 +1,76 @@
+experiment_name: phase5_allocation_equal
+
+data:
+  symbols: [VOO, QQQ, SMH, XLV, IEMG]
+  start_date: "2018-01-01"
+  end_date: "2025-12-31"
+  interval: "1d"
+  cache_dir: "artifacts/data"
+  prepared_panel_filename: "panel.csv"
+  symbol_groups:
+    VOO: broad_market
+    QQQ: growth
+    SMH: growth
+    XLV: defensive
+    IEMG: broad_market
+
+features:
+  return_windows: [5, 10, 20, 40]
+  ma_windows: [10, 20, 50]
+  vol_windows: [10, 20]
+  momentum_window: 20
+
+target:
+  horizon_days: 5
+  type: "direction"
+
+portfolio:
+  ranking:
+    long_n: 2
+    short_n: 2
+    rebalance_frequency: "W-FRI"
+    weighting: "equal"
+    mode: "long_short"
+    min_score_threshold: 0.0
+    cash_when_underfilled: false
+  costs:
+    bps_per_trade: 10
+
+baselines:
+  buy_hold: true
+  sma:
+    enabled: true
+    fast_window: 20
+    slow_window: 50
+  allocation:
+    enabled: true
+    mode: "equal"
+
+models:
+  - name: logistic_regression
+  - name: logistic_l1
+  - name: random_forest
+  - name: extra_trees
+  - name: gradient_boosting
+  - name: hist_gradient_boosting
+
+evaluation:
+  walk_forward:
+    train_years: 3
+    test_months: 3
+    step_months: 3
+    min_train_rows: 100
+    min_test_rows: 20
+    min_train_positive_rate: 0.05
+    min_test_positive_rate: 0.05
+    embargo_periods: 1
+  benchmark_strategy: "buy_hold"
+  cost_sensitivity_bps: [5.0, 25.0]
+  factor_model_path: ""
+
+artifacts:
+  output_dir: "artifacts/runs"
+  save_predictions: true
+  save_metrics_csv: true
+  save_report_md: true
+  save_plots: true
