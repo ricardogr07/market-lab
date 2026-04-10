@@ -42,18 +42,39 @@ def test_list_configs_prints_packaged_templates(capsys: pytest.CaptureFixture[st
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out.splitlines() == ["weekly_rank", "weekly_rank_smoke"]
+    assert captured.out.splitlines() == [
+        "weekly_rank",
+        "weekly_rank_smoke",
+        "phase5_allocation_equal",
+        "phase5_allocation_group",
+        "phase5_ranking_default",
+        "phase5_ranking_capped",
+        "phase5_mean_variance",
+        "phase5_risk_parity",
+        "phase5_black_litterman",
+    ]
 
 
-def test_write_config_copies_the_selected_template(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("template_name", "output_name"),
+    [
+        ("weekly_rank", "weekly_rank.yaml"),
+        ("phase5_black_litterman", "phase5_black_litterman.yaml"),
+    ],
+)
+def test_write_config_copies_the_selected_template(
+    capsys: pytest.CaptureFixture[str],
+    template_name: str,
+    output_name: str,
+) -> None:
     with repo_scratch_dir("write_config") as root:
-        output_path = root / "nested" / "weekly_rank.yaml"
+        output_path = root / "nested" / output_name
 
         exit_code = cli.main(
             [
                 "write-config",
                 "--name",
-                "weekly_rank",
+                template_name,
                 "--output",
                 str(output_path),
             ]
@@ -64,7 +85,7 @@ def test_write_config_copies_the_selected_template(capsys: pytest.CaptureFixture
         assert exit_code == 0
         assert expected_path.exists()
         assert expected_path.read_text(encoding="utf-8") == get_config_template_text(
-            "weekly_rank"
+            template_name
         )
         assert captured.out.strip() == str(expected_path)
 

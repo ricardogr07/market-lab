@@ -31,7 +31,17 @@ def test_public_package_version_matches_version_helper() -> None:
 
 
 def test_template_registry_exposes_expected_names() -> None:
-    assert CONFIG_TEMPLATE_NAMES == ('weekly_rank', 'weekly_rank_smoke')
+    assert CONFIG_TEMPLATE_NAMES == (
+        'weekly_rank',
+        'weekly_rank_smoke',
+        'phase5_allocation_equal',
+        'phase5_allocation_group',
+        'phase5_ranking_default',
+        'phase5_ranking_capped',
+        'phase5_mean_variance',
+        'phase5_risk_parity',
+        'phase5_black_litterman',
+    )
     assert iter_config_template_names() == CONFIG_TEMPLATE_NAMES
 
 
@@ -40,6 +50,13 @@ def test_template_registry_exposes_expected_names() -> None:
     [
         ('weekly_rank', Path('configs/experiment.weekly_rank.yaml')),
         ('weekly_rank_smoke', Path('configs/experiment.weekly_rank.smoke.yaml')),
+        ('phase5_allocation_equal', Path('configs/experiment.phase5.allocation_equal.yaml')),
+        ('phase5_allocation_group', Path('configs/experiment.phase5.allocation_group.yaml')),
+        ('phase5_ranking_default', Path('configs/experiment.phase5.ranking_default.yaml')),
+        ('phase5_ranking_capped', Path('configs/experiment.phase5.ranking_capped.yaml')),
+        ('phase5_mean_variance', Path('configs/experiment.phase5.mean_variance.yaml')),
+        ('phase5_risk_parity', Path('configs/experiment.phase5.risk_parity.yaml')),
+        ('phase5_black_litterman', Path('configs/experiment.phase5.black_litterman.yaml')),
     ],
 )
 def test_packaged_templates_match_repo_config_sources(
@@ -61,3 +78,20 @@ def test_write_config_template_resolves_relative_output_paths(
 
     assert written_path == (tmp_path / 'nested' / 'template.yaml').resolve()
     assert written_path.read_text(encoding='utf-8').startswith('experiment_name: weekly_rank_v1')
+
+
+def test_write_config_template_supports_phase5_templates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    written_path = write_config_template(
+        'phase5_black_litterman',
+        Path('nested') / 'phase5_black_litterman.yaml',
+    )
+
+    assert written_path == (tmp_path / 'nested' / 'phase5_black_litterman.yaml').resolve()
+    assert written_path.read_text(encoding='utf-8').startswith(
+        'experiment_name: phase5_black_litterman'
+    )
