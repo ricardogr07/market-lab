@@ -70,6 +70,15 @@ class BlackLittermanOutput:
     assumptions: pd.DataFrame
 
 
+@dataclass(slots=True)
+class CovarianceDiagnosticWindow:
+    strategy: str
+    signal_date: pd.Timestamp
+    effective_date: pd.Timestamp
+    symbols: list[str]
+    covariance: pd.DataFrame
+
+
 def _empty_weights_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=WEIGHTS_COLUMNS)
 
@@ -1303,3 +1312,53 @@ def generate_weights(
     return pd.concat(weight_frames, ignore_index=True).sort_values(["effective_date", "symbol"]).reset_index(
         drop=True
     )
+
+
+def generate_covariance_diagnostic_windows(
+    panel: pd.DataFrame,
+    *,
+    symbols: list[str],
+    method: str,
+    lookback_days: int,
+    frequency: str = "W-FRI",
+    covariance_estimator: str = "sample",
+    external_covariance_path: Path | str | None = None,
+) -> list[CovarianceDiagnosticWindow]:
+    if method not in EXECUTABLE_METHODS:
+        raise _unsupported_method_error(method)
+    if panel.empty:
+        return []
+
+    optimizer_inputs = build_covariance_inputs(
+        panel,
+        symbols=list(symbols),
+        lookback_days=lookback_days,
+        frequency=frequency,
+        covariance_estimator=covariance_estimator,
+        external_covariance_path=external_covariance_path,
+    )
+    if not optimizer_inputs:
+        return []
+
+    strategy_name = strategy_name_for_method(method)
+    windows: list[CovarianceDiagnosticWindow] = []
+    for optimizer_input in optimizer_inputs:
+        covariance = _regularized_covariance_matrix(
+            optimizer_input,
+            method=method,
+        )
+        windows.append(
+            CovarianceDiagnosticWindow(
+                strategy=strategy_name,
+                signal_date=pd.Timestamp(optimizer_input.signal_date),
+                effective_date=pd.Timestamp(optimizer_input.effective_date),
+                symbols=list(optimizer_input.symbols),
+                covariance=pd.DataFrame(
+                    covariance,
+                    index=optimizer_input.symbols,
+                    columns=optimizer_input.symbols,
+                    dtype=float,
+                ),
+            )
+        )
+    return windows

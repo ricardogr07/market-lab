@@ -6,6 +6,10 @@ from pathlib import Path
 import pandas as pd
 
 from marketlab.config import ExperimentConfig
+from marketlab.reports.risk_diagnostics import (
+    build_covariance_summary,
+    build_factor_summary,
+)
 
 EXPOSURE_SUMMARY_COLUMNS = [
     "strategy",
@@ -39,6 +43,17 @@ COST_SENSITIVITY_SUMMARY_COLUMNS = [
     "annualized_return",
     "max_drawdown",
     "cost_drag",
+]
+FACTOR_DIAGNOSTICS_DISPLAY_COLUMNS = [
+    "strategy",
+    "factor",
+    "beta_like_exposure",
+    "mean_factor_return",
+    "mean_factor_contribution",
+    "alpha_like_intercept",
+    "mean_strategy_return",
+    "modeled_mean_return",
+    "r_squared",
 ]
 
 
@@ -289,6 +304,55 @@ def _benchmark_summary_lines(strategy_summary: pd.DataFrame) -> list[str]:
     return lines
 
 
+def _factor_diagnostics_lines(
+    report_path: Path,
+    factor_diagnostics: pd.DataFrame | None,
+    factor_diagnostics_path: Path | None,
+) -> list[str]:
+    if (
+        factor_diagnostics is None
+        or factor_diagnostics.empty
+        or factor_diagnostics_path is None
+    ):
+        return []
+
+    factor_summary = build_factor_summary(factor_diagnostics)
+    detail_frame = factor_diagnostics.loc[:, FACTOR_DIAGNOSTICS_DISPLAY_COLUMNS]
+    relative_path = os.path.relpath(factor_diagnostics_path, start=report_path.parent)
+    return [
+        _markdown_table(_display_frame(factor_summary)),
+        "",
+        _markdown_table(_display_frame(detail_frame)),
+        "",
+        "- Factor attribution is descriptive and uses realized net returns plus local factor inputs only.",
+        "- These diagnostics do not feed optimizer weights, scenario selection, or model ranking.",
+        f"- Factor diagnostics artifact: [{factor_diagnostics_path.name}]({relative_path})",
+    ]
+
+
+def _covariance_diagnostics_lines(
+    report_path: Path,
+    covariance_diagnostics: pd.DataFrame | None,
+    covariance_diagnostics_path: Path | None,
+) -> list[str]:
+    if (
+        covariance_diagnostics is None
+        or covariance_diagnostics.empty
+        or covariance_diagnostics_path is None
+    ):
+        return []
+
+    covariance_summary = build_covariance_summary(covariance_diagnostics)
+    relative_path = os.path.relpath(covariance_diagnostics_path, start=report_path.parent)
+    return [
+        _markdown_table(_display_frame(covariance_summary)),
+        "",
+        "- Covariance diagnostics reflect the regularized matrix used by the optimizer at each rebalance window.",
+        "- Pairwise correlation summaries exclude the diagonal and aggregate across optimizer windows.",
+        f"- Covariance diagnostics artifact: [{covariance_diagnostics_path.name}]({relative_path})",
+    ]
+
+
 def _black_litterman_view_lines(
     config: ExperimentConfig,
     report_path: Path,
@@ -367,6 +431,10 @@ def write_markdown_report(
     calibration_curves_plot_path: Path | None = None,
     score_histograms_plot_path: Path | None = None,
     threshold_sweeps_plot_path: Path | None = None,
+    factor_diagnostics: pd.DataFrame | None = None,
+    factor_diagnostics_path: Path | None = None,
+    covariance_diagnostics: pd.DataFrame | None = None,
+    covariance_diagnostics_path: Path | None = None,
     black_litterman_assumptions_path: Path | None = None,
 ) -> Path:
     output_path = Path(path)
@@ -410,6 +478,22 @@ def write_markdown_report(
         benchmark_lines = _benchmark_summary_lines(strategy_summary)
         if benchmark_lines:
             content_lines.extend(_section("Benchmark-Relative Summary", benchmark_lines))
+
+    factor_lines = _factor_diagnostics_lines(
+        output_path,
+        factor_diagnostics,
+        factor_diagnostics_path,
+    )
+    if factor_lines:
+        content_lines.extend(_section("Factor Attribution Diagnostics", factor_lines))
+
+    covariance_lines = _covariance_diagnostics_lines(
+        output_path,
+        covariance_diagnostics,
+        covariance_diagnostics_path,
+    )
+    if covariance_lines:
+        content_lines.extend(_section("Covariance Diagnostics", covariance_lines))
 
     black_litterman_lines = _black_litterman_view_lines(
         config,

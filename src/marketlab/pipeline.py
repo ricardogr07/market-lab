@@ -39,10 +39,18 @@ from marketlab.reports.plots import (
     plot_threshold_sweeps,
     plot_turnover,
 )
+from marketlab.reports.risk_diagnostics import (
+    build_covariance_diagnostics,
+    build_factor_diagnostics,
+    load_factor_returns,
+)
 from marketlab.reports.summary import build_fold_summary, build_model_summary
 from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
-from marketlab.strategies.optimized import generate_black_litterman_output
+from marketlab.strategies.optimized import (
+    generate_black_litterman_output,
+    generate_covariance_diagnostic_windows,
+)
 from marketlab.strategies.optimized import (
     generate_cash_only_weights as optimized_cash_only_weights,
 )
@@ -86,6 +94,8 @@ class ExperimentArtifacts:
     threshold_diagnostics_path: Path | None
     fold_summary_path: Path | None
     model_summary_path: Path | None
+    factor_diagnostics_path: Path | None = None
+    covariance_diagnostics_path: Path | None = None
     black_litterman_assumptions_path: Path | None = None
 
 
@@ -151,6 +161,23 @@ def _slice_black_litterman_assumptions(
         return None
     return sliced.reset_index(drop=True)
 
+
+def _slice_covariance_diagnostics(
+    diagnostics: pd.DataFrame | None,
+    oos_dates: pd.Index,
+) -> pd.DataFrame | None:
+    if diagnostics is None:
+        return None
+    if diagnostics.empty:
+        return None
+
+    sliced = diagnostics.loc[
+        pd.to_datetime(diagnostics["effective_date"]).isin(oos_dates)
+    ].copy()
+    if sliced.empty:
+        return None
+    return sliced.reset_index(drop=True)
+
 def prepare_data(config: ExperimentConfig) -> tuple[pd.DataFrame, Path]:
     config.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -198,6 +225,7 @@ def _persist_experiment_outputs(
     score_histograms_path: Path | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics_path: Path | None = None,
+    covariance_diagnostics: pd.DataFrame | None = None,
     black_litterman_assumptions: pd.DataFrame | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
@@ -222,6 +250,12 @@ def _persist_experiment_outputs(
         base_cost_bps=config.portfolio.costs.bps_per_trade,
         sensitivity_bps=config.evaluation.cost_sensitivity_bps,
     )
+    factor_diagnostics: pd.DataFrame | None = None
+    if config.factor_model_path is not None:
+        factor_diagnostics = build_factor_diagnostics(
+            performance,
+            load_factor_returns(config.factor_model_path),
+        )
 
     metrics_path = artifact_run_dir / "metrics.csv"
     performance_path = artifact_run_dir / "performance.csv"
@@ -274,6 +308,24 @@ def _persist_experiment_outputs(
     if threshold_diagnostics is not None and persisted_threshold_diagnostics_path is None:
         persisted_threshold_diagnostics_path = artifact_run_dir / "threshold_diagnostics.csv"
         threshold_diagnostics.to_csv(persisted_threshold_diagnostics_path, index=False)
+
+    factor_diagnostics_path: Path | None = None
+    if factor_diagnostics is not None and not factor_diagnostics.empty:
+        factor_diagnostics_path = artifact_run_dir / "factor_diagnostics.csv"
+        factor_diagnostics.to_csv(
+            factor_diagnostics_path,
+            index=False,
+            date_format="%Y-%m-%d",
+        )
+
+    covariance_diagnostics_path: Path | None = None
+    if covariance_diagnostics is not None and not covariance_diagnostics.empty:
+        covariance_diagnostics_path = artifact_run_dir / "covariance_diagnostics.csv"
+        covariance_diagnostics.to_csv(
+            covariance_diagnostics_path,
+            index=False,
+            date_format="%Y-%m-%d",
+        )
 
     black_litterman_assumptions_path: Path | None = None
     if black_litterman_assumptions is not None:
@@ -347,6 +399,10 @@ def _persist_experiment_outputs(
             calibration_curves_plot_path=calibration_curves_plot_path,
             score_histograms_plot_path=score_histograms_plot_path,
             threshold_sweeps_plot_path=threshold_sweeps_plot_path,
+            factor_diagnostics=factor_diagnostics,
+            factor_diagnostics_path=factor_diagnostics_path,
+            covariance_diagnostics=covariance_diagnostics,
+            covariance_diagnostics_path=covariance_diagnostics_path,
             black_litterman_assumptions_path=black_litterman_assumptions_path,
         )
 
@@ -376,6 +432,8 @@ def _persist_experiment_outputs(
         threshold_diagnostics_path=persisted_threshold_diagnostics_path,
         fold_summary_path=fold_summary_path,
         model_summary_path=model_summary_path,
+        factor_diagnostics_path=factor_diagnostics_path,
+        covariance_diagnostics_path=covariance_diagnostics_path,
         black_litterman_assumptions_path=black_litterman_assumptions_path,
     )
 
@@ -420,7 +478,7 @@ def _run_black_litterman_baseline(
 def run_baselines(
     config: ExperimentConfig,
     panel: pd.DataFrame,
-) -> tuple[BacktestResult, pd.DataFrame | None]:
+) -> tuple[BacktestResult, pd.DataFrame | None, pd.DataFrame | None]:
     featured = add_feature_set(
         panel=panel,
         return_windows=config.features.return_windows,
@@ -459,6 +517,7 @@ def run_baselines(
             )
 
     black_litterman_assumptions: pd.DataFrame | None = None
+    covariance_diagnostics: pd.DataFrame | None = None
     if config.baselines.optimized.enabled:
         optimized_method = config.baselines.optimized.method
         if optimized_method == "black_litterman":
@@ -496,6 +555,19 @@ def run_baselines(
                 max_position_weight=config.portfolio.risk.max_position_weight,
                 max_group_weight=config.portfolio.risk.max_group_weight,
             )
+        if optimized_method_is_executable(optimized_method):
+            covariance_windows = generate_covariance_diagnostic_windows(
+                featured,
+                symbols=config.data.symbols,
+                method=optimized_method,
+                lookback_days=config.baselines.optimized.lookback_days,
+                frequency=config.baselines.optimized.rebalance_frequency,
+                covariance_estimator=config.baselines.optimized.covariance_estimator,
+                external_covariance_path=config.optimized_external_covariance_path,
+            )
+            covariance_diagnostics = build_covariance_diagnostics(covariance_windows)
+            if covariance_diagnostics.empty:
+                covariance_diagnostics = None
         if weights.empty and optimized_method_is_executable(optimized_method):
             if optimized_method == "black_litterman":
                 black_litterman_assumptions = None
@@ -528,7 +600,7 @@ def run_baselines(
                 )
             )
 
-    return _concat_backtest_results(backtest_results), black_litterman_assumptions
+    return _concat_backtest_results(backtest_results), black_litterman_assumptions, covariance_diagnostics
 
 def _shared_oos_dates(
     panel: pd.DataFrame,
@@ -728,7 +800,10 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
 
 def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    baseline_outputs, black_litterman_assumptions = run_baselines(config, panel)
+    baseline_outputs, black_litterman_assumptions, covariance_diagnostics = run_baselines(
+        config,
+        panel,
+    )
     return _persist_experiment_outputs(
         config=config,
         panel_path=panel_path,
@@ -736,13 +811,17 @@ def backtest(config: ExperimentConfig) -> ExperimentArtifacts:
         daily_holdings=baseline_outputs.daily_holdings,
         daily_cash=baseline_outputs.daily_cash,
         symbol_groups=config.data.symbol_groups,
+        covariance_diagnostics=covariance_diagnostics,
         black_litterman_assumptions=black_litterman_assumptions,
     )
 
 
 def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
     panel, panel_path = prepare_data(config)
-    baseline_outputs, black_litterman_assumptions = run_baselines(config, panel)
+    baseline_outputs, black_litterman_assumptions, covariance_diagnostics = run_baselines(
+        config,
+        panel,
+    )
 
     if not config.models:
         return _persist_experiment_outputs(
@@ -752,6 +831,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
             daily_holdings=baseline_outputs.daily_holdings,
             daily_cash=baseline_outputs.daily_cash,
             symbol_groups=config.data.symbol_groups,
+            covariance_diagnostics=covariance_diagnostics,
             black_litterman_assumptions=black_litterman_assumptions,
         )
 
@@ -807,6 +887,10 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         black_litterman_assumptions,
         oos_dates,
     )
+    covariance_diagnostics = _slice_covariance_diagnostics(
+        covariance_diagnostics,
+        oos_dates,
+    )
     model_summary = build_model_summary(
         model_metrics=training_outputs.metrics,
         model_manifest=training_outputs.manifest,
@@ -832,6 +916,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         calibration_diagnostics=training_outputs.calibration_diagnostics,
         score_histograms=training_outputs.score_histograms,
         threshold_diagnostics=training_outputs.threshold_diagnostics,
+        covariance_diagnostics=covariance_diagnostics,
         black_litterman_assumptions=black_litterman_assumptions,
     )
 
