@@ -622,6 +622,7 @@ def test_run_experiment_adds_factor_diagnostics_for_all_strategies_and_covarianc
             "enabled": True,
             "method": "mean_variance",
             "lookback_days": 5,
+            "rebalance_frequency": "W-MON",
             "target_gross_exposure": 0.7,
             "risk_aversion": 1.0,
         },
@@ -645,13 +646,22 @@ def test_run_experiment_adds_factor_diagnostics_for_all_strategies_and_covarianc
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
     expected_strategies = {"buy_hold", "sma", "mean_variance", "ml_logistic_regression"}
+    performance_dates = pd.Index(performance["date"]).sort_values()
+    covariance_effective_dates = pd.Index(
+        pd.to_datetime(covariance_diagnostics["effective_date"]).drop_duplicates()
+    ).sort_values()
+    pre_oos_dates = covariance_effective_dates[covariance_effective_dates < performance_dates.min()]
+    in_window_dates = covariance_effective_dates[covariance_effective_dates >= performance_dates.min()]
+
     assert list(factor_diagnostics.columns) == FACTOR_DIAGNOSTICS_COLUMNS
     assert list(covariance_diagnostics.columns) == COVARIANCE_DIAGNOSTICS_COLUMNS
     assert set(factor_diagnostics["strategy"]) == expected_strategies
     assert set(covariance_diagnostics["strategy"]) == {"mean_variance"}
-    assert covariance_diagnostics["effective_date"].min() >= performance["date"].min()
-    assert covariance_diagnostics["effective_date"].max() <= performance["date"].max()
-    assert set(covariance_diagnostics["effective_date"]) <= set(performance["date"])
+    assert len(pre_oos_dates) == 1
+    assert (covariance_diagnostics["effective_date"] == pre_oos_dates[0]).sum() == 16
+    assert len(in_window_dates) > 0
+    assert in_window_dates.max() <= performance_dates.max()
+    assert set(in_window_dates) <= set(performance_dates)
     assert "## Factor Attribution Diagnostics" in report_text
     assert "## Covariance Diagnostics" in report_text
     assert "factor_diagnostics.csv" in report_text

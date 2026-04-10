@@ -399,11 +399,20 @@ def test_run_experiment_supports_black_litterman_optimized_baseline(tmp_path: Pa
         run_dir / "covariance_diagnostics.csv",
         parse_dates=["signal_date", "effective_date"],
     )
+    performance_dates = pd.Index(performance["date"]).sort_values()
+    covariance_effective_dates = pd.Index(
+        pd.to_datetime(covariance["effective_date"]).drop_duplicates()
+    ).sort_values()
+    pre_oos_dates = covariance_effective_dates[covariance_effective_dates < performance_dates.min()]
+    in_window_dates = covariance_effective_dates[covariance_effective_dates >= performance_dates.min()]
+
     assert not covariance.empty
     assert set(covariance["strategy"]) == {"black_litterman"}
-    assert covariance["effective_date"].min() >= performance["date"].min()
-    assert covariance["effective_date"].max() <= performance["date"].max()
-    assert set(covariance["effective_date"]) <= set(performance["date"])
+    assert len(pre_oos_dates) == 1
+    assert (covariance["effective_date"] == pre_oos_dates[0]).sum() == 16
+    assert len(in_window_dates) > 0
+    assert in_window_dates.max() <= performance_dates.max()
+    assert set(in_window_dates) <= set(performance_dates)
     assert "Black-Litterman Assumptions" in report_text
     assert "Covariance Diagnostics" in report_text
     assert "core_over_tail" in report_text

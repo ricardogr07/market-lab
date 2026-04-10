@@ -171,9 +171,28 @@ def _slice_covariance_diagnostics(
     if diagnostics.empty:
         return None
 
-    sliced = diagnostics.loc[
-        pd.to_datetime(diagnostics["effective_date"]).isin(oos_dates)
-    ].copy()
+    oos_index = pd.Index(pd.to_datetime(oos_dates)).sort_values()
+    if oos_index.empty:
+        return None
+
+    effective_dates = pd.to_datetime(diagnostics["effective_date"])
+    keep_mask = effective_dates.isin(oos_index)
+    first_oos_date = pd.Timestamp(oos_index.min())
+
+    # Keep the latest pre-OOS covariance window per strategy so the first
+    # shared OOS returns still have the active optimizer matrix in diagnostics.
+    for strategy, strategy_rows in diagnostics.groupby("strategy", sort=False):
+        strategy_dates = pd.to_datetime(strategy_rows["effective_date"])
+        prior_dates = strategy_dates.loc[strategy_dates < first_oos_date]
+        if prior_dates.empty:
+            continue
+        active_date = pd.Timestamp(prior_dates.max())
+        keep_mask = keep_mask | (
+            (diagnostics["strategy"] == strategy)
+            & (effective_dates == active_date)
+        )
+
+    sliced = diagnostics.loc[keep_mask].copy()
     if sliced.empty:
         return None
     return sliced.reset_index(drop=True)
