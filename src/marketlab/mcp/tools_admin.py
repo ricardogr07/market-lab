@@ -6,7 +6,14 @@ from typing import Any
 from marketlab._version import get_version
 from marketlab.mcp.workspace import WorkspaceSandbox
 
-CONFIG_TOOLS: list[str] = []
+CONFIG_TOOLS = [
+    "marketlab_list_templates",
+    "marketlab_create_config_from_template",
+    "marketlab_copy_repo_config",
+    "marketlab_read_config",
+    "marketlab_patch_config",
+    "marketlab_validate_config",
+]
 JOB_TOOLS: list[str] = []
 ARTIFACT_TOOLS: list[str] = []
 
