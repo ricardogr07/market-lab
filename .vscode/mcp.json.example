@@ -1,0 +1,37 @@
+{
+  "servers": {
+    "marketlab-docker-offline": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "marketlab-mcp",
+        "marketlab-mcp",
+        "--workspace-root",
+        "/app/workspace",
+        "--artifact-root",
+        "/app/artifacts",
+        "--repo-root",
+        "/app/repo"
+      ]
+    },
+    "marketlab-docker-online": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "marketlab-mcp",
+        "marketlab-mcp",
+        "--workspace-root",
+        "/app/workspace",
+        "--artifact-root",
+        "/app/artifacts",
+        "--repo-root",
+        "/app/repo",
+        "--allow-network"
+      ]
+    }
+  }
+}

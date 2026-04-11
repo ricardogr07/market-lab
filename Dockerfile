@@ -14,7 +14,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && python -m pip install --no-cache-dir ".[mcp]"
 
 
 FROM python:3.12-slim AS runtime
@@ -33,7 +33,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY configs ./configs
 
-RUN mkdir -p /app/artifacts \
+RUN mkdir -p /app/artifacts /app/workspace \
     && chown -R appuser:appuser /app
 
 USER appuser

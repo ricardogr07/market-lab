@@ -1,0 +1,14 @@
+services:
+  marketlab-mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marketlab-mcp:local
+    container_name: marketlab-mcp
+    restart: unless-stopped
+    entrypoint: ["sleep", "infinity"]
+    working_dir: /app
+    volumes:
+      - ../workspace:/app/workspace
+      - ../artifacts:/app/artifacts
+      - ..:/app/repo:ro

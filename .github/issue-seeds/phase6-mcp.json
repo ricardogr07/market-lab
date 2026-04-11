@@ -1,0 +1,69 @@
+{
+  "project": {
+    "number": 3
+  },
+  "labels": [
+    {
+      "name": "phase-6",
+      "color": "1d76db",
+      "description": "Phase 6 roadmap work for the MCP server and Docker LLM interface."
+    },
+    {
+      "name": "track:platform",
+      "color": "5319e7",
+      "description": "Platform, runtime, packaging, and container integration work."
+    },
+    {
+      "name": "priority:p0",
+      "color": "b60205",
+      "description": "Highest-priority roadmap work for the current phase."
+    },
+    {
+      "name": "priority:p1",
+      "color": "d93f0b",
+      "description": "Important follow-on work for the current phase."
+    },
+    {
+      "name": "track:docs",
+      "color": "0e8a16",
+      "description": "Documentation, guides, and developer-experience work."
+    },
+    {
+      "name": "track:reporting",
+      "color": "fbca04",
+      "description": "Reporting, artifact inspection, and review-surface work."
+    }
+  ],
+  "issues": [
+    {
+      "title": "Phase 6: MCP server and docker-deployable LLM interface for MarketLab",
+      "labels": ["phase-6", "priority:p0", "track:platform"],
+      "body": "## Summary\nAdd a standard Model Context Protocol server so an LLM can use MarketLab through a Docker sidecar and a generic stdio bridge.\n\n## Scope\n- standard MCP stdio server\n- sandboxed workspace, artifact, and optional read-only repo mounts\n- config authoring, queued job control, and artifact inspection tools\n- Docker deployment docs and required CI coverage\n\n## Non-goals\n- no HTTP or SSE transport in v1\n- no multi-user session management\n- no arbitrary repo edits\n- no model-binary management\n- no time-series comparison surface in v1\n"
+    },
+    {
+      "title": "Add MarketLab MCP server scaffold, packaging, and workspace sandbox",
+      "labels": ["phase-6", "priority:p0", "track:platform"],
+      "body": "## Scope\n- add the `marketlab[mcp]` optional dependency group\n- add the `marketlab-mcp` entrypoint\n- bootstrap the stdio MCP server\n- add workspace and artifact sandbox rules\n- add read-only repo import rules\n- add CLI-subprocess execution foundation\n- keep one active job plus a FIFO queue per session\n- add a reusable stdio MCP test harness\n\n## Review\n- critic\n- qa\n"
+    },
+    {
+      "title": "Add template and full-schema config authoring tools to the MarketLab MCP server",
+      "labels": ["phase-6", "priority:p0", "track:platform"],
+      "body": "## Scope\n- template listing\n- template export into the workspace\n- repo config copy into the workspace\n- structured config reads\n- recursive persisted-YAML patch operations\n- validation through the existing MarketLab loader\n\n## Depends on\n- Add MarketLab MCP server scaffold, packaging, and workspace sandbox\n\n## Review\n- qa\n"
+    },
+    {
+      "title": "Add async workflow execution, confirmation gates, and job logs to the MarketLab MCP server",
+      "labels": ["phase-6", "priority:p0", "track:platform"],
+      "body": "## Scope\n- implement `marketlab_plan_run` and `marketlab_start_job`\n- queued execution for `prepare-data`, `backtest`, `train-models`, and `run-experiment`\n- offline gating when cache or panel data is missing\n- status inspection, log tails, and cancel behavior\n\n## Depends on\n- Add MarketLab MCP server scaffold, packaging, and workspace sandbox\n- Add template and full-schema config authoring tools to the MarketLab MCP server\n\n## Review\n- financial-expert\n- critic\n- qa\n"
+    },
+    {
+      "title": "Add artifact inspection, plot retrieval, and run comparison tools to the MarketLab MCP server",
+      "labels": ["phase-6", "priority:p1", "track:platform", "track:reporting"],
+      "body": "## Scope\n- run listing and run summaries\n- artifact catalog tools\n- structured CSV and Markdown readers\n- plot retrieval for review images\n- compact summary-table comparison across runs\n\n## Depends on\n- Add async workflow execution, confirmation gates, and job logs to the MarketLab MCP server\n\n## Review\n- qa\n"
+    },
+    {
+      "title": "Add Docker sidecar deployment docs, compose example, and required MCP CI",
+      "labels": ["phase-6", "priority:p1", "track:platform", "track:docs"],
+      "body": "## Scope\n- install `marketlab[mcp]` in the Docker image\n- add a compose example for the MCP sidecar container\n- document the generic `docker exec -i` bridge\n- verify the installed `marketlab-mcp` entrypoint in package smoke\n- add a required Dockerized MCP CI lane\n\n## Depends on\n- Add MarketLab MCP server scaffold, packaging, and workspace sandbox\n\n## Review\n- critic\n- qa\n"
+    }
+  ]
+}

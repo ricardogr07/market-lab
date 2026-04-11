@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input scaffolding, additive factor-attribution and covariance diagnostics, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input scaffolding, additive factor-attribution and covariance diagnostics, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, a Docker-deployable MCP server surface, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -25,6 +25,7 @@ This document ties the current pieces together and records the working rules tha
   - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
+  - a stdio MCP server with sandboxed config authoring, queued workflow control, and artifact inspection
   - release automation with a monthly-batching Release PR and a PyPI publish path
   - fixture-backed tests and a real-data E2E runner that validates baseline, training, experiment, and analytics artifact sets
 - Deferred to later sprints:
@@ -41,6 +42,14 @@ This document ties the current pieces together and records the working rules tha
   - `marketlab list-configs`
   - `marketlab write-config --name weekly_rank --output weekly_rank.yaml`
   - `marketlab run-experiment --config weekly_rank.yaml`
+- MCP bootstrap:
+  - `marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-root .`
+- Dockerized MCP sidecar:
+  - `docker compose -f docker/compose.mcp.yml up -d --build`
+  - `docker exec -i marketlab-mcp marketlab-mcp --workspace-root /app/workspace --artifact-root /app/artifacts --repo-root /app/repo`
+  - Codex helper snippet: `docs/codex.config.toml.example`
+  - workspace helper file: `.vscode/mcp.json.example`
+  - documented clients: Codex and VS Code stable with GitHub Copilot Chat
 - Local Docker validation:
   - `docker build -t marketlab-cli .`
   - `docker run --rm marketlab-cli --help`
@@ -62,7 +71,7 @@ The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a
 
 The installed package uses bundled example config templates so a pip-installed user can bootstrap a working run config without needing the repository checkout. That keeps the distribution self-contained while preserving the repo-local launcher as the default development path.
 
-The Docker image deliberately uses the installed `marketlab` console script instead of the repo-local launcher. That split keeps local development pointed at the source tree while the container validates the packaged CLI path.
+The Docker image deliberately uses the installed package entrypoints instead of the repo-local launcher. That split keeps local development pointed at the source tree while the container validates the packaged CLI and MCP paths.
 
 ## Validation Flow
 
