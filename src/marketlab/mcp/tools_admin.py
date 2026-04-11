@@ -22,7 +22,15 @@ JOB_TOOLS = [
     "marketlab_tail_job_logs",
     "marketlab_cancel_job",
 ]
-ARTIFACT_TOOLS: list[str] = []
+ARTIFACT_TOOLS = [
+    "marketlab_list_runs",
+    "marketlab_get_run_summary",
+    "marketlab_list_artifacts",
+    "marketlab_read_table_artifact",
+    "marketlab_read_text_artifact",
+    "marketlab_get_plot_artifact",
+    "marketlab_compare_runs",
+]
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
