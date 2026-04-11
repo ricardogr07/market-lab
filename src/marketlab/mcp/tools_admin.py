@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from marketlab._version import get_version
+from marketlab.mcp.workspace import WorkspaceSandbox
+
+CONFIG_TOOLS: list[str] = []
+JOB_TOOLS: list[str] = []
+ARTIFACT_TOOLS: list[str] = []
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def register_admin_tools(
+    mcp: Any,
+    *,
+    sandbox: WorkspaceSandbox,
+    allow_network: bool,
+) -> None:
+    @mcp.tool(
+        name="marketlab_server_info",
+        description="Describe the MarketLab MCP server, installed version, and runtime defaults.",
+        structured_output=True,
+    )
+    def marketlab_server_info() -> dict[str, Any]:
+        return {
+            "server_name": "marketlab",
+            "version": get_version(),
+            "allow_network": allow_network,
+            "transport": "stdio",
+            "tool_groups": {
+                "admin": ["marketlab_server_info", "marketlab_workspace_info"],
+                "configs": CONFIG_TOOLS,
+                "jobs": JOB_TOOLS,
+                "artifacts": ARTIFACT_TOOLS,
+            },
+        }
+
+    @mcp.tool(
+        name="marketlab_workspace_info",
+        description="Describe writable and readable roots managed by the MarketLab MCP server.",
+        structured_output=True,
+    )
+    def marketlab_workspace_info() -> dict[str, Any]:
+        workspace_config_files = sorted(
+            str(path.relative_to(sandbox.workspace_root))
+            for path in sandbox.workspace_root.rglob("*.yaml")
+            if _is_relative_to(path, sandbox.workspace_root)
+        )
+        return {
+            **sandbox.describe(),
+            "workspace_yaml_files": workspace_config_files,
+        }
