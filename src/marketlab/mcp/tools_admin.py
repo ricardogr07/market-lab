@@ -14,7 +14,14 @@ CONFIG_TOOLS = [
     "marketlab_patch_config",
     "marketlab_validate_config",
 ]
-JOB_TOOLS: list[str] = []
+JOB_TOOLS = [
+    "marketlab_plan_run",
+    "marketlab_start_job",
+    "marketlab_list_jobs",
+    "marketlab_get_job_status",
+    "marketlab_tail_job_logs",
+    "marketlab_cancel_job",
+]
 ARTIFACT_TOOLS: list[str] = []
 
 
