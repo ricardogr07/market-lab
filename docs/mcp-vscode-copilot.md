@@ -25,6 +25,14 @@ From the repo root:
 docker compose -f docker/compose.mcp.yml up -d --build
 ```
 
+On Linux, export the host UID/GID before starting the sidecar so the bind-mounted `workspace/` and `artifacts/` directories stay writable inside the container:
+
+```bash
+export MARKETLAB_UID="$(id -u)"
+export MARKETLAB_GID="$(id -g)"
+docker compose -f docker/compose.mcp.yml up -d --build
+```
+
 This creates a long-lived container named `marketlab-mcp`. The MCP server itself is not started as a daemon. Each Copilot session starts its own foreground stdio process through `docker exec -i`.
 
 ## Add The VS Code MCP Config
@@ -101,6 +109,7 @@ After copying `.vscode/mcp.json` and reloading VS Code:
 
 - If VS Code cannot start the server, run `docker ps` and verify the container name is exactly `marketlab-mcp`.
 - If Copilot connects but job planning says network is required, switch to the online server or preload the raw cache / prepared panel.
+- If config writes fail on Linux, make sure `MARKETLAB_UID` and `MARKETLAB_GID` match `id -u` and `id -g` before starting the compose sidecar.
 - If config writes fail, verify the host `workspace/` and `artifacts/` directories exist and are writable on the host.
 - If the repo copy tool fails, verify the repo mount is present at `/app/repo`.
 

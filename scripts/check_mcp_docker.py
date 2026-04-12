@@ -50,6 +50,14 @@ def _call_docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[
     return _run(["docker", *args], cwd=ROOT, check=check)
 
 
+def _docker_user_args() -> list[str]:
+    if os.name == "nt":
+        return []
+    if not hasattr(os, "getuid") or not hasattr(os, "getgid"):
+        return []
+    return ["--user", f"{os.getuid()}:{os.getgid()}"]
+
+
 def _load_vscode_server_config(server_name: str) -> dict[str, object]:
     document = json.loads(VSCODE_SAMPLE_PATH.read_text(encoding="utf-8"))
     return document["servers"][server_name]
@@ -237,6 +245,7 @@ def main() -> int:
             "--rm",
             "--name",
             CONTAINER_NAME,
+            *_docker_user_args(),
             "-v",
             f"{workspace.resolve()}:/app/workspace",
             "-v",

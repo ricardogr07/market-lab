@@ -6,6 +6,7 @@ services:
     image: marketlab-mcp:local
     container_name: marketlab-mcp
     restart: unless-stopped
+    user: "${MARKETLAB_UID:-1000}:${MARKETLAB_GID:-1000}"
     entrypoint: ["sleep", "infinity"]
     working_dir: /app
     volumes:

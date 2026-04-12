@@ -77,6 +77,14 @@ Start the container:
 docker compose -f docker/compose.mcp.yml up -d --build
 ```
 
+On Linux, export the host UID/GID first so the container can write to the bind-mounted `workspace/` and `artifacts/` directories:
+
+```bash
+export MARKETLAB_UID="$(id -u)"
+export MARKETLAB_GID="$(id -g)"
+docker compose -f docker/compose.mcp.yml up -d --build
+```
+
 Then launch one MCP stdio session through `docker exec -i`:
 
 ```bash
@@ -91,6 +99,8 @@ This is the intended bridge for generic MCP clients. The client owns the stdio s
 
 For the Codex setup flow, see [Codex MCP Setup](codex-mcp.md).
 For the supported VS Code stable + GitHub Copilot setup, see [VS Code Copilot MCP Setup](mcp-vscode-copilot.md).
+
+The checked-in compose example runs the container as `MARKETLAB_UID:MARKETLAB_GID` so Linux bind mounts stay writable. Docker Desktop on Windows usually does not need those variables.
 
 ## Offline And Network Rules
 
