@@ -134,3 +134,29 @@ jobs:
         run: uv sync --group dev
       - name: Run offline integration suite
         run: uv run tox -e integration
+
+  mcp-docker:
+    name: mcp-docker
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            tox.ini
+            mkdocs.yml
+            Dockerfile
+      - name: Sync development dependencies
+        run: uv sync --group dev
+      - name: Run Dockerized MCP smoke
+        run: uv run tox -e mcp-docker

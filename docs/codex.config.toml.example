@@ -1,0 +1,36 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[mcp_servers.marketlab]
+command = "docker"
+args = [
+  "exec",
+  "-i",
+  "marketlab-mcp",
+  "marketlab-mcp",
+  "--workspace-root",
+  "/app/workspace",
+  "--artifact-root",
+  "/app/artifacts",
+  "--repo-root",
+  "/app/repo",
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+
+[mcp_servers.marketlab_online]
+command = "docker"
+args = [
+  "exec",
+  "-i",
+  "marketlab-mcp",
+  "marketlab-mcp",
+  "--workspace-root",
+  "/app/workspace",
+  "--artifact-root",
+  "/app/artifacts",
+  "--repo-root",
+  "/app/repo",
+  "--allow-network",
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120

@@ -2,15 +2,16 @@
 
 ## Current State
 
-Phases 1 through 4 are complete.
+Phases 1 through 5 are complete.
 
 MarketLab is a public research MVP with:
 
 - an installable Python package and packaged CLI
+- a Docker-deployable MCP server surface for LLM-driven workflow access
 - reproducible local and CI validation
 - a Dockerized manual runner workflow
 - release automation and a batched release path
-- Phase 4 evaluation, diagnostics, and strategy-surface improvements
+- richer Phase 5 baseline, diagnostics, and scenario-pack coverage
 
 The project now supports a small, reviewable end-to-end research workflow rather than a local-only scaffold.
 
@@ -22,17 +23,20 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab run-experiment --config ...`
 - `marketlab list-configs`
 - `marketlab write-config --name ... --output ...`
+- `marketlab-mcp --workspace-root ... --artifact-root ...`
 
 Current workflow surface:
 
 - repo-local execution through `python scripts/run_marketlab.py ...`
 - installed-package execution through the packaged `marketlab` CLI
+- generic stdio MCP execution through the packaged `marketlab-mcp` server
 - baseline and ML strategy comparison on the same shared out-of-sample window
 - walk-forward fold diagnostics for accepted and skipped candidates
 - ranking-aware, downside-aware, calibration, and threshold review artifacts
 - long-short, long-only, and confidence-gated cash-underfilled execution modes
 - lightweight sklearn comparison baseline
 - CSV, plot, and Markdown reporting artifacts
+- sandboxed config authoring, async job control, and run-artifact inspection for MCP clients
 
 ## Phase 4 Outcomes Worth Keeping
 
@@ -46,23 +50,24 @@ The most important Phase 4 outcomes were about research quality rather than head
 
 The key lesson from Phase 4 is that score quality, realized strategy outcomes, and overall research robustness are separate questions. Phase 4 improved how clearly the repo answers those questions; it did not, by itself, establish durable trading edge.
 
-## Phase 5 Direction
+## Phase 6 Direction
 
-Phase 5 should focus on richer portfolio risk controls and exposure-aware comparisons.
+Phase 6 should productize the current workflow for LLM-driven use through a Docker-friendly MCP server.
 
 Priority direction:
 
-- add risk-aware portfolio controls on top of the current strategy modes
-- compare strategies with explicit attention to exposure differences
-- keep the current lightweight dependency posture
-- avoid starting with another round of model expansion
+- keep the protocol surface tools-first and generic-client-friendly
+- make config authoring and execution safe through workspace sandboxing and confirmation gates
+- preserve the installed CLI as the execution backend so MCP behavior matches the packaged product
+- keep Docker as the deployment wrapper instead of introducing a second runtime architecture
 
-## Phase 5 Candidate Workstreams
+## Phase 6 Candidate Workstreams
 
-- risk controls in portfolio construction rather than only score gating
-- exposure-aware reporting and comparisons across long-short, long-only, and cash-heavy variants
-- turnover and cost sensitivity as first-class parts of strategy interpretation
-- scenario configs that compare the same strategy ideas under a common risk framing
+- MCP server scaffold and workspace sandboxing
+- template-driven config authoring and validation tools
+- async job planning, queued execution, and log tails
+- artifact inspection, plot retrieval, and compact run comparison
+- Docker sidecar docs and required MCP CI
 
 ## Deferred
 

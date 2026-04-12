@@ -1,10 +1,13 @@
 # MarketLab
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow: weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, and reviewable artifact summaries.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, and reviewable artifact summaries.
 
 See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
-See [docs/PLAN.md](docs/PLAN.md) for the current project status and Phase 5 direction.
+See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
+See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
+See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
+See [docs/PLAN.md](docs/PLAN.md) for the current project status and Phase 6 direction.
 
 ## Current Commands
 
@@ -16,6 +19,12 @@ python scripts/run_marketlab.py run-experiment --config configs/experiment.weekl
 ```
 
 `python scripts/run_marketlab.py ...` is the canonical local invocation path because it always resolves to the source tree under `src/`.
+
+For LLM-driven use, the packaged MCP entrypoint is:
+
+```bash
+marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-root .
+```
 
 ## What Each Command Does
 
@@ -332,6 +341,17 @@ marketlab run-experiment --config weekly_rank.yaml
 
 `list-configs` shows the bundled example templates, and `write-config` exports one of those templates into your working directory. That keeps the installed package self-contained without requiring a checkout of this repository.
 
+## MCP Quickstart
+
+Install the optional MCP surface:
+
+```bash
+python -m pip install "marketlab[mcp]"
+marketlab-mcp --help
+```
+
+The MCP server is stdio-only in Phase 6. It exposes sandboxed config authoring, queued workflow execution, and artifact inspection tools for generic MCP clients.
+
 ## Canonical Phase 5 Scenario Pack
 
 MarketLab now ships a canonical Phase 5 scenario pack as both checked-in repo configs and installed-package templates.
@@ -381,13 +401,14 @@ py -3.12 -m tox -e docs
 py -3.12 -m tox -e py312
 py -3.12 -m tox -e package
 py -3.12 -m tox -e integration
+py -3.12 -m tox -e mcp-docker
 py -3.12 -m tox -e preflight-fast
 py -3.12 -m tox -e preflight-slow
 py -3.12 -m tox -e preflight
 py -3.12 scripts/profile_validation.py --env package --env integration
 ```
 
-Use `py -3.12 -m tox -e preflight` as the canonical local pre-push gate so local validation matches the Python version used in GitHub Actions. For normal iteration, prefer the specific lane you touched or `preflight-fast`; leave `preflight-slow` and the full `preflight` run for packaging, artifact, or final push checks.
+Use `py -3.12 -m tox -e preflight` as the canonical local pre-push gate so local validation matches the Python version used in GitHub Actions. For normal iteration, prefer the specific lane you touched or `preflight-fast`; leave `preflight-slow` and the full `preflight` run for packaging, artifact, or final push checks. Run `py -3.12 -m tox -e mcp-docker` separately when Docker is available and the change touches the MCP container path.
 
 Current measured local Windows budgets are roughly:
 
@@ -442,6 +463,55 @@ docker run --rm marketlab-cli backtest --config configs/experiment.weekly_rank.s
 ```
 
 The container uses the installed `marketlab` console script as its entrypoint. Keep using `python scripts/run_marketlab.py ...` for local source-tree development; the Docker image exists to validate the installed package path and to support manual GitHub Actions runs.
+
+## Dockerized MCP Sidecar
+
+The same image now also installs the MCP extra, so `marketlab-mcp` is available inside the container.
+
+Start a long-lived container:
+
+```bash
+docker compose -f docker/compose.mcp.yml up -d --build
+```
+
+Then launch one stdio session through `docker exec -i`:
+
+```bash
+docker exec -i marketlab-mcp \
+  marketlab-mcp \
+  --workspace-root /app/workspace \
+  --artifact-root /app/artifacts \
+  --repo-root /app/repo
+```
+
+This keeps the repo mount read-only and makes the workspace and artifact mounts the only writable roots.
+
+## VS Code Copilot MCP Setup
+
+The supported editor path is VS Code stable with GitHub Copilot Chat using workspace-level `mcp.json`.
+
+The repo includes a checked-in sample:
+
+- `.vscode/mcp.json.example`
+
+Copy it to `.vscode/mcp.json`, start the MCP sidecar with `docker compose -f docker/compose.mcp.yml up -d --build`, then connect Copilot to either:
+
+- `marketlab-docker-offline`
+- `marketlab-docker-online`
+
+The offline entry is the default review path. The online entry adds `--allow-network` for live data downloads. For the full setup flow and manual verification checklist, see [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md).
+
+## Codex MCP Setup
+
+Codex reads MCP server definitions from user-local `~/.codex/config.toml`.
+
+The repo includes a checked-in example snippet:
+
+- `docs/codex.config.toml.example`
+
+Copy the `mcp_servers` entries into your user-local Codex config, start the MCP sidecar with `docker compose -f docker/compose.mcp.yml up -d --build`, then start a new Codex session and verify the attachment with `/mcp`, `/debug-config`, and `marketlab_server_info`.
+
+Use `marketlab` as the default offline entry. `marketlab_online` adds `--allow-network` for live data downloads. For the full setup flow and troubleshooting notes, see [docs/codex-mcp.md](docs/codex-mcp.md).
 
 ## Manual Docker Runner Workflow
 

@@ -10,8 +10,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIST_DIR = ROOT / 'dist'
-SCRATCH_DIR = ROOT / '.package-smoke'
+DIST_DIR = Path(os.environ.get('MARKETLAB_DIST_DIR', ROOT / 'dist')).resolve()
+SCRATCH_DIR = Path(os.environ.get('MARKETLAB_PACKAGE_SMOKE_DIR', ROOT / '.package-smoke')).resolve()
 EXPECTED_TEMPLATES = (
     ('weekly_rank', 'weekly_rank.yaml'),
     ('weekly_rank_smoke', 'weekly_rank_smoke.yaml'),
@@ -88,10 +88,18 @@ def _assert_sdist_contents(sdist_path: Path) -> None:
             raise RuntimeError(f'sdist is missing packaged template {template_name}')
 
 
-def _venv_paths(venv_dir: Path) -> tuple[Path, Path]:
+def _venv_paths(venv_dir: Path) -> tuple[Path, Path, Path]:
     if os.name == 'nt':
-        return venv_dir / 'Scripts' / 'python.exe', venv_dir / 'Scripts' / 'marketlab.exe'
-    return venv_dir / 'bin' / 'python', venv_dir / 'bin' / 'marketlab'
+        return (
+            venv_dir / 'Scripts' / 'python.exe',
+            venv_dir / 'Scripts' / 'marketlab.exe',
+            venv_dir / 'Scripts' / 'marketlab-mcp.exe',
+        )
+    return (
+        venv_dir / 'bin' / 'python',
+        venv_dir / 'bin' / 'marketlab',
+        venv_dir / 'bin' / 'marketlab-mcp',
+    )
 
 
 def _run(
@@ -113,9 +121,13 @@ def _run(
 def _assert_installed_cli(wheel_path: Path, temp_dir: Path, env: dict[str, str]) -> None:
     venv_dir = temp_dir / 'venv'
     venv.EnvBuilder(with_pip=True).create(venv_dir)
-    python_path, marketlab_path = _venv_paths(venv_dir)
+    python_path, marketlab_path, marketlab_mcp_path = _venv_paths(venv_dir)
 
-    _run([str(python_path), '-m', 'pip', 'install', str(wheel_path)], env=env)
+    wheel_uri = wheel_path.resolve().as_uri()
+    _run(
+        [str(python_path), '-m', 'pip', 'install', f'marketlab[mcp] @ {wheel_uri}'],
+        env=env,
+    )
 
     version_run = _run([str(marketlab_path), '--version'], env=env)
     if not version_run.stdout.strip().startswith('marketlab '):
@@ -161,6 +173,10 @@ def _assert_installed_cli(wheel_path: Path, temp_dir: Path, env: dict[str, str])
         encoding='utf-8'
     ):
         raise RuntimeError('Installed CLI phase5 write-config did not write the expected template')
+
+    mcp_help_run = _run([str(marketlab_mcp_path), '--help'], env=env)
+    if '--workspace-root' not in mcp_help_run.stdout or '--artifact-root' not in mcp_help_run.stdout:
+        raise RuntimeError('Installed marketlab-mcp --help output did not include the expected flags')
 
 
 def main() -> int:

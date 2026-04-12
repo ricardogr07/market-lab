@@ -7,8 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-VALID_ENVS = ("lint", "docs", "py312", "package", "integration")
-DEFAULT_ENVS = VALID_ENVS
+VALID_ENVS = ("lint", "docs", "py312", "package", "integration", "mcp-docker")
+DEFAULT_ENVS = ("lint", "docs", "py312", "package", "integration")
 CI_PYTHON = (3, 12)
 
 

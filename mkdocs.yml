@@ -6,6 +6,9 @@ nav:
   - How It Works: how-it-works.md
   - Architecture: architecture.md
   - Phase 5 Scenarios: phase5-scenarios.md
+  - MCP Server: mcp-server.md
+  - Codex MCP: codex-mcp.md
+  - VS Code Copilot MCP: mcp-vscode-copilot.md
   - Plan: PLAN.md
 plugins:
   - search

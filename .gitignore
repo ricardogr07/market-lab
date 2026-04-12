@@ -11,6 +11,8 @@ __pycache__/
 build/
 dist/
 site/
+.vscode/mcp.json
+workspace/
 pytest-cache-files-*/
 *.egg-info/
 artifacts/*
