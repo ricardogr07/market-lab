@@ -46,6 +46,13 @@ Artifacts:
 - `marketlab_get_plot_artifact`
 - `marketlab_compare_runs`
 
+Paper:
+
+- `marketlab_list_paper_proposals`
+- `marketlab_read_paper_proposal`
+- `marketlab_get_paper_status`
+- `marketlab_decide_paper_proposal`
+
 ## Local Install
 
 Install the MCP extra:
@@ -68,6 +75,7 @@ The generic deployment shape is a long-lived container plus one `docker exec -i`
 Example helper files:
 
 - `docker/compose.mcp.yml`
+- `docker/compose.paper.yml`
 - `docs/codex.config.toml.example`
 - `.vscode/mcp.json.example`
 

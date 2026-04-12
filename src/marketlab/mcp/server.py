@@ -9,6 +9,7 @@ from marketlab.mcp.tools_admin import register_admin_tools
 from marketlab.mcp.tools_artifacts import register_artifact_tools
 from marketlab.mcp.tools_configs import register_config_tools
 from marketlab.mcp.tools_jobs import register_job_tools
+from marketlab.mcp.tools_paper import register_paper_tools
 from marketlab.mcp.workspace import WorkspaceSandbox
 
 
@@ -71,6 +72,7 @@ class MarketLabMCPServer:
         register_config_tools(self._mcp, sandbox=self._sandbox)
         register_job_tools(self._mcp, jobs=self._jobs)
         register_artifact_tools(self._mcp, sandbox=self._sandbox)
+        register_paper_tools(self._mcp, sandbox=self._sandbox)
 
     @property
     def app(self) -> Any:
