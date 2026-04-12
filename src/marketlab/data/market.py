@@ -73,6 +73,8 @@ def raw_cache_path(cache_dir: str | Path, symbol: str) -> Path:
 def load_symbol_frames(
     config: ExperimentConfig,
     provider: MarketDataProvider | None = None,
+    *,
+    force_refresh: bool = False,
 ) -> dict[str, pd.DataFrame]:
     cache_dir = config.cache_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,7 @@ def load_symbol_frames(
     frames: dict[str, pd.DataFrame] = {}
     for symbol in config.data.symbols:
         symbol_cache = raw_cache_path(cache_dir, symbol)
-        if symbol_cache.exists():
+        if symbol_cache.exists() and not force_refresh:
             LOGGER.info("Loading cached raw data for %s from %s", symbol, symbol_cache)
             frames[symbol] = pd.read_csv(symbol_cache)
             continue

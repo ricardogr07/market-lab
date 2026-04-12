@@ -60,6 +60,8 @@ def _config_summary(config: ExperimentConfig) -> dict[str, Any]:
         "output_dir": str(config.output_dir),
         "benchmark_strategy": config.evaluation.benchmark_strategy,
         "model_names": [model.name for model in config.models],
+        "paper_enabled": config.paper.enabled,
+        "paper_execution_mode": config.paper.execution_mode,
     }
 
 
@@ -192,6 +194,13 @@ class WorkspaceSandbox:
 
     def validate_execution_paths(self, config: ExperimentConfig) -> None:
         writable_paths = [config.cache_dir, config.output_dir]
+        if config.paper.enabled:
+            writable_paths.extend(
+                [
+                    config.paper_approval_inbox_dir,
+                    config.paper_state_dir,
+                ]
+            )
         readable_paths = [
             config.prepared_panel_path,
             config.factor_model_path,

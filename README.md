@@ -1,9 +1,10 @@
 # MarketLab
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly supervised modeling rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, and reviewable artifact summaries.
+MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly and daily supervised timing rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, reviewable artifact summaries, and a local Alpaca paper-trading MVP for a configurable daily single-ETF timing loop.
 
 See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
+See [docs/paper-trading.md](docs/paper-trading.md) for the Phase 7 daily single-ETF paper-trading loop and local Docker Compose shape.
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
 See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
 See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
@@ -16,6 +17,11 @@ python scripts/run_marketlab.py prepare-data --config configs/experiment.weekly_
 python scripts/run_marketlab.py backtest --config configs/experiment.weekly_rank.yaml
 python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml
 python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml
+python scripts/run_marketlab.py paper-status --config configs/experiment.qqq_paper_daily.yaml
+python scripts/run_marketlab.py paper-decision --config configs/experiment.qqq_paper_daily.yaml
+python scripts/run_marketlab.py paper-agent-approve --config configs/experiment.qqq_paper_daily.yaml --once
+python scripts/run_marketlab.py paper-scheduler --config configs/experiment.qqq_paper_daily.yaml --once
+python scripts/run_marketlab.py paper-report --config configs/experiment.qqq_paper_daily.yaml --start 2026-04-13 --end 2026-05-15
 ```
 
 `python scripts/run_marketlab.py ...` is the canonical local invocation path because it always resolves to the source tree under `src/`.
@@ -32,6 +38,13 @@ marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-ro
 - `backtest`: run the enabled baselines (`buy_hold`, `sma`, optional config-defined allocation baselines, and the optional executable optimized baseline) and write performance, analytics summaries, report, and plots.
 - `train-models`: fit the configured models across walk-forward folds and write raw training artifacts plus fold/model summaries, ranking diagnostics, calibration diagnostics, threshold diagnostics, and review plots.
 - `run-experiment`: run baselines and ML strategies together on the shared out-of-sample window and write the experiment outputs, analytics summaries, ranking-aware ML summary CSVs, calibration/threshold diagnostics, and review plots.
+- `paper-decision`: refresh Alpaca daily data, retrain the six-model daily paper set for the configured single ETF, and persist one consensus proposal plus evidence.
+- `paper-status`: read the latest persisted paper-trading status plus the latest proposal summary.
+- `paper-approve`: approve or reject one persisted proposal by actor `agent` or `manual`.
+- `paper-agent-approve`: run the autonomous agent worker once or in a loop, using `openai`, `claude`, or deterministic fallback to approve or reject pending proposals.
+- `paper-submit`: reconcile the approved proposal against the Alpaca paper account and persist either a submitted fractional `DAY` market order, a no-op, or a skipped submission.
+- `paper-scheduler`: run the long-lived local paper loop for the configured decision and submission windows.
+- `paper-report`: build a month-run paper report comparing the realized paper path, the consensus path, each model path, `buy_hold`, and `sma`.
 
 ## Artifact Outputs
 
@@ -295,6 +308,8 @@ Interpretation rules:
 `configs/experiment.voo_long_only.ytd.yaml` is a tracked one-symbol directional timing example built around `VOO` from `2018-01-01` through `2026-04-03`. It currently compares five sklearn models, runs in `long_only` mode with `long_n: 1`, and lowers `min_test_rows` to `10` so quarterly test folds stay viable on a one-symbol weekly dataset.
 
 Treat this config as a timing study, not as a cross-sectional ranking experiment. Compare its ML outputs primarily against `buy_hold` and `sma`, and do not read the results as evidence about cross-sectional ranking skill.
+
+The separate Phase 7 paper-trading path is now a configurable single-ETF loop. The tracked unattended-month config is `configs/experiment.qqq_paper_daily.yaml`, and `configs/experiment.voo_paper_daily.yaml` ships as the first alternate comparison config.
 
 ## Lightweight Model Comparison Set
 

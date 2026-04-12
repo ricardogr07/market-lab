@@ -31,6 +31,12 @@ ARTIFACT_TOOLS = [
     "marketlab_get_plot_artifact",
     "marketlab_compare_runs",
 ]
+PAPER_TOOLS = [
+    "marketlab_list_paper_proposals",
+    "marketlab_read_paper_proposal",
+    "marketlab_get_paper_status",
+    "marketlab_decide_paper_proposal",
+]
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -63,6 +69,7 @@ def register_admin_tools(
                 "configs": CONFIG_TOOLS,
                 "jobs": JOB_TOOLS,
                 "artifacts": ARTIFACT_TOOLS,
+                "paper": PAPER_TOOLS,
             },
         }
 

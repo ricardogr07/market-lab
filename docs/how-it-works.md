@@ -9,7 +9,9 @@ MarketLab is a research toolkit for running repeatable market experiments from a
 
 The current library is built for research, not live trading. It is good at making assumptions explicit, replaying the same workflow, and showing why a result happened. It is not claiming that a model is ready for production deployment.
 
-This explainer uses the current `VOO` timing example at `configs/experiment.voo_long_only.ytd.yaml` and the local run directory `artifacts/runs/voo_long_only_ytd/20260403T080623Z/`.
+This explainer uses the current weekly `VOO` timing example at `configs/experiment.voo_long_only.ytd.yaml` and the local run directory `artifacts/runs/voo_long_only_ytd/20260403T080623Z/`.
+
+Phase 7 also adds separate daily paper-trading configs at `configs/experiment.qqq_paper_daily.yaml` and `configs/experiment.voo_paper_daily.yaml`. Those newer configs are intentionally operational: they use a six-model consensus proposal, an autonomous approval worker, and paper-account state artifacts. This explainer stays focused on the weekly research example because it is easier to read as a standalone methodology walkthrough.
 
 ## What Problem The Library Is Solving
 

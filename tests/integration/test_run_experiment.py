@@ -792,6 +792,57 @@ def test_run_experiment_supports_single_symbol_long_only_timing_runs(tmp_path: P
     assert "- Best model by mean top-bucket return:" in report_text
 
 
+def test_run_experiment_supports_daily_one_day_single_symbol_timing_runs(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "D",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        walk_forward={
+            "train_years": 3,
+            "test_months": 1,
+            "step_months": 1,
+            "min_train_rows": 200,
+            "min_test_rows": 15,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        symbol_specs=(("VOO", 100.0, 0.45),),
+    )
+    config_text = config_path.read_text(encoding="utf-8").replace(
+        'horizon_days: 5',
+        'horizon_days: 1',
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    ranking_diagnostics = pd.read_csv(run_dir / "ranking_diagnostics.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(metrics["strategy"]) == {
+        "buy_hold",
+        "sma",
+        "ml_logistic_regression__long_only__thr0p55__cash",
+    }
+    assert set(ranking_diagnostics["evaluation_mode"]) == {"long_only"}
+    assert ranking_diagnostics["top_bucket_size"].eq(1).all()
+    assert "ml_logistic_regression__long_only__thr0p55__cash" in report_text
+
+
 
 
 def test_run_experiment_supports_capped_long_short_strategy_variants(tmp_path: Path) -> None:

@@ -1,0 +1,69 @@
+services:
+  marketlab-paper-mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marketlab-mcp:local
+    container_name: marketlab-paper-mcp
+    restart: unless-stopped
+    user: "${MARKETLAB_UID:-1000}:${MARKETLAB_GID:-1000}"
+    entrypoint: ["sleep", "infinity"]
+    working_dir: /app
+    volumes:
+      - ../workspace:/app/workspace
+      - ../artifacts:/app/repo/artifacts
+      - ..:/app/repo:ro
+
+  marketlab-paper-scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marketlab-mcp:local
+    container_name: marketlab-paper-scheduler
+    restart: unless-stopped
+    user: "${MARKETLAB_UID:-1000}:${MARKETLAB_GID:-1000}"
+    working_dir: /app
+    command:
+      - paper-scheduler
+      - --config
+      - /app/repo/configs/experiment.qqq_paper_daily.yaml
+    environment:
+      ALPACA_API_KEY_ID: "${ALPACA_API_KEY_ID:-}"
+      ALPACA_API_SECRET_KEY: "${ALPACA_API_SECRET_KEY:-}"
+      ALPACA_DATA_BASE_URL: "${ALPACA_DATA_BASE_URL:-https://data.alpaca.markets}"
+      ALPACA_TRADING_BASE_URL: "${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}"
+      ALPACA_DATA_FEED: "${ALPACA_DATA_FEED:-iex}"
+      ALPACA_TIMEOUT_SECONDS: "${ALPACA_TIMEOUT_SECONDS:-30}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      - ../workspace:/app/workspace
+      - ../artifacts:/app/repo/artifacts
+      - ..:/app/repo:ro
+
+  marketlab-paper-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marketlab-mcp:local
+    container_name: marketlab-paper-agent
+    restart: unless-stopped
+    user: "${MARKETLAB_UID:-1000}:${MARKETLAB_GID:-1000}"
+    working_dir: /app
+    command:
+      - paper-agent-approve
+      - --config
+      - /app/repo/configs/experiment.qqq_paper_daily.yaml
+    environment:
+      ALPACA_API_KEY_ID: "${ALPACA_API_KEY_ID:-}"
+      ALPACA_API_SECRET_KEY: "${ALPACA_API_SECRET_KEY:-}"
+      ALPACA_DATA_BASE_URL: "${ALPACA_DATA_BASE_URL:-https://data.alpaca.markets}"
+      ALPACA_TRADING_BASE_URL: "${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}"
+      ALPACA_DATA_FEED: "${ALPACA_DATA_FEED:-iex}"
+      ALPACA_TIMEOUT_SECONDS: "${ALPACA_TIMEOUT_SECONDS:-30}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      - ../workspace:/app/workspace
+      - ../artifacts:/app/repo/artifacts
+      - ..:/app/repo:ro

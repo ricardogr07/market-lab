@@ -13,7 +13,8 @@ from marketlab.config import (
     TargetConfig,
 )
 from marketlab.data.panel import load_panel_csv
-from marketlab.rebalance import weekly_signal_dates
+from marketlab.rebalance import rebalance_signal_dates, weekly_signal_dates
+from marketlab.targets.timing import build_modeling_dataset, build_rebalance_snapshots
 from marketlab.targets.weekly import (
     add_forward_targets,
     build_weekly_modeling_dataset,
@@ -235,3 +236,48 @@ def test_build_weekly_modeling_dataset_uses_fixture_panel_contract() -> None:
         }
     ]
     assert dataset[feature_columns].notna().all().all()
+
+
+def test_daily_snapshots_use_each_trading_day_as_signal_date(
+    featured_panel: pd.DataFrame,
+) -> None:
+    snapshots = build_rebalance_snapshots(
+        featured_panel,
+        feature_columns=["feature_a", "feature_b"],
+        frequency="D",
+    )
+
+    assert snapshots["signal_date"].nunique() == len(TRADING_DATES) - 1
+    assert set(snapshots["signal_date"]) == set(TRADING_DATES[:-1])
+
+    aaa_row = snapshots.loc[
+        (snapshots["symbol"] == "AAA")
+        & (snapshots["signal_date"] == pd.Timestamp("2024-01-18"))
+    ].iloc[0]
+    assert aaa_row["effective_date"] == pd.Timestamp("2024-01-22")
+    assert aaa_row["feature_a"] == 11
+
+
+def test_daily_modeling_dataset_respects_daily_frequency_and_one_day_target() -> None:
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "market_panel.csv"
+    panel = load_panel_csv(fixture_path)
+    config = ExperimentConfig(
+        features=FeaturesConfig(
+            return_windows=[2],
+            ma_windows=[2, 3],
+            vol_windows=[2],
+            momentum_window=2,
+        ),
+        target=TargetConfig(horizon_days=1, type="direction"),
+        portfolio=PortfolioConfig(
+            ranking=RankingConfig(rebalance_frequency="D", mode="long_only", long_n=1, short_n=1)
+        ),
+    )
+
+    dataset = build_modeling_dataset(panel, config)
+
+    assert not dataset.empty
+    assert set(dataset["signal_date"]).issubset(set(rebalance_signal_dates(panel, "D")))
+    assert dataset["effective_date"].gt(dataset["signal_date"]).all()
+    assert dataset["target_end_date"].eq(dataset["effective_date"]).all()
+    assert dataset["target"].isin({0, 1}).all()
