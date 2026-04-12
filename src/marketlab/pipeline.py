@@ -62,7 +62,7 @@ from marketlab.strategies.optimized import (
 )
 from marketlab.strategies.ranking import generate_weights as ranking_weights
 from marketlab.strategies.sma import generate_weights as sma_weights
-from marketlab.targets.weekly import build_weekly_modeling_dataset
+from marketlab.targets import build_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -709,9 +709,9 @@ def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
         raise RuntimeError("No models are configured for train-models.")
 
     panel, panel_path = prepare_data(config)
-    modeling_dataset = build_weekly_modeling_dataset(panel, config)
+    modeling_dataset = build_modeling_dataset(panel, config)
     if modeling_dataset.empty:
-        raise RuntimeError("Weekly modeling dataset is empty.")
+        raise RuntimeError("Modeling dataset is empty.")
 
     run_dir = _run_dir(config)
     fold_diagnostics = build_walk_forward_diagnostics(
@@ -854,9 +854,9 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
             black_litterman_assumptions=black_litterman_assumptions,
         )
 
-    modeling_dataset = build_weekly_modeling_dataset(panel, config)
+    modeling_dataset = build_modeling_dataset(panel, config)
     if modeling_dataset.empty:
-        raise RuntimeError("Weekly modeling dataset is empty.")
+        raise RuntimeError("Modeling dataset is empty.")
 
     run_dir = _run_dir(config)
     fold_diagnostics = build_walk_forward_diagnostics(

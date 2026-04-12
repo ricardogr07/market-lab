@@ -541,3 +541,95 @@ def test_load_config_resolves_relative_optimized_external_paths(tmp_path: Path) 
 
     assert config.optimized_external_covariance_path == (config_dir / "inputs" / "covariance.csv").resolve()
     assert config.optimized_external_expected_returns_path == (config_dir / "inputs" / "expected.csv").resolve()
+
+
+def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={
+            "symbols": ["VOO"],
+            "interval": "1d",
+        },
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["target"] = {"horizon_days": 1, "type": "direction"}
+    payload["portfolio"] = {
+        "ranking": {
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "D",
+            "mode": "long_only",
+        }
+    }
+    payload["models"] = [
+        {"name": "logistic_regression"},
+        {"name": "logistic_l1"},
+        {"name": "random_forest"},
+        {"name": "extra_trees"},
+        {"name": "gradient_boosting"},
+        {"name": "hist_gradient_boosting"},
+    ]
+    payload["paper"] = {
+        "enabled": True,
+        "data_provider": "alpaca",
+        "broker": "alpaca",
+        "execution_mode": "agent_approval",
+        "agent_backend": "openai",
+        "agent_model": "gpt-4o-mini",
+        "agent_timeout_seconds": 45,
+        "agent_fallback_backend": "deterministic_consensus",
+        "consensus_min_long_votes": 4,
+        "schedule_timezone": "America/New_York",
+        "decision_time": "16:10",
+        "submission_time": "19:05",
+        "order_type": "day_market",
+        "position_sizing": "full_equity_fractional",
+        "approval_inbox_dir": "artifacts/paper/inbox",
+        "state_dir": "artifacts/paper/state",
+        "poll_interval_seconds": 15,
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.paper.enabled is True
+    assert config.paper.execution_mode == "agent_approval"
+    assert config.paper.agent_backend == "openai"
+    assert config.paper.agent_model == "gpt-4o-mini"
+    assert config.paper.agent_timeout_seconds == 45
+    assert config.paper.consensus_min_long_votes == 4
+    assert config.paper_approval_inbox_dir == (tmp_path / "artifacts" / "paper" / "inbox").resolve()
+    assert config.paper_state_dir == (tmp_path / "artifacts" / "paper" / "state").resolve()
+
+
+def test_load_config_rejects_unknown_paper_agent_backend(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "agent_backend": "unknown",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="paper.agent_backend must be one of"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_openai_backend_without_model(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "agent_backend": "openai",
+        "agent_model": "",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="paper.agent_model must be set"):
+        load_config(config_path)

@@ -3,13 +3,20 @@ from __future__ import annotations
 import pandas as pd
 
 
-def weekly_signal_dates(
+def rebalance_signal_dates(
     panel: pd.DataFrame,
     frequency: str = "W-FRI",
 ) -> list[pd.Timestamp]:
     calendar = pd.DataFrame({"timestamp": sorted(panel["timestamp"].drop_duplicates())})
     calendar["rebalance_period"] = calendar["timestamp"].dt.to_period(frequency)
     return calendar.groupby("rebalance_period")["timestamp"].max().sort_values().tolist()
+
+
+def weekly_signal_dates(
+    panel: pd.DataFrame,
+    frequency: str = "W-FRI",
+) -> list[pd.Timestamp]:
+    return rebalance_signal_dates(panel, frequency)
 
 
 def next_effective_dates(
@@ -39,7 +46,7 @@ def signal_effective_dates(
     panel: pd.DataFrame,
     frequency: str = "W-FRI",
 ) -> pd.Series:
-    return next_effective_dates(panel, weekly_signal_dates(panel, frequency))
+    return next_effective_dates(panel, rebalance_signal_dates(panel, frequency))
 
 
 def next_rebalance_effective_date(

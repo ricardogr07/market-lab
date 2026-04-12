@@ -11,6 +11,12 @@ ALLOCATION_MODES = {"equal", "group_weights", "symbol_weights"}
 OPTIMIZED_METHODS = {"black_litterman", "mean_variance", "risk_parity"}
 COVARIANCE_ESTIMATORS = {"diagonal_shrinkage", "ewma", "external_csv", "sample"}
 EXPECTED_RETURN_SOURCES = {"external_csv", "historical_mean"}
+PAPER_DATA_PROVIDERS = {"alpaca"}
+PAPER_BROKERS = {"alpaca"}
+PAPER_EXECUTION_MODES = {"autonomous", "agent_approval", "manual_approval"}
+PAPER_ORDER_TYPES = {"day_market"}
+PAPER_POSITION_SIZING = {"full_equity_fractional"}
+PAPER_AGENT_BACKENDS = {"claude", "deterministic_consensus", "openai"}
 WEIGHT_TOLERANCE = 1e-6
 
 
@@ -155,6 +161,27 @@ class ArtifactsConfig:
 
 
 @dataclass(slots=True)
+class PaperConfig:
+    enabled: bool = False
+    data_provider: str = "alpaca"
+    broker: str = "alpaca"
+    execution_mode: str = "agent_approval"
+    agent_backend: str = "deterministic_consensus"
+    agent_model: str = ""
+    agent_timeout_seconds: int = 30
+    agent_fallback_backend: str = "deterministic_consensus"
+    consensus_min_long_votes: int = 4
+    schedule_timezone: str = "America/New_York"
+    decision_time: str = "16:10"
+    submission_time: str = "19:05"
+    order_type: str = "day_market"
+    position_sizing: str = "full_equity_fractional"
+    approval_inbox_dir: str = "artifacts/paper/inbox"
+    state_dir: str = "artifacts/paper/state"
+    poll_interval_seconds: int = 30
+
+
+@dataclass(slots=True)
 class ExperimentConfig:
     experiment_name: str = "weekly_rank_v1"
     data: DataConfig = field(default_factory=DataConfig)
@@ -171,6 +198,7 @@ class ExperimentConfig:
     )
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     artifacts: ArtifactsConfig = field(default_factory=ArtifactsConfig)
+    paper: PaperConfig = field(default_factory=PaperConfig)
     base_dir: Path = field(default_factory=Path.cwd, repr=False)
 
     def resolve_path(self, value: str | Path) -> Path:
@@ -190,6 +218,14 @@ class ExperimentConfig:
     @property
     def output_dir(self) -> Path:
         return self.resolve_path(self.artifacts.output_dir)
+
+    @property
+    def paper_approval_inbox_dir(self) -> Path:
+        return self.resolve_path(self.paper.approval_inbox_dir)
+
+    @property
+    def paper_state_dir(self) -> Path:
+        return self.resolve_path(self.paper.state_dir)
 
     @property
     def optimized_external_covariance_path(self) -> Path | None:
@@ -281,6 +317,15 @@ def _validate_positive_float(label: str, value: float) -> None:
         raise ValueError(f"{label} must be a finite positive value.")
 
 
+def _validate_clock_string(label: str, value: str) -> None:
+    parts = value.split(":")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"{label} must use HH:MM 24-hour format.")
+    hour, minute = (int(part) for part in parts)
+    if hour not in range(24) or minute not in range(60):
+        raise ValueError(f"{label} must use HH:MM 24-hour format.")
+
+
 def _validate_config(config: ExperimentConfig) -> None:
     symbols = list(config.data.symbols)
     symbol_set = set(symbols)
@@ -315,6 +360,44 @@ def _validate_config(config: ExperimentConfig) -> None:
         "evaluation.cost_sensitivity_bps",
         config.evaluation.cost_sensitivity_bps,
     )
+    paper = config.paper
+    if paper.data_provider not in PAPER_DATA_PROVIDERS:
+        allowed = ", ".join(sorted(PAPER_DATA_PROVIDERS))
+        raise ValueError(f"paper.data_provider must be one of: {allowed}")
+    if paper.broker not in PAPER_BROKERS:
+        allowed = ", ".join(sorted(PAPER_BROKERS))
+        raise ValueError(f"paper.broker must be one of: {allowed}")
+    if paper.execution_mode not in PAPER_EXECUTION_MODES:
+        allowed = ", ".join(sorted(PAPER_EXECUTION_MODES))
+        raise ValueError(f"paper.execution_mode must be one of: {allowed}")
+    if paper.agent_backend not in PAPER_AGENT_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_AGENT_BACKENDS))
+        raise ValueError(f"paper.agent_backend must be one of: {allowed}")
+    if paper.agent_fallback_backend not in PAPER_AGENT_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_AGENT_BACKENDS))
+        raise ValueError(f"paper.agent_fallback_backend must be one of: {allowed}")
+    if paper.agent_fallback_backend != "deterministic_consensus":
+        raise ValueError(
+            "paper.agent_fallback_backend must remain 'deterministic_consensus' in Phase 7.1."
+        )
+    if paper.agent_backend in {"openai", "claude"} and paper.agent_model.strip() == "":
+        raise ValueError(
+            "paper.agent_model must be set when paper.agent_backend is 'openai' or 'claude'."
+        )
+    if paper.order_type not in PAPER_ORDER_TYPES:
+        allowed = ", ".join(sorted(PAPER_ORDER_TYPES))
+        raise ValueError(f"paper.order_type must be one of: {allowed}")
+    if paper.position_sizing not in PAPER_POSITION_SIZING:
+        allowed = ", ".join(sorted(PAPER_POSITION_SIZING))
+        raise ValueError(f"paper.position_sizing must be one of: {allowed}")
+    _validate_clock_string("paper.decision_time", paper.decision_time)
+    _validate_clock_string("paper.submission_time", paper.submission_time)
+    if paper.agent_timeout_seconds < 1:
+        raise ValueError("paper.agent_timeout_seconds must be at least 1.")
+    if paper.consensus_min_long_votes < 1:
+        raise ValueError("paper.consensus_min_long_votes must be at least 1.")
+    if paper.poll_interval_seconds < 1:
+        raise ValueError("paper.poll_interval_seconds must be at least 1.")
 
     optimized = config.baselines.optimized
     if optimized.method not in OPTIMIZED_METHODS:
@@ -538,6 +621,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
             factor_model_path=(payload.get("evaluation") or {}).get("factor_model_path", ""),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
+        paper=_section(PaperConfig, payload.get("paper")),
         base_dir=_config_base_dir(config_path),
     )
     _normalize_mapping_sections(config)
