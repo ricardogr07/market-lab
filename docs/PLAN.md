@@ -2,7 +2,7 @@
 
 ## Current State
 
-Phases 1 through 5 are complete.
+Phases 1 through 6 are complete.
 
 MarketLab is a public research MVP with:
 
@@ -12,6 +12,7 @@ MarketLab is a public research MVP with:
 - a Dockerized manual runner workflow
 - release automation and a batched release path
 - richer Phase 5 baseline, diagnostics, and scenario-pack coverage
+- a Phase 7 local paper-trading MVP for a configurable daily single-ETF timing loop
 
 The project now supports a small, reviewable end-to-end research workflow rather than a local-only scaffold.
 
@@ -24,6 +25,13 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab list-configs`
 - `marketlab write-config --name ... --output ...`
 - `marketlab-mcp --workspace-root ... --artifact-root ...`
+- `marketlab paper-decision --config ...`
+- `marketlab paper-status --config ...`
+- `marketlab paper-approve --config ... --proposal-id ... --decision ... --actor ...`
+- `marketlab paper-agent-approve --config ...`
+- `marketlab paper-submit --config ...`
+- `marketlab paper-scheduler --config ...`
+- `marketlab paper-report --config ... --start ... --end ...`
 
 Current workflow surface:
 
@@ -37,6 +45,8 @@ Current workflow surface:
 - lightweight sklearn comparison baseline
 - CSV, plot, and Markdown reporting artifacts
 - sandboxed config authoring, async job control, and run-artifact inspection for MCP clients
+- local file-backed paper-trading proposals, approvals, and submission state
+- local Docker Compose scheduling for the daily single-ETF paper loop
 
 ## Phase 4 Outcomes Worth Keeping
 
@@ -50,27 +60,30 @@ The most important Phase 4 outcomes were about research quality rather than head
 
 The key lesson from Phase 4 is that score quality, realized strategy outcomes, and overall research robustness are separate questions. Phase 4 improved how clearly the repo answers those questions; it did not, by itself, establish durable trading edge.
 
-## Phase 6 Direction
+## Phase 7 Direction
 
-Phase 6 should productize the current workflow for LLM-driven use through a Docker-friendly MCP server.
+Phase 7 extends the research workflow into a narrow paper-only execution loop for a configurable daily single-ETF timing strategy.
 
 Priority direction:
 
-- keep the protocol surface tools-first and generic-client-friendly
-- make config authoring and execution safe through workspace sandboxing and confirmation gates
-- preserve the installed CLI as the execution backend so MCP behavior matches the packaged product
-- keep Docker as the deployment wrapper instead of introducing a second runtime architecture
+- keep the live-ish path intentionally narrow and paper-only
+- keep model selection explicit through tracked configs instead of auto-promoting research winners
+- preserve the CLI as the execution backend and use MCP only for proposal review and approval
+- keep the scheduler local and Dockerized instead of introducing a hosted control plane
+- keep the autonomous agent limited to approve-or-reject of the deterministic consensus proposal
 
-## Phase 6 Candidate Workstreams
+## Phase 7 Workstreams
 
-- MCP server scaffold and workspace sandboxing
-- template-driven config authoring and validation tools
-- async job planning, queued execution, and log tails
-- artifact inspection, plot retrieval, and compact run comparison
-- Docker sidecar docs and required MCP CI
+- daily one-day timing support for the single-ETF paper path
+- six-model consensus paper proposals with persisted evidence artifacts
+- autonomous approval worker with `openai`, `claude`, and deterministic fallback
+- Alpaca paper order submission, account snapshots, and order polling
+- tracked `QQQ` plus alternate `VOO` paper configs
+- month-run paper reporting against consensus, per-model paths, `buy_hold`, and `sma`
+- local Docker Compose scheduler and agent worker plus the Phase 7 operations runbook
 
 ## Deferred
 
 - stricter branch and ruleset hardening can wait
 - wiki polish remains optional
-- cron-based Docker automation is still optional and not part of the MVP
+- live-money broker support remains out of scope

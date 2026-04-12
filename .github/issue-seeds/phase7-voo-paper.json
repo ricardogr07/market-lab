@@ -1,0 +1,49 @@
+{
+  "project": {
+    "number": 3
+  },
+  "labels": [
+    {
+      "name": "phase-7",
+      "color": "0052cc",
+      "description": "Phase 7 roadmap work for the configurable single-ETF paper-trading MVP."
+    },
+    {
+      "name": "track:broker",
+      "color": "d4c5f9",
+      "description": "Broker, paper-trading, and order-routing work."
+    },
+    {
+      "name": "track:ops",
+      "color": "5319e7",
+      "description": "Scheduler, deployment, and operational runbook work."
+    }
+  ],
+  "issues": [
+    {
+      "title": "Phase 7.1: autonomous single-ETF paper loop with OpenAI and Claude backends",
+      "labels": ["phase-7", "priority:p0", "track:platform"],
+      "body": "## Summary\nAdd an unattended single-ETF paper loop that writes six-model consensus proposals, routes agent approval through either OpenAI or Claude with deterministic fallback, and reports one-month paper outcomes against baselines.\n\n## Scope\n- keep the paper loop configurable for any single ETF\n- tracked unattended-month config uses `QQQ`\n- ship `VOO` as a first-class alternate config\n- replace the pinned single-model proposal with a deterministic `4-of-6` consensus proposal\n- add an autonomous agent worker that can use `openai` or `claude`\n- keep `deterministic_consensus` as the required fallback backend\n- add month-run paper reporting against `buy_hold`, `sma`, each model path, and the consensus path\n\n## Non-goals\n- no live-money broker support\n- no multi-symbol execution\n- no freeform LLM trade generation\n- no web UI\n"
+    },
+    {
+      "title": "Add six-model paper decision and consensus proposal artifacts",
+      "labels": ["phase-7", "priority:p0", "track:strategy"],
+      "body": "## Scope\n- expand `paper-decision` from one model to the full six-model registry\n- persist one proposal plus one evidence artifact per trade date\n- apply a deterministic `4-of-6` long-vote rule for the executable consensus proposal\n- keep the paper path single-ETF, long-or-cash, and one-day horizon only\n\n## Depends on\n- Phase 7.1: autonomous single-ETF paper loop with OpenAI and Claude backends\n\n## Review\n- financial-expert\n- qa\n"
+    },
+    {
+      "title": "Add autonomous paper agent worker and deterministic approval backend",
+      "labels": ["phase-7", "priority:p0", "track:platform", "track:broker"],
+      "body": "## Scope\n- add `paper-agent-approve` and a long-running agent worker service\n- keep agent authority limited to approve-or-reject of the existing proposal only\n- add deterministic approval rules for malformed or inconsistent proposals\n- persist provider, model, rationale, and fallback metadata in approval artifacts\n\n## Depends on\n- Add six-model paper decision and consensus proposal artifacts\n\n## Review\n- critic\n- qa\n"
+    },
+    {
+      "title": "Add OpenAI and Claude approval backends with structured fallback",
+      "labels": ["phase-7", "priority:p0", "track:platform"],
+      "body": "## Scope\n- add `paper.agent_backend`, `paper.agent_model`, and timeout/fallback config fields\n- implement OpenAI structured-output approval decisions with the official SDK\n- implement Claude structured-output approval decisions with the official SDK\n- fall back to `deterministic_consensus` on provider timeout, API failure, or invalid output\n\n## Depends on\n- Add autonomous paper agent worker and deterministic approval backend\n\n## Review\n- critic\n- qa\n"
+    },
+    {
+      "title": "Add tracked QQQ and VOO paper configs plus month-run paper reporting",
+      "labels": ["phase-7", "priority:p1", "track:ops", "track:docs"],
+      "body": "## Scope\n- keep `configs/experiment.qqq_paper_daily.yaml` as the tracked unattended-month config\n- add `configs/experiment.voo_paper_daily.yaml` as a first-class alternate config\n- update Compose and docs for scheduler plus agent worker plus MCP sidecar\n- add `paper-report` outputs for realized paper path, consensus, each model path, `buy_hold`, and `sma`\n\n## Depends on\n- Add OpenAI and Claude approval backends with structured fallback\n\n## Review\n- critic\n- qa\n"
+    }
+  ]
+}

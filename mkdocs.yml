@@ -6,6 +6,7 @@ nav:
   - How It Works: how-it-works.md
   - Architecture: architecture.md
   - Phase 5 Scenarios: phase5-scenarios.md
+  - Phase 7 Paper Trading: paper-trading.md
   - MCP Server: mcp-server.md
   - Codex MCP: codex-mcp.md
   - VS Code Copilot MCP: mcp-vscode-copilot.md
