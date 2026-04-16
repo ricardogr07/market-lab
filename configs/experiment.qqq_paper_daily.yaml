@@ -74,6 +74,9 @@ paper:
   approval_inbox_dir: "artifacts/paper/inbox"
   state_dir: "artifacts/paper/state"
   poll_interval_seconds: 30
+  notifications:
+    telegram:
+      enabled: false
 
 artifacts:
   output_dir: "artifacts/runs"

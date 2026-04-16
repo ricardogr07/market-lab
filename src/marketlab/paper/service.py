@@ -25,6 +25,13 @@ from marketlab.paper.alpaca import (
     AlpacaMarketDataProvider,
     AlpacaPaperBrokerClient,
 )
+from marketlab.paper.notifications import (
+    TelegramTransport,
+    build_approval_message,
+    build_decision_message,
+    build_submission_message,
+    deliver_telegram_notification,
+)
 from marketlab.targets import add_forward_targets, build_rebalance_snapshots
 
 APPROVAL_PENDING = "pending"
@@ -131,10 +138,17 @@ class PaperStateStore:
         self._config = config
         self.inbox_root = config.paper_approval_inbox_dir
         self.state_root = config.paper_state_dir
+        self.notifications_root = self.state_root / "notifications"
         self.trades_root = self.state_root / "trades"
         self.reports_root = self.state_root.parent / "reports"
         self.status_path = self.state_root / "status.json"
-        for root in (self.inbox_root, self.state_root, self.trades_root, self.reports_root):
+        for root in (
+            self.inbox_root,
+            self.state_root,
+            self.notifications_root,
+            self.trades_root,
+            self.reports_root,
+        ):
             root.mkdir(parents=True, exist_ok=True)
 
     def trade_dir(self, trade_date: str) -> Path:
@@ -170,6 +184,35 @@ class PaperStateStore:
         path = self.reports_root / f"{start_date}_{end_date}"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def notification_record_path(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        now: datetime | None = None,
+    ) -> Path:
+        timestamp = _now_utc(now).strftime("%Y%m%dT%H%M%S%fZ")
+        stem = f"{timestamp}_{stage}_{outcome}".replace(" ", "_")
+        path = self.notifications_root / f"{stem}.json"
+        suffix = 1
+        while path.exists():
+            path = self.notifications_root / f"{stem}_{suffix}.json"
+            suffix += 1
+        return path
+
+    def write_notification_record(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        payload: dict[str, Any],
+        now: datetime | None = None,
+    ) -> Path:
+        return _json_dump(
+            self.notification_record_path(stage=stage, outcome=outcome, now=now),
+            payload,
+        )
 
     def write_status(self, payload: dict[str, Any]) -> Path:
         return _json_dump(self.status_path, payload)
@@ -219,6 +262,169 @@ class PaperStateStore:
         if not proposals:
             return None
         return proposals[0]
+
+
+def _write_notification_record(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    stage: str,
+    outcome: str,
+    message: str,
+    details: dict[str, Any],
+    proposal_id: str = "",
+    trade_date: str = "",
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    record = deliver_telegram_notification(
+        config,
+        stage=stage,
+        outcome=outcome,
+        message=message,
+        details=details,
+        proposal_id=proposal_id,
+        trade_date=trade_date,
+        now=now,
+        transport=transport,
+    )
+    return store.write_notification_record(
+        stage=stage,
+        outcome=outcome,
+        payload=record,
+        now=now,
+    )
+
+
+def _notify_paper_decision(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    outcome: str,
+    status: dict[str, Any],
+    proposal: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    details: dict[str, Any] = {
+        "experiment_name": config.experiment_name,
+        "market_date": status.get("market_date"),
+        "latest_signal_date": status.get("latest_signal_date"),
+        "reason": status.get("reason"),
+    }
+    if proposal is not None:
+        details.update(
+            {
+                "symbol": proposal.get("symbol"),
+                "signal_date": proposal.get("signal_date"),
+                "effective_date": proposal.get("effective_date"),
+                "decision": proposal.get("decision"),
+                "target_weight": proposal.get("target_weight"),
+                "long_vote_count": proposal.get("long_vote_count"),
+                "cash_vote_count": proposal.get("cash_vote_count"),
+                "threshold": config.paper.consensus_min_long_votes,
+                "reference_price": proposal.get("reference_price"),
+            }
+        )
+    return _write_notification_record(
+        config,
+        store,
+        stage="paper-decision",
+        outcome=outcome,
+        message=build_decision_message(
+            config,
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+        ),
+        details=details,
+        proposal_id=(proposal or {}).get("proposal_id", ""),
+        trade_date=(proposal or {}).get("effective_date", ""),
+        now=now,
+        transport=transport,
+    )
+
+
+def _notify_paper_approval(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    proposal: dict[str, Any],
+    approval_record: dict[str, Any],
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    outcome = str(approval_record["approval_status"])
+    details = {
+        "experiment_name": config.experiment_name,
+        "symbol": proposal.get("symbol"),
+        "signal_date": proposal.get("signal_date"),
+        "effective_date": proposal.get("effective_date"),
+        "actor": approval_record.get("actor"),
+        "provider": approval_record.get("provider"),
+        "model": approval_record.get("model"),
+        "fallback_used": approval_record.get("fallback_used", False),
+        "fallback_reason": approval_record.get("fallback_reason"),
+        "rationale": approval_record.get("rationale"),
+    }
+    return _write_notification_record(
+        config,
+        store,
+        stage="paper-approve",
+        outcome=outcome,
+        message=build_approval_message(
+            config,
+            proposal=proposal,
+            approval=approval_record,
+        ),
+        details=details,
+        proposal_id=str(proposal["proposal_id"]),
+        trade_date=str(proposal["effective_date"]),
+        now=now,
+        transport=transport,
+    )
+
+
+def _notify_paper_submission(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    outcome: str,
+    status: dict[str, Any],
+    proposal: dict[str, Any] | None = None,
+    submission: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    details = {
+        "experiment_name": config.experiment_name,
+        "symbol": (proposal or {}).get("symbol"),
+        "signal_date": (proposal or {}).get("signal_date"),
+        "effective_date": (proposal or {}).get("effective_date"),
+        "reason": (submission or {}).get("reason") or status.get("reason"),
+        "side": (submission or {}).get("side"),
+        "qty": (submission or {}).get("qty"),
+        "order_id": (submission or {}).get("order_id"),
+        "order_status": (submission or {}).get("order_status"),
+    }
+    return _write_notification_record(
+        config,
+        store,
+        stage="paper-submit",
+        outcome=outcome,
+        message=build_submission_message(
+            config,
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+            submission=submission,
+        ),
+        details=details,
+        proposal_id=str((proposal or {}).get("proposal_id") or (submission or {}).get("proposal_id") or ""),
+        trade_date=str((submission or {}).get("trade_date") or (proposal or {}).get("effective_date") or ""),
+        now=now,
+        transport=transport,
+    )
 
 
 def _build_alpaca_panel(
@@ -382,6 +588,7 @@ def run_paper_decision(
     now: datetime | None = None,
     provider: AlpacaMarketDataProvider | None = None,
     broker: AlpacaPaperBrokerClient | None = None,
+    notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
     paper_symbol = _paper_symbol(config)
@@ -399,6 +606,14 @@ def run_paper_decision(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_decision(
+            config,
+            store,
+            outcome="non_trading_day",
+            status=status,
+            now=now,
+            transport=notification_transport,
+        )
         return {"status_path": str(status_path), "status": status}
 
     panel = _build_alpaca_panel(config, provider=provider)
@@ -421,6 +636,14 @@ def run_paper_decision(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_decision(
+            config,
+            store,
+            outcome="stale_signal_date",
+            status=status,
+            now=now,
+            transport=notification_transport,
+        )
         return {"status_path": str(status_path), "status": status}
 
     labeled_dataset = add_forward_targets(
@@ -463,6 +686,15 @@ def run_paper_decision(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_decision(
+            config,
+            store,
+            outcome="existing_proposal",
+            status=status,
+            proposal=existing,
+            now=now,
+            transport=notification_transport,
+        )
         return {
             "proposal_id": proposal_id,
             "proposal_path": str(store.inbox_proposal_path(proposal_id)),
@@ -553,6 +785,15 @@ def run_paper_decision(
         "updated_at": _now_utc(now).isoformat(),
     }
     status_path = store.write_status(status)
+    _notify_paper_decision(
+        config,
+        store,
+        outcome="proposal_created",
+        status=status,
+        proposal=proposal,
+        now=now,
+        transport=notification_transport,
+    )
     return {
         "proposal_id": proposal_id,
         "proposal_path": str(proposal_path),
@@ -599,6 +840,7 @@ def decide_paper_proposal(
     fallback_used: bool = False,
     fallback_reason: str | None = None,
     now: datetime | None = None,
+    notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
     if decision not in {"approve", "reject"}:
@@ -665,6 +907,14 @@ def decide_paper_proposal(
         "updated_at": approval_timestamp,
     }
     status_path = store.write_status(status)
+    _notify_paper_approval(
+        config,
+        store,
+        proposal=proposal,
+        approval_record=approval_record,
+        now=now,
+        transport=notification_transport,
+    )
     return {
         "proposal_id": proposal_id,
         "proposal_path": str(proposal_path),
@@ -698,6 +948,7 @@ def run_paper_submit(
     *,
     now: datetime | None = None,
     broker: AlpacaPaperBrokerClient | None = None,
+    notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
     paper_symbol = _paper_symbol(config)
@@ -711,6 +962,14 @@ def run_paper_submit(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_submission(
+            config,
+            store,
+            outcome=SUBMISSION_SKIPPED,
+            status=status,
+            now=now,
+            transport=notification_transport,
+        )
         return {"status_path": str(status_path), "status": status}
 
     local_now = _local_now(config, now)
@@ -733,6 +992,16 @@ def run_paper_submit(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_submission(
+            config,
+            store,
+            outcome="existing_submission",
+            status=status,
+            proposal=proposal,
+            submission=submission,
+            now=now,
+            transport=notification_transport,
+        )
         return {
             "submission_path": str(submission_path),
             "status_path": str(status_path),
@@ -760,6 +1029,16 @@ def run_paper_submit(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_submission(
+            config,
+            store,
+            outcome=gate_status,
+            status=status,
+            proposal=proposal,
+            submission=submission,
+            now=now,
+            transport=notification_transport,
+        )
         return {
             "submission_path": str(submission_path),
             "status_path": str(status_path),
@@ -811,6 +1090,16 @@ def run_paper_submit(
             "updated_at": _now_utc(now).isoformat(),
         }
         status_path = store.write_status(status)
+        _notify_paper_submission(
+            config,
+            store,
+            outcome=SUBMISSION_NOOP,
+            status=status,
+            proposal=proposal,
+            submission=submission,
+            now=now,
+            transport=notification_transport,
+        )
         return {
             "submission_path": str(submission_path),
             "status_path": str(status_path),
@@ -842,6 +1131,8 @@ def run_paper_submit(
         "proposal_id": proposal["proposal_id"],
         "trade_date": trade_date,
         "status": SUBMISSION_SUBMITTED,
+        "side": side,
+        "qty": abs(delta_qty),
         "order_id": order["id"],
         "client_order_id": order.get("client_order_id", client_order_id),
         "order_status": order_status.get("status", order.get("status", "unknown")),
@@ -860,6 +1151,16 @@ def run_paper_submit(
         "updated_at": _now_utc(now).isoformat(),
     }
     status_path = store.write_status(status)
+    _notify_paper_submission(
+        config,
+        store,
+        outcome=SUBMISSION_SUBMITTED,
+        status=status,
+        proposal=proposal,
+        submission=submission,
+        now=now,
+        transport=notification_transport,
+    )
     return {
         "submission_path": str(submission_path),
         "status_path": str(status_path),

@@ -161,6 +161,16 @@ class ArtifactsConfig:
 
 
 @dataclass(slots=True)
+class TelegramNotificationsConfig:
+    enabled: bool = False
+
+
+@dataclass(slots=True)
+class PaperNotificationsConfig:
+    telegram: TelegramNotificationsConfig = field(default_factory=TelegramNotificationsConfig)
+
+
+@dataclass(slots=True)
 class PaperConfig:
     enabled: bool = False
     data_provider: str = "alpaca"
@@ -179,6 +189,7 @@ class PaperConfig:
     approval_inbox_dir: str = "artifacts/paper/inbox"
     state_dir: str = "artifacts/paper/state"
     poll_interval_seconds: int = 30
+    notifications: PaperNotificationsConfig = field(default_factory=PaperNotificationsConfig)
 
 
 @dataclass(slots=True)
@@ -575,6 +586,9 @@ def _validate_config(config: ExperimentConfig) -> None:
 def load_config(path: str | Path) -> ExperimentConfig:
     config_path = Path(path).resolve()
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    paper_payload = payload.get("paper") or {}
+    paper_notifications_payload = paper_payload.get("notifications") or {}
+    paper_defaults = PaperConfig()
 
     config = ExperimentConfig(
         experiment_name=payload.get("experiment_name", "weekly_rank_v1"),
@@ -621,7 +635,52 @@ def load_config(path: str | Path) -> ExperimentConfig:
             factor_model_path=(payload.get("evaluation") or {}).get("factor_model_path", ""),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
-        paper=_section(PaperConfig, payload.get("paper")),
+        paper=PaperConfig(
+            enabled=paper_payload.get("enabled", paper_defaults.enabled),
+            data_provider=paper_payload.get("data_provider", paper_defaults.data_provider),
+            broker=paper_payload.get("broker", paper_defaults.broker),
+            execution_mode=paper_payload.get("execution_mode", paper_defaults.execution_mode),
+            agent_backend=paper_payload.get("agent_backend", paper_defaults.agent_backend),
+            agent_model=paper_payload.get("agent_model", paper_defaults.agent_model),
+            agent_timeout_seconds=paper_payload.get(
+                "agent_timeout_seconds",
+                paper_defaults.agent_timeout_seconds,
+            ),
+            agent_fallback_backend=paper_payload.get(
+                "agent_fallback_backend",
+                paper_defaults.agent_fallback_backend,
+            ),
+            consensus_min_long_votes=paper_payload.get(
+                "consensus_min_long_votes",
+                paper_defaults.consensus_min_long_votes,
+            ),
+            schedule_timezone=paper_payload.get(
+                "schedule_timezone",
+                paper_defaults.schedule_timezone,
+            ),
+            decision_time=paper_payload.get("decision_time", paper_defaults.decision_time),
+            submission_time=paper_payload.get("submission_time", paper_defaults.submission_time),
+            order_type=paper_payload.get("order_type", paper_defaults.order_type),
+            position_sizing=paper_payload.get(
+                "position_sizing",
+                paper_defaults.position_sizing,
+            ),
+            approval_inbox_dir=paper_payload.get(
+                "approval_inbox_dir",
+                paper_defaults.approval_inbox_dir,
+            ),
+            state_dir=paper_payload.get("state_dir", paper_defaults.state_dir),
+            poll_interval_seconds=paper_payload.get(
+                "poll_interval_seconds",
+                paper_defaults.poll_interval_seconds,
+            ),
+            notifications=PaperNotificationsConfig(
+                telegram=_section(
+                    TelegramNotificationsConfig,
+                    paper_notifications_payload.get("telegram"),
+                )
+            ),
+        ),
         base_dir=_config_base_dir(config_path),
     )
     _normalize_mapping_sections(config)

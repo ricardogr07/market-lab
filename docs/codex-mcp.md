@@ -64,6 +64,8 @@ The example defines four servers:
 
 Use `marketlab` for normal cached-panel or cached-raw workflows. Use `marketlab_paper` when you want MCP to inspect the same proposal, approval, and submission state that the paper scheduler and agent containers are writing under `/app/repo/artifacts`.
 
+If the paper config enables `paper.notifications.telegram.enabled`, the paper compose stack also needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. `marketlab-paper-mcp` needs the same env because MCP approvals call the shared paper approval service and should emit the same notification side effects as the CLI and agent worker.
+
 ## Sample Config Contract
 
 The checked-in example uses Codex `config.toml` `mcp_servers` entries with the same Docker foreground stdio rule for both container shapes:
