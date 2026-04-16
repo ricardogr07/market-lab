@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from tests._paper_fakes import (
     FakeAlpacaProvider,
     write_phase7_paper_config,
 )
+from tests._telegram_fakes import FakeTelegramServer
 from tests.integration._cli_harness import build_synthetic_panel, write_raw_symbol_cache
 
 from marketlab.config import load_config
@@ -203,6 +205,7 @@ async def test_mcp_server_supports_config_generation_run_execution_and_artifact_
 
 @pytest.mark.anyio
 async def test_mcp_server_supports_paper_proposal_listing_reading_and_agent_approval(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -210,92 +213,104 @@ async def test_mcp_server_supports_paper_proposal_listing_reading_and_agent_appr
     workspace.mkdir(parents=True)
     artifact_root.mkdir(parents=True)
 
-    config_path = write_phase7_paper_config(
-        workspace / "configs" / "phase7_paper.yaml",
-        execution_mode="agent_approval",
-    )
-    config = load_config(config_path)
-    decision = run_paper_decision(
-        config,
-        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
-        provider=FakeAlpacaProvider(),
-        broker=FakeAlpacaBroker(),
-    )
-    proposal_id = decision["proposal_id"]
+    with FakeTelegramServer() as telegram_server:
+        config_path = write_phase7_paper_config(
+            workspace / "configs" / "phase7_paper.yaml",
+            execution_mode="agent_approval",
+            telegram_enabled=True,
+        )
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+        monkeypatch.setenv("MARKETLAB_TELEGRAM_API_BASE_URL", telegram_server.base_url)
+        config = load_config(config_path)
+        decision = run_paper_decision(
+            config,
+            now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+            provider=FakeAlpacaProvider(),
+            broker=FakeAlpacaBroker(),
+        )
+        proposal_id = decision["proposal_id"]
 
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH")
-    repo_src = str(REPO_ROOT / "src")
-    env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join(
-        [repo_src, existing_pythonpath]
-    )
+        env = os.environ.copy()
+        existing_pythonpath = env.get("PYTHONPATH")
+        repo_src = str(REPO_ROOT / "src")
+        env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join(
+            [repo_src, existing_pythonpath]
+        )
 
-    server = StdioServerParameters(
-        command=sys.executable,
-        args=[
-            str(MCP_LAUNCHER),
-            "--workspace-root",
-            str(workspace),
-            "--artifact-root",
-            str(artifact_root),
-            "--repo-root",
-            str(REPO_ROOT),
-        ],
-        cwd=REPO_ROOT,
-        env=env,
-    )
+        server = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                str(MCP_LAUNCHER),
+                "--workspace-root",
+                str(workspace),
+                "--artifact-root",
+                str(artifact_root),
+                "--repo-root",
+                str(REPO_ROOT),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+        )
 
-    async with stdio_client(server) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            tool_names = sorted(tool.name for tool in tools.tools)
-            assert "marketlab_list_paper_proposals" in tool_names
-            assert "marketlab_decide_paper_proposal" in tool_names
+        async with stdio_client(server) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                tool_names = sorted(tool.name for tool in tools.tools)
+                assert "marketlab_list_paper_proposals" in tool_names
+                assert "marketlab_decide_paper_proposal" in tool_names
 
-            listed = await _call_tool(
-                session,
-                "marketlab_list_paper_proposals",
-                {"config_path": "configs/phase7_paper.yaml"},
-            )
-            assert len(listed["proposals"]) == 1
-            assert listed["proposals"][0]["proposal_id"] == proposal_id
+                listed = await _call_tool(
+                    session,
+                    "marketlab_list_paper_proposals",
+                    {"config_path": "configs/phase7_paper.yaml"},
+                )
+                assert len(listed["proposals"]) == 1
+                assert listed["proposals"][0]["proposal_id"] == proposal_id
 
-            proposal = await _call_tool(
-                session,
-                "marketlab_read_paper_proposal",
-                {
-                    "config_path": "configs/phase7_paper.yaml",
-                    "proposal_id": proposal_id,
-                },
-            )
-            assert proposal["proposal"]["approval_status"] == "pending"
+                proposal = await _call_tool(
+                    session,
+                    "marketlab_read_paper_proposal",
+                    {
+                        "config_path": "configs/phase7_paper.yaml",
+                        "proposal_id": proposal_id,
+                    },
+                )
+                assert proposal["proposal"]["approval_status"] == "pending"
 
-            status = await _call_tool(
-                session,
-                "marketlab_get_paper_status",
-                {"config_path": "configs/phase7_paper.yaml"},
-            )
-            assert status["latest_proposal"]["proposal_id"] == proposal_id
+                status = await _call_tool(
+                    session,
+                    "marketlab_get_paper_status",
+                    {"config_path": "configs/phase7_paper.yaml"},
+                )
+                assert status["latest_proposal"]["proposal_id"] == proposal_id
 
-            approved = await _call_tool(
-                session,
-                "marketlab_decide_paper_proposal",
-                {
-                    "config_path": "configs/phase7_paper.yaml",
-                    "proposal_id": proposal_id,
-                    "decision": "approve",
-                    "actor": "agent",
-                },
-            )
-            assert approved["status"]["status"] == "approved"
+                approved = await _call_tool(
+                    session,
+                    "marketlab_decide_paper_proposal",
+                    {
+                        "config_path": "configs/phase7_paper.yaml",
+                        "proposal_id": proposal_id,
+                        "decision": "approve",
+                        "actor": "agent",
+                    },
+                )
+                assert approved["status"]["status"] == "approved"
 
-            reread = await _call_tool(
-                session,
-                "marketlab_read_paper_proposal",
-                {
-                    "config_path": "configs/phase7_paper.yaml",
-                    "proposal_id": proposal_id,
-                },
-            )
-            assert reread["proposal"]["approval_status"] == "approved"
+                reread = await _call_tool(
+                    session,
+                    "marketlab_read_paper_proposal",
+                    {
+                        "config_path": "configs/phase7_paper.yaml",
+                        "proposal_id": proposal_id,
+                    },
+                )
+                assert reread["proposal"]["approval_status"] == "approved"
+
+        records = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted((workspace / "artifacts" / "paper" / "state" / "notifications").glob("*.json"))
+        ]
+        assert any(record["stage"] == "paper-approve" for record in records)
+        assert any(request.payload["text"].startswith("paper-approve") for request in telegram_server.requests)

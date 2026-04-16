@@ -14,9 +14,11 @@ from marketlab.config import (
     FeaturesConfig,
     ModelSpec,
     PaperConfig,
+    PaperNotificationsConfig,
     PortfolioConfig,
     RankingConfig,
     TargetConfig,
+    TelegramNotificationsConfig,
     WalkForwardConfig,
 )
 
@@ -59,6 +61,7 @@ def build_phase7_paper_config(
     symbol: str = "VOO",
     agent_backend: str = "deterministic_consensus",
     agent_model: str = "",
+    telegram_enabled: bool = False,
 ) -> ExperimentConfig:
     return ExperimentConfig(
         experiment_name="phase7_paper_fixture",
@@ -117,6 +120,9 @@ def build_phase7_paper_config(
             poll_interval_seconds=1,
             approval_inbox_dir="artifacts/paper/inbox",
             state_dir="artifacts/paper/state",
+            notifications=PaperNotificationsConfig(
+                telegram=TelegramNotificationsConfig(enabled=telegram_enabled)
+            ),
         ),
     )
 
@@ -218,6 +224,7 @@ def write_phase7_paper_config(
     symbol: str = "VOO",
     agent_backend: str = "deterministic_consensus",
     agent_model: str = "",
+    telegram_enabled: bool = False,
 ) -> Path:
     payload = {
         "experiment_name": "phase7_paper_fixture",
@@ -288,6 +295,11 @@ def write_phase7_paper_config(
             "approval_inbox_dir": "artifacts/paper/inbox",
             "state_dir": "artifacts/paper/state",
             "poll_interval_seconds": 1,
+            "notifications": {
+                "telegram": {
+                    "enabled": telegram_enabled,
+                }
+            },
         },
         "artifacts": {
             "output_dir": "artifacts/runs",
