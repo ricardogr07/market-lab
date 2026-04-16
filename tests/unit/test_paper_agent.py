@@ -176,6 +176,64 @@ def test_agent_worker_falls_back_to_deterministic_consensus(monkeypatch, tmp_pat
     assert "fallback_reason: openai backend failed" in calls[0]["payload"]["text"]
 
 
+def test_agent_worker_overrides_primary_rejection_when_evidence_requires_approval(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        agent_backend="claude",
+        agent_model="claude-sonnet-4-5",
+    )
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="VOO"),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                content=[
+                    types.SimpleNamespace(
+                        text=(
+                            '{"decision":"reject","rationale":"The proposal does not meet '
+                            'the threshold."}'
+                        )
+                    )
+                ]
+            )
+
+    class FakeAnthropicClient:
+        def __init__(self, api_key: str, timeout: int) -> None:
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropicClient),
+    )
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    proposal = PaperStateStore(config).latest_proposal()
+    assert result["processed_count"] == 1
+    assert proposal is not None
+    assert proposal["approval_status"] == "approved"
+    assert proposal["approval_backend"] == "deterministic_consensus"
+    assert proposal["approval_model"] == "deterministic_consensus"
+    assert proposal["approval_fallback_used"] is True
+    assert "claude backend returned 'reject'" in proposal["approval_fallback_reason"]
+    assert "requires 'approve'" in proposal["approval_fallback_reason"]
+
+
 def test_agent_worker_is_idempotent_after_first_approval(monkeypatch, tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
     run_paper_decision(

@@ -87,7 +87,7 @@ If approval is still missing when the submission phase runs, the trade is skippe
 - `claude`
 - `deterministic_consensus`
 
-The tracked config defaults to `openai`, but the worker always falls back to `deterministic_consensus` when:
+The tracked `QQQ` config currently uses `claude`, but the worker always falls back to `deterministic_consensus` when:
 
 - the provider key is missing
 - the provider times out

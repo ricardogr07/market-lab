@@ -61,8 +61,8 @@ paper:
   data_provider: "alpaca"
   broker: "alpaca"
   execution_mode: "agent_approval"
-  agent_backend: "openai"
-  agent_model: "gpt-4o-mini"
+  agent_backend: "claude"
+  agent_model: "claude-sonnet-4-5"
   agent_timeout_seconds: 30
   agent_fallback_backend: "deterministic_consensus"
   consensus_min_long_votes: 4
