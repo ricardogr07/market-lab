@@ -34,3 +34,38 @@ args = [
 ]
 startup_timeout_sec = 20
 tool_timeout_sec = 120
+
+[mcp_servers.marketlab_paper]
+command = "docker"
+args = [
+  "exec",
+  "-i",
+  "marketlab-paper-mcp",
+  "marketlab-mcp",
+  "--workspace-root",
+  "/app/workspace",
+  "--artifact-root",
+  "/app/repo/artifacts",
+  "--repo-root",
+  "/app/repo",
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+
+[mcp_servers.marketlab_paper_online]
+command = "docker"
+args = [
+  "exec",
+  "-i",
+  "marketlab-paper-mcp",
+  "marketlab-mcp",
+  "--workspace-root",
+  "/app/workspace",
+  "--artifact-root",
+  "/app/repo/artifacts",
+  "--repo-root",
+  "/app/repo",
+  "--allow-network",
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120

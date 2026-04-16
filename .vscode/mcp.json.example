@@ -32,6 +32,39 @@
         "/app/repo",
         "--allow-network"
       ]
+    },
+    "marketlab-paper-docker-offline": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "marketlab-paper-mcp",
+        "marketlab-mcp",
+        "--workspace-root",
+        "/app/workspace",
+        "--artifact-root",
+        "/app/repo/artifacts",
+        "--repo-root",
+        "/app/repo"
+      ]
+    },
+    "marketlab-paper-docker-online": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "marketlab-paper-mcp",
+        "marketlab-mcp",
+        "--workspace-root",
+        "/app/workspace",
+        "--artifact-root",
+        "/app/repo/artifacts",
+        "--repo-root",
+        "/app/repo",
+        "--allow-network"
+      ]
     }
   }
 }

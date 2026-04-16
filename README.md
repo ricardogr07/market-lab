@@ -509,12 +509,14 @@ The repo includes a checked-in sample:
 
 - `.vscode/mcp.json.example`
 
-Copy it to `.vscode/mcp.json`, start the MCP sidecar with `docker compose -f docker/compose.mcp.yml up -d --build`, then connect Copilot to either:
+Copy it to `.vscode/mcp.json`, then use the research or paper sidecar as needed:
 
 - `marketlab-docker-offline`
 - `marketlab-docker-online`
+- `marketlab-paper-docker-offline`
+- `marketlab-paper-docker-online`
 
-The offline entry is the default review path. The online entry adds `--allow-network` for live data downloads. For the full setup flow and manual verification checklist, see [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md).
+Start `docker compose -f docker/compose.mcp.yml up -d --build` for the research sidecar or `docker compose --env-file .env -f docker/compose.paper.yml up -d --build` for the paper-review sidecar. The research offline entry is the default review path. The paper offline entry points at `marketlab-paper-mcp` and the tracked paper artifact state under `/app/repo/artifacts`. For the full setup flow and manual verification checklist, see [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md).
 
 ## Codex MCP Setup
 
@@ -524,9 +526,9 @@ The repo includes a checked-in example snippet:
 
 - `docs/codex.config.toml.example`
 
-Copy the `mcp_servers` entries into your user-local Codex config, start the MCP sidecar with `docker compose -f docker/compose.mcp.yml up -d --build`, then start a new Codex session and verify the attachment with `/mcp`, `/debug-config`, and `marketlab_server_info`.
+Copy the `mcp_servers` entries into your user-local Codex config, then start `docker compose -f docker/compose.mcp.yml up -d --build` for the research sidecar or `docker compose --env-file .env -f docker/compose.paper.yml up -d --build` for the paper-review sidecar. After that, start a new Codex session and verify the attachment with `/mcp`, `/debug-config`, and `marketlab_server_info`.
 
-Use `marketlab` as the default offline entry. `marketlab_online` adds `--allow-network` for live data downloads. For the full setup flow and troubleshooting notes, see [docs/codex-mcp.md](docs/codex-mcp.md).
+Use `marketlab` as the default offline research entry. Use `marketlab_paper` when you want Codex to read the tracked paper proposal and submission state through `marketlab-paper-mcp`. The `_online` variants add `--allow-network` for live data downloads. For the full setup flow and troubleshooting notes, see [docs/codex-mcp.md](docs/codex-mcp.md).
 
 ## Manual Docker Runner Workflow
 
