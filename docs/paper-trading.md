@@ -176,6 +176,11 @@ docker exec -i marketlab-paper-mcp \
   --repo-root /app/repo
 ```
 
+The checked-in client samples now include paper-specific entries for this sidecar:
+
+- `docs/codex.config.toml.example`: `marketlab_paper`, `marketlab_paper_online`
+- `.vscode/mcp.json.example`: `marketlab-paper-docker-offline`, `marketlab-paper-docker-online`
+
 ## MCP Paper Tools
 
 The MCP server now also exposes a narrow paper-review surface:
