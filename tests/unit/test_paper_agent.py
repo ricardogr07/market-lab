@@ -6,6 +6,7 @@ import types
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from tests._paper_fakes import (
     FakeAlpacaBroker,
     FakeAlpacaProvider,
@@ -254,16 +255,18 @@ def test_agent_worker_loop_deduplicates_repeated_error_alerts_until_recovery(
         }
 
     monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _failing_iteration)
-    run_agent_approval_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
-    run_agent_approval_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
+    with pytest.raises(RuntimeError, match="approval backend exploded"):
+        run_agent_approval_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
+    with pytest.raises(RuntimeError, match="approval backend exploded"):
+        run_agent_approval_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
 
     monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _successful_iteration)
     run_agent_approval_loop(
@@ -273,11 +276,12 @@ def test_agent_worker_loop_deduplicates_repeated_error_alerts_until_recovery(
     )
 
     monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _failing_iteration)
-    run_agent_approval_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
+    with pytest.raises(RuntimeError, match="approval backend exploded"):
+        run_agent_approval_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
 
     records = [
         json.loads(path.read_text(encoding="utf-8"))
@@ -286,3 +290,32 @@ def test_agent_worker_loop_deduplicates_repeated_error_alerts_until_recovery(
     assert len(calls) == 2
     assert len(records) == 2
     assert all(record["stage"] == "paper-error" for record in records)
+
+
+def test_agent_worker_loop_once_propagates_iteration_failures_after_notifying(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True)
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
+
+    def _failing_iteration(*args, **kwargs):
+        raise RuntimeError("agent approval failed")
+
+    monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _failing_iteration)
+
+    with pytest.raises(RuntimeError, match="agent approval failed"):
+        run_agent_approval_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
+
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(PaperStateStore(config).notifications_root.glob("*.json"))
+    ]
+    assert len(calls) == 1
+    assert len(records) == 1
+    assert records[0]["stage"] == "paper-error"
