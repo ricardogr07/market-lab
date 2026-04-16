@@ -587,6 +587,11 @@ def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
         "approval_inbox_dir": "artifacts/paper/inbox",
         "state_dir": "artifacts/paper/state",
         "poll_interval_seconds": 15,
+        "notifications": {
+            "telegram": {
+                "enabled": True,
+            }
+        },
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -598,8 +603,43 @@ def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
     assert config.paper.agent_model == "gpt-4o-mini"
     assert config.paper.agent_timeout_seconds == 45
     assert config.paper.consensus_min_long_votes == 4
+    assert config.paper.notifications.telegram.enabled is True
     assert config.paper_approval_inbox_dir == (tmp_path / "artifacts" / "paper" / "inbox").resolve()
     assert config.paper_state_dir == (tmp_path / "artifacts" / "paper" / "state").resolve()
+
+
+def test_load_config_defaults_paper_telegram_notifications_to_disabled(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["VOO"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["target"] = {"horizon_days": 1, "type": "direction"}
+    payload["portfolio"] = {
+        "ranking": {
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "D",
+            "mode": "long_only",
+        }
+    }
+    payload["models"] = [
+        {"name": "logistic_regression"},
+        {"name": "logistic_l1"},
+        {"name": "random_forest"},
+        {"name": "extra_trees"},
+        {"name": "gradient_boosting"},
+        {"name": "hist_gradient_boosting"},
+    ]
+    payload["paper"] = {
+        "enabled": True,
+        "execution_mode": "agent_approval",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.paper.notifications.telegram.enabled is False
 
 
 def test_load_config_rejects_unknown_paper_agent_backend(tmp_path: Path) -> None:

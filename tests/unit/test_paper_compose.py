@@ -16,3 +16,8 @@ def test_paper_compose_includes_scheduler_agent_and_mcp_sidecar() -> None:
     assert "..:/app/repo:ro" in compose_text
     assert "OPENAI_API_KEY" in compose_text
     assert "ANTHROPIC_API_KEY" in compose_text
+    assert "TELEGRAM_BOT_TOKEN" in compose_text
+    assert "TELEGRAM_CHAT_ID" in compose_text
+    assert 'container_name: marketlab-paper-mcp' in compose_text
+    assert compose_text.count("TELEGRAM_BOT_TOKEN") == 6
+    assert compose_text.count("TELEGRAM_CHAT_ID") == 6

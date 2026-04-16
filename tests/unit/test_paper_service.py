@@ -21,16 +21,50 @@ from marketlab.paper.service import (
 )
 
 
-def test_run_paper_decision_writes_latest_daily_proposal(tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
+def _capture_transport(calls: list[dict[str, object]]):
+    def _transport(url: str, payload: dict[str, object], timeout_seconds: int) -> tuple[int, str]:
+        calls.append(
+            {
+                "url": url,
+                "payload": payload,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return 200, '{"ok": true, "result": {"message_id": 1}}'
+
+    return _transport
+
+
+def _notification_records(config) -> list[dict[str, object]]:
+    store = PaperStateStore(config)
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(store.notifications_root.glob("*.json"))
+    ]
+
+
+def _configure_notification_env(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+
+def test_run_paper_decision_writes_latest_daily_proposal(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=True,
+    )
     provider = FakeAlpacaProvider(symbol="VOO")
     broker = FakeAlpacaBroker(symbol="VOO")
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
 
     result = run_paper_decision(
         config,
         now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
         provider=provider,
         broker=broker,
+        notification_transport=_capture_transport(calls),
     )
 
     proposal_path = Path(result["proposal_path"])
@@ -48,6 +82,11 @@ def test_run_paper_decision_writes_latest_daily_proposal(tmp_path: Path) -> None
     assert proposal["train_rows"] >= 200
     assert len(evidence["models"]) == 6
     assert evidence["decision"] == proposal["decision"]
+    assert len(calls) == 1
+    assert calls[0]["payload"]["text"].startswith("paper-decision")
+    records = _notification_records(config)
+    assert records[-1]["stage"] == "paper-decision"
+    assert records[-1]["outcome"] == "proposal_created"
 
 
 def test_run_paper_decision_supports_configured_single_symbol(tmp_path: Path) -> None:
@@ -96,14 +135,20 @@ def test_run_paper_decision_rejects_empty_symbol_config(tmp_path: Path) -> None:
         )
 
 
-def test_decide_paper_proposal_records_agent_approval(tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
+def test_decide_paper_proposal_records_agent_approval(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=True,
+    )
     proposal_result = run_paper_decision(
         config,
         now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
         provider=FakeAlpacaProvider(symbol="VOO"),
         broker=FakeAlpacaBroker(symbol="VOO"),
     )
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
 
     decision_result = decide_paper_proposal(
         config,
@@ -111,6 +156,7 @@ def test_decide_paper_proposal_records_agent_approval(tmp_path: Path) -> None:
         decision="approve",
         actor="agent",
         now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+        notification_transport=_capture_transport(calls),
     )
 
     approval_path = Path(decision_result["approval_path"])
@@ -121,21 +167,33 @@ def test_decide_paper_proposal_records_agent_approval(tmp_path: Path) -> None:
     assert approval["actor"] == "agent"
     assert proposal["approval_status"] == "approved"
     assert proposal["approval_actor"] == "agent"
+    assert len(calls) == 1
+    assert "outcome: approved" in calls[0]["payload"]["text"]
+    records = _notification_records(config)
+    assert records[-1]["stage"] == "paper-approve"
+    assert records[-1]["outcome"] == "approved"
 
 
-def test_run_paper_submit_skips_missing_agent_approval(tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
+def test_run_paper_submit_skips_missing_agent_approval(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=True,
+    )
     proposal_result = run_paper_decision(
         config,
         now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
         provider=FakeAlpacaProvider(symbol="VOO"),
         broker=FakeAlpacaBroker(symbol="VOO"),
     )
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
 
     submission_result = run_paper_submit(
         config,
         now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
         broker=FakeAlpacaBroker(symbol="VOO"),
+        notification_transport=_capture_transport(calls),
     )
 
     submission = submission_result["submission"]
@@ -143,10 +201,19 @@ def test_run_paper_submit_skips_missing_agent_approval(tmp_path: Path) -> None:
     assert submission["proposal_id"] == proposal_result["proposal_id"]
     assert submission["status"] == "skipped"
     assert submission["reason"] == "missing_approval"
+    assert len(calls) == 1
+    assert "reason: missing_approval" in calls[0]["payload"]["text"]
+    records = _notification_records(config)
+    assert records[-1]["stage"] == "paper-submit"
+    assert records[-1]["outcome"] == "skipped"
 
 
-def test_run_paper_submit_places_fractional_order_after_agent_approval(tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
+def test_run_paper_submit_places_fractional_order_after_agent_approval(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=True,
+    )
     provider = FakeAlpacaProvider(symbol="VOO")
     broker = FakeAlpacaBroker(symbol="VOO")
     proposal_result = run_paper_decision(
@@ -162,19 +229,88 @@ def test_run_paper_submit_places_fractional_order_after_agent_approval(tmp_path:
         actor="agent",
         now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
     )
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
 
     submission_result = run_paper_submit(
         config,
         now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
         broker=broker,
+        notification_transport=_capture_transport(calls),
     )
 
     submission = submission_result["submission"]
 
     assert submission["status"] in {"submitted", "no_trade_required"}
+    assert len(calls) == 1
     if submission["status"] == "submitted":
         assert broker.submitted_orders
         assert submission["order_status"] == "accepted"
+        assert "outcome: submitted" in calls[0]["payload"]["text"]
+    else:
+        assert "outcome: no_trade_required" in calls[0]["payload"]["text"]
+
+
+def test_run_paper_decision_notifies_existing_proposal(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=True,
+    )
+    provider = FakeAlpacaProvider(symbol="VOO")
+    broker = FakeAlpacaBroker(symbol="VOO")
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=provider,
+        broker=broker,
+    )
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
+
+    result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 11, tzinfo=UTC),
+        provider=provider,
+        broker=broker,
+        notification_transport=_capture_transport(calls),
+    )
+
+    assert result["status"]["status"] == "existing_proposal"
+    assert len(calls) == 1
+    assert "outcome: existing_proposal" in calls[0]["payload"]["text"]
+
+
+def test_decide_paper_proposal_notifies_manual_rejection(monkeypatch, tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="manual_approval",
+        telegram_enabled=True,
+    )
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="VOO"),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
+
+    decision_result = decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="reject",
+        actor="manual",
+        rationale="Manual hold for review.",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+        notification_transport=_capture_transport(calls),
+    )
+
+    approval = json.loads(Path(decision_result["approval_path"]).read_text(encoding="utf-8"))
+    assert approval["approval_status"] == "rejected"
+    assert len(calls) == 1
+    assert "actor: manual" in calls[0]["payload"]["text"]
+    assert "outcome: rejected" in calls[0]["payload"]["text"]
 
 
 def test_get_paper_status_returns_latest_proposal_summary(tmp_path: Path) -> None:
