@@ -601,12 +601,14 @@ def run_agent_approval_loop(
     notification_transport: TelegramTransport | None = None,
 ) -> None:
     while True:
+        loop_error: Exception | None = None
         try:
             summary = run_agent_approval_iteration(
                 config,
                 notification_transport=notification_transport,
             )
         except Exception as exc:
+            loop_error = exc
             state = _load_worker_state(config)
             notification_path = _notify_worker_error(
                 config,
@@ -628,5 +630,7 @@ def run_agent_approval_loop(
             }
         print(json.dumps(summary, indent=2, sort_keys=True))
         if once:
+            if loop_error is not None:
+                raise loop_error
             return
         time.sleep(config.paper.poll_interval_seconds)

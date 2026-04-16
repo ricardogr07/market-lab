@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from tests._paper_fakes import build_phase7_paper_config
 
 from marketlab.paper import scheduler
@@ -83,16 +84,18 @@ def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
         }
 
     monkeypatch.setattr(scheduler, "run_scheduler_iteration", _failing_iteration)
-    scheduler.run_scheduler_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
-    scheduler.run_scheduler_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
+    with pytest.raises(RuntimeError, match="decision phase failed"):
+        scheduler.run_scheduler_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
+    with pytest.raises(RuntimeError, match="decision phase failed"):
+        scheduler.run_scheduler_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
 
     monkeypatch.setattr(scheduler, "run_scheduler_iteration", _successful_iteration)
     scheduler.run_scheduler_loop(
@@ -102,11 +105,12 @@ def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
     )
 
     monkeypatch.setattr(scheduler, "run_scheduler_iteration", _failing_iteration)
-    scheduler.run_scheduler_loop(
-        config,
-        once=True,
-        notification_transport=_capture_transport(calls),
-    )
+    with pytest.raises(RuntimeError, match="decision phase failed"):
+        scheduler.run_scheduler_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
 
     records = [
         json.loads(path.read_text(encoding="utf-8"))
@@ -115,3 +119,32 @@ def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
     assert len(calls) == 2
     assert len(records) == 2
     assert all(record["stage"] == "paper-error" for record in records)
+
+
+def test_scheduler_loop_once_propagates_iteration_failures_after_notifying(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True)
+    calls: list[dict[str, object]] = []
+    _configure_notification_env(monkeypatch)
+
+    def _failing_iteration(*args, **kwargs):
+        raise RuntimeError("submit phase failed")
+
+    monkeypatch.setattr(scheduler, "run_scheduler_iteration", _failing_iteration)
+
+    with pytest.raises(RuntimeError, match="submit phase failed"):
+        scheduler.run_scheduler_loop(
+            config,
+            once=True,
+            notification_transport=_capture_transport(calls),
+        )
+
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((config.paper_state_dir / "notifications").glob("*.json"))
+    ]
+    assert len(calls) == 1
+    assert len(records) == 1
+    assert records[0]["stage"] == "paper-error"
