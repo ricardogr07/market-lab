@@ -11,6 +11,8 @@ Phase 7 adds a local, paper-only execution loop around a configurable single-ETF
 
 This is still a paper-trading MVP. It is not a live-money workflow. The tracked unattended-month config uses `QQQ`, and `VOO` ships as the first alternate comparison config.
 
+The tracked `QQQ` config is launch-ready for the unattended local month run, including Telegram notifications. The alternate `VOO` config keeps the same paper shape but leaves Telegram explicit and disabled.
+
 ## Tracked Config
 
 The tracked Phase 7 config is:
@@ -38,7 +40,8 @@ It pins the current paper path to:
 - default execution mode: `agent_approval`
 - default provider backend in the tracked config: `openai`
 - required fallback backend: `deterministic_consensus`
-- optional Telegram ops feed: `paper.notifications.telegram.enabled`
+- tracked `QQQ` config default: `paper.notifications.telegram.enabled: true`
+- alternate `VOO` config default: `paper.notifications.telegram.enabled: false`
 
 The paper path intentionally does not auto-pick the latest research winner at runtime. If the model set, threshold, or provider backend changes, do that by changing the tracked config and reviewing the research outcome first.
 
@@ -141,7 +144,7 @@ The paper broker path rejects non-paper trading endpoints at runtime unless the 
 
 ## Telegram Ops Feed
 
-Telegram notifications are opt-in and stay out of YAML credentials. Enable them in the paper config:
+Telegram credentials stay out of YAML. The tracked `QQQ` config already enables the ops feed, and the alternate `VOO` config leaves it explicit but disabled. To enable it in another paper config:
 
 ```yaml
 paper:
