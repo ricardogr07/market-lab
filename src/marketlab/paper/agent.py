@@ -180,8 +180,12 @@ def _approval_policy_prompt() -> str:
     return (
         "Review the attached paper-trading proposal evidence and decide whether to "
         "approve or reject the existing proposal. You may only approve or reject the "
-        "proposal as written. Do not invent a different trade, symbol, quantity, side, "
-        "target weight, threshold, or date. Return only the required structured output."
+        "proposal as written. The consensus rule has already been applied by the system. "
+        "If the persisted proposal and evidence are internally consistent for the same "
+        "trade, approve it. Reject only when the persisted proposal or evidence is "
+        "malformed, inconsistent, or refers to a different trade. Do not invent a "
+        "different trade, symbol, quantity, side, target weight, threshold, or date. "
+        "Return only the required structured output."
     )
 
 
@@ -263,6 +267,43 @@ class DeterministicConsensusBackend(AgentBackend):
             provider=self.provider_name,
             model=self.provider_name,
         )
+
+
+def _guardrail_primary_decision(
+    *,
+    config: ExperimentConfig,
+    requested_backend: str,
+    proposal: dict[str, Any],
+    evidence: dict[str, Any],
+    status: dict[str, Any] | None,
+    account_context: dict[str, Any],
+    primary_result: AgentDecision,
+) -> AgentDecision:
+    if requested_backend == "deterministic_consensus":
+        return primary_result
+
+    deterministic_result = DeterministicConsensusBackend().evaluate(
+        config=config,
+        proposal=proposal,
+        evidence=evidence,
+        status=status,
+        account_context=account_context,
+    )
+    if primary_result.decision == deterministic_result.decision:
+        return primary_result
+
+    return AgentDecision(
+        decision=deterministic_result.decision,
+        rationale=deterministic_result.rationale,
+        provider=deterministic_result.provider,
+        model=deterministic_result.model,
+        fallback_used=True,
+        fallback_reason=(
+            f"{requested_backend} backend returned {primary_result.decision!r}, but "
+            f"deterministic_consensus requires {deterministic_result.decision!r} for "
+            "the persisted proposal evidence."
+        ),
+    )
 
 
 def _extract_openai_text(response: Any) -> str:
@@ -426,12 +467,21 @@ def _evaluate_with_fallback(
     requested_backend = config.paper.agent_backend
     primary = _build_backend(config, requested_backend)
     try:
-        return primary.evaluate(
+        primary_result = primary.evaluate(
             config=config,
             proposal=proposal,
             evidence=evidence,
             status=status,
             account_context=account_context,
+        )
+        return _guardrail_primary_decision(
+            config=config,
+            requested_backend=requested_backend,
+            proposal=proposal,
+            evidence=evidence,
+            status=status,
+            account_context=account_context,
+            primary_result=primary_result,
         )
     except Exception as exc:
         fallback_backend_name = config.paper.agent_fallback_backend
