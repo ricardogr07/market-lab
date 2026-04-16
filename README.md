@@ -532,7 +532,7 @@ Copy the `mcp_servers` entries into your user-local Codex config, then start `do
 
 Use `marketlab` as the default offline research entry. Use `marketlab_paper` when you want Codex to read the tracked paper proposal and submission state through `marketlab-paper-mcp`. The `_online` variants add `--allow-network` for live data downloads. For the full setup flow and troubleshooting notes, see [docs/codex-mcp.md](docs/codex-mcp.md).
 
-The paper flow now also supports an opt-in Telegram ops feed. Enable `paper.notifications.telegram.enabled: true` in the paper config and set `TELEGRAM_BOT_TOKEN` plus `TELEGRAM_CHAT_ID` in `.env`. Notification audit records are written under `artifacts/paper/state/notifications/`.
+The paper flow now also supports a Telegram ops feed. The tracked `QQQ` paper config enables it by default, while the alternate `VOO` config keeps it explicit but disabled. Keep `TELEGRAM_BOT_TOKEN` plus `TELEGRAM_CHAT_ID` in `.env`. Notification audit records are written under `artifacts/paper/state/notifications/`.
 
 ## Manual Docker Runner Workflow
 

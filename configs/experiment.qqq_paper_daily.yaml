@@ -76,7 +76,7 @@ paper:
   poll_interval_seconds: 30
   notifications:
     telegram:
-      enabled: false
+      enabled: true
 
 artifacts:
   output_dir: "artifacts/runs"
