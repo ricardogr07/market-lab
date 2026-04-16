@@ -518,6 +518,8 @@ Copy it to `.vscode/mcp.json`, then use the research or paper sidecar as needed:
 
 Start `docker compose -f docker/compose.mcp.yml up -d --build` for the research sidecar or `docker compose --env-file .env -f docker/compose.paper.yml up -d --build` for the paper-review sidecar. The research offline entry is the default review path. The paper offline entry points at `marketlab-paper-mcp` and the tracked paper artifact state under `/app/repo/artifacts`. For the full setup flow and manual verification checklist, see [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md).
 
+If you enable `paper.notifications.telegram.enabled`, keep `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` before starting the paper stack. The paper scheduler, paper agent, and paper MCP sidecar all need those vars because MCP approvals use the same shared approval service.
+
 ## Codex MCP Setup
 
 Codex reads MCP server definitions from user-local `~/.codex/config.toml`.
@@ -529,6 +531,8 @@ The repo includes a checked-in example snippet:
 Copy the `mcp_servers` entries into your user-local Codex config, then start `docker compose -f docker/compose.mcp.yml up -d --build` for the research sidecar or `docker compose --env-file .env -f docker/compose.paper.yml up -d --build` for the paper-review sidecar. After that, start a new Codex session and verify the attachment with `/mcp`, `/debug-config`, and `marketlab_server_info`.
 
 Use `marketlab` as the default offline research entry. Use `marketlab_paper` when you want Codex to read the tracked paper proposal and submission state through `marketlab-paper-mcp`. The `_online` variants add `--allow-network` for live data downloads. For the full setup flow and troubleshooting notes, see [docs/codex-mcp.md](docs/codex-mcp.md).
+
+The paper flow now also supports an opt-in Telegram ops feed. Enable `paper.notifications.telegram.enabled: true` in the paper config and set `TELEGRAM_BOT_TOKEN` plus `TELEGRAM_CHAT_ID` in `.env`. Notification audit records are written under `artifacts/paper/state/notifications/`.
 
 ## Manual Docker Runner Workflow
 

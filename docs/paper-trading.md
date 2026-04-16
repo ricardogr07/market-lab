@@ -38,6 +38,7 @@ It pins the current paper path to:
 - default execution mode: `agent_approval`
 - default provider backend in the tracked config: `openai`
 - required fallback backend: `deterministic_consensus`
+- optional Telegram ops feed: `paper.notifications.telegram.enabled`
 
 The paper path intentionally does not auto-pick the latest research winner at runtime. If the model set, threshold, or provider backend changes, do that by changing the tracked config and reviewing the research outcome first.
 
@@ -132,9 +133,37 @@ ALPACA_DATA_FEED="iex"
 ALPACA_TIMEOUT_SECONDS="30"
 OPENAI_API_KEY="..."
 ANTHROPIC_API_KEY="..."
+TELEGRAM_BOT_TOKEN="..."
+TELEGRAM_CHAT_ID="..."
 ```
 
 The paper broker path rejects non-paper trading endpoints at runtime unless the base URL is a local test server.
+
+## Telegram Ops Feed
+
+Telegram notifications are opt-in and stay out of YAML credentials. Enable them in the paper config:
+
+```yaml
+paper:
+  notifications:
+    telegram:
+      enabled: true
+```
+
+When enabled, the shared paper service layer sends one plain-text Telegram message per event for:
+
+- `paper-decision`: `proposal_created`, `existing_proposal`, `non_trading_day`, `stale_signal_date`
+- `paper-approve`: `approved`, `rejected`
+- `paper-submit`: `submitted`, `no_trade_required`, `skipped`, `existing_submission`
+- `paper-error`: uncaught scheduler or agent-loop failures, deduplicated until the next successful iteration
+
+Notifications are advisory only. Paper decision, approval, and submit still complete even if Telegram delivery fails or credentials are missing.
+
+Every notification attempt is also persisted under:
+
+- `artifacts/paper/state/notifications/*.json`
+
+These audit records include the stage, outcome, message body, delivery result, and any delivery error. They do not replace the proposal, approval, or submission state files.
 
 ## Docker Compose Loop
 
@@ -166,6 +195,8 @@ The scheduler uses the tracked repo config at `/app/repo/configs/experiment.qqq_
 
 The agent worker uses the same tracked config and artifact mount, so the approval loop and the scheduler see the same proposal, approval, and submission state.
 
+If `paper.notifications.telegram.enabled` is true, all three paper containers need the Telegram env vars because notifications can be emitted from the scheduler, the agent worker, and MCP-driven approvals.
+
 The matching MCP sidecar should be launched with the same artifact root so it sees the same proposal and submission files:
 
 ```bash
@@ -191,6 +222,8 @@ The MCP server now also exposes a narrow paper-review surface:
 - `marketlab_decide_paper_proposal`
 
 These tools intentionally stop at review and approval. Order submission still happens through the CLI-backed scheduler path.
+
+There is no separate Telegram MCP tool. `marketlab_decide_paper_proposal` uses the same shared paper approval service, so MCP approvals trigger the same Telegram notification and audit artifact behavior as CLI or agent approvals.
 
 ## Fixed Defaults
 

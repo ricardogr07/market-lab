@@ -68,6 +68,8 @@ The sample defines four servers:
 
 Use `marketlab-docker-offline` for normal cached-panel or cached-raw workflows. Use `marketlab-paper-docker-offline` when you want Copilot to inspect the same proposal, approval, and submission state that the paper scheduler and agent containers are writing under `/app/repo/artifacts`.
 
+If the paper config enables `paper.notifications.telegram.enabled`, the paper compose stack also needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. `marketlab-paper-mcp` needs the same env because MCP approvals use the shared paper approval service and should emit the same notification side effects as the CLI and agent worker.
+
 ## Sample Config Contract
 
 The checked-in sample uses the current VS Code `mcp.json` workspace format and the Docker foreground stdio rule for both container shapes:
