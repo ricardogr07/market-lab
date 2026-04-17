@@ -44,6 +44,7 @@ SUBMISSION_NOOP = "no_trade_required"
 SUBMISSION_SKIPPED = "skipped"
 CONSENSUS_POLICY = "consensus_vote"
 TERMINAL_ORDER_STATUSES = {"canceled", "expired", "filled", "rejected"}
+FAILED_ORDER_STATUSES = {"canceled", "expired", "rejected"}
 BUY_NOTIONAL_BUFFER_RATIO = 0.99
 
 
@@ -91,8 +92,13 @@ def _safe_float(value: Any, *, default: float = 0.0) -> float:
         return default
 
 
-def _client_order_id(proposal_id: str) -> str:
-    return f"marketlab-{proposal_id}".replace("_", "-")[:48]
+def _client_order_id(proposal_id: str, *, retry_suffix: str = "") -> str:
+    base = f"marketlab-{proposal_id}".replace("_", "-")
+    if retry_suffix == "":
+        return base[:48]
+    suffix = f"-{retry_suffix}".replace("_", "-")
+    max_base_length = max(1, 48 - len(suffix))
+    return f"{base[:max_base_length]}{suffix}"
 
 
 def _position_market_value(position: dict[str, Any] | None, *, reference_price: float) -> float:
@@ -999,12 +1005,126 @@ def _poll_order_status(
     return order_status, poll_status
 
 
+def _refresh_submission_order_status(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    proposal: dict[str, Any],
+    submission: dict[str, Any],
+    broker_client: AlpacaPaperBrokerClient,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if submission.get("status") != SUBMISSION_SUBMITTED:
+        return None
+
+    order_id = str(submission.get("order_id", "")).strip()
+    if order_id == "":
+        return None
+
+    current_order_status = str(submission.get("order_status", "")).lower()
+    if current_order_status in TERMINAL_ORDER_STATUSES:
+        return None
+
+    order_status, poll_status = _poll_order_status(
+        broker_client=broker_client,
+        order_id=order_id,
+        fallback_status=current_order_status or "unknown",
+        client_order_id=str(submission.get("client_order_id", "")),
+    )
+    refreshed_order_status = str(order_status.get("status", current_order_status or "unknown")).lower()
+    current_poll_status = str(submission.get("poll_status", "")).lower()
+    if (
+        refreshed_order_status == current_order_status
+        and poll_status == current_poll_status
+        and store.trade_order_status_path(str(proposal["effective_date"])).exists()
+    ):
+        return None
+
+    trade_date = str(submission["trade_date"])
+    _json_dump(store.trade_order_status_path(trade_date), order_status)
+    refreshed_submission = dict(submission)
+    refreshed_submission["order_status"] = refreshed_order_status
+    refreshed_submission["poll_status"] = poll_status
+    refreshed_submission["order_status_path"] = str(store.trade_order_status_path(trade_date))
+    refreshed_submission["updated_at"] = _now_utc(now).isoformat()
+    _json_dump(store.trade_submission_path(trade_date), refreshed_submission)
+    status = {
+        "event": "paper-submit",
+        "status": refreshed_submission["status"],
+        "proposal_id": refreshed_submission["proposal_id"],
+        "submission_path": str(store.trade_submission_path(trade_date)),
+        "order_status": refreshed_order_status,
+        "updated_at": _now_utc(now).isoformat(),
+    }
+    store.write_status(status)
+    return refreshed_submission
+
+
+def reconcile_latest_submission_status(
+    config: ExperimentConfig,
+    *,
+    now: datetime | None = None,
+    broker: AlpacaPaperBrokerClient | None = None,
+) -> dict[str, Any] | None:
+    validate_paper_trading_config(config)
+    store = PaperStateStore(config)
+    proposal = store.latest_proposal()
+    if proposal is None:
+        return None
+
+    trade_date = str(proposal["effective_date"])
+    submission_path = store.trade_submission_path(trade_date)
+    if not submission_path.exists():
+        return None
+
+    submission = _json_load(submission_path)
+    broker_client = broker or AlpacaPaperBrokerClient()
+    refreshed_submission = _refresh_submission_order_status(
+        config,
+        store,
+        proposal=proposal,
+        submission=submission,
+        broker_client=broker_client,
+        now=now,
+    )
+    if refreshed_submission is None:
+        return None
+
+    return {
+        "proposal_id": proposal["proposal_id"],
+        "submission_path": str(submission_path),
+        "order_status_path": str(store.trade_order_status_path(trade_date)),
+        "order_status": refreshed_submission["order_status"],
+        "poll_status": refreshed_submission.get("poll_status", ""),
+    }
+
+
+def _backup_submission_attempt_artifacts(
+    store: PaperStateStore,
+    *,
+    trade_date: str,
+    now: datetime | None = None,
+) -> None:
+    timestamp = _now_utc(now).strftime("%Y%m%dT%H%M%S%fZ")
+    for path in (
+        store.trade_submission_path(trade_date),
+        store.trade_order_status_path(trade_date),
+        store.trade_order_preview_path(trade_date),
+        store.trade_account_snapshot_path(trade_date),
+    ):
+        if not path.exists():
+            continue
+        backup_path = path.with_name(f"{path.stem}.retry-backup.{timestamp}.bak")
+        path.rename(backup_path)
+
+
 def run_paper_submit(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
     broker: AlpacaPaperBrokerClient | None = None,
     notification_transport: TelegramTransport | None = None,
+    retry_failed_submission: bool = False,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
     paper_symbol = _paper_symbol(config)
@@ -1028,44 +1148,62 @@ def run_paper_submit(
         )
         return {"status_path": str(status_path), "status": status}
 
-    local_now = _local_now(config, now)
-    submission_clock = _clock_value(config.paper.submission_time)
-    if local_now.time() < submission_clock:
-        raise RuntimeError(
-            "paper-submit is only allowed at or after "
-            f"{config.paper.submission_time} {config.paper.schedule_timezone}."
-        )
-
     trade_date = proposal["effective_date"]
     submission_path = store.trade_submission_path(trade_date)
     if submission_path.exists():
         submission = _json_load(submission_path)
-        status = {
-            "event": "paper-submit",
-            "status": "existing_submission",
-            "proposal_id": proposal["proposal_id"],
-            "submission_path": str(submission_path),
-            "updated_at": _now_utc(now).isoformat(),
-        }
-        status_path = store.write_status(status)
-        _notify_paper_submission(
+        broker_client = broker or AlpacaPaperBrokerClient()
+        refreshed_submission = _refresh_submission_order_status(
             config,
             store,
-            outcome="existing_submission",
-            status=status,
             proposal=proposal,
             submission=submission,
+            broker_client=broker_client,
             now=now,
-            transport=notification_transport,
         )
-        return {
-            "submission_path": str(submission_path),
-            "status_path": str(status_path),
-            "status": status,
-            "submission": submission,
-        }
+        if refreshed_submission is not None:
+            submission = refreshed_submission
+        order_status = str(submission.get("order_status", "")).lower()
+        if not retry_failed_submission or order_status not in FAILED_ORDER_STATUSES:
+            status = {
+                "event": "paper-submit",
+                "status": "existing_submission",
+                "proposal_id": proposal["proposal_id"],
+                "submission_path": str(submission_path),
+                "order_status": submission.get("order_status", ""),
+                "updated_at": _now_utc(now).isoformat(),
+            }
+            status_path = store.write_status(status)
+            _notify_paper_submission(
+                config,
+                store,
+                outcome="existing_submission",
+                status=status,
+                proposal=proposal,
+                submission=submission,
+                now=now,
+                transport=notification_transport,
+            )
+            return {
+                "submission_path": str(submission_path),
+                "status_path": str(status_path),
+                "status": status,
+                "submission": submission,
+            }
 
-    broker_client = broker or AlpacaPaperBrokerClient()
+        _backup_submission_attempt_artifacts(store, trade_date=trade_date, now=now)
+        retry_suffix = _now_utc(now).strftime("retry%H%M%S")
+    else:
+        local_now = _local_now(config, now)
+        submission_clock = _clock_value(config.paper.submission_time)
+        if local_now.time() < submission_clock:
+            raise RuntimeError(
+                "paper-submit is only allowed at or after "
+                f"{config.paper.submission_time} {config.paper.schedule_timezone}."
+            )
+        broker_client = broker or AlpacaPaperBrokerClient()
+        retry_suffix = ""
+
     gate_status, gate_reason = _submission_gate_status(config, proposal)
     if gate_status != "ready":
         submission = {
@@ -1122,7 +1260,6 @@ def run_paper_submit(
             target_weight=target_weight,
         )
         desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
-
     delta_qty = round(desired_qty - current_qty, 6)
     side = "buy" if target_weight > 0.0 and order_notional > 0.0 else "sell"
     order_preview = {
@@ -1178,7 +1315,7 @@ def run_paper_submit(
             "submission": submission,
         }
 
-    client_order_id = _client_order_id(proposal["proposal_id"])
+    client_order_id = _client_order_id(proposal["proposal_id"], retry_suffix=retry_suffix)
     if side == "buy":
         order = broker_client.submit_notional_day_market_order(
             symbol=paper_symbol,

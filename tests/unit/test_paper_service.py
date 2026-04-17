@@ -16,6 +16,7 @@ from marketlab.paper.service import (
     decide_paper_proposal,
     get_paper_status,
     read_paper_evidence,
+    reconcile_latest_submission_status,
     run_paper_decision,
     run_paper_submit,
 )
@@ -293,6 +294,92 @@ def test_run_paper_submit_uses_notional_buy_buffer_for_long_entries(tmp_path: Pa
     assert submission["notional"] == pytest.approx(990.0)
     assert submission["qty"] is None
     assert broker.submitted_orders[-1]["notional"] == "990.00"
+
+
+def test_reconcile_latest_submission_status_refreshes_broker_rejection(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )
+
+    broker.order_status = "rejected"
+    reconciliation = reconcile_latest_submission_status(
+        config,
+        now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
+        broker=broker,
+    )
+
+    submission = json.loads(
+        (PaperStateStore(config).trade_submission_path("2026-04-13")).read_text(encoding="utf-8")
+    )
+    assert reconciliation is not None
+    assert reconciliation["order_status"] == "rejected"
+    assert submission["order_status"] == "rejected"
+
+
+def test_run_paper_submit_can_retry_failed_submission(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="rejected")
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    first_submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    broker.order_status = "accepted"
+    second_submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
+        broker=broker,
+        retry_failed_submission=True,
+    )["submission"]
+
+    trade_dir = PaperStateStore(config).trade_dir("2026-04-13")
+    assert first_submission["order_status"] == "rejected"
+    assert second_submission["order_status"] == "accepted"
+    assert second_submission["client_order_id"] != first_submission["client_order_id"]
+    assert list(trade_dir.glob("submission.retry-backup.*.bak"))
 
 
 def test_run_paper_decision_notifies_existing_proposal(monkeypatch, tmp_path: Path) -> None:

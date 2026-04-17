@@ -19,6 +19,7 @@ from marketlab.paper.service import (
     _local_now,
     _now_utc,
     _write_notification_record,
+    reconcile_latest_submission_status,
     run_paper_decision,
     run_paper_submit,
 )
@@ -171,6 +172,20 @@ def run_scheduler_iteration(
         events.append({"phase": "submission", **result})
         state["last_submission_market_date"] = market_date
         state["last_submission_at"] = _now_utc(now).isoformat()
+
+    try:
+        reconciliation = reconcile_latest_submission_status(config, now=now)
+    except Exception as exc:
+        proposal = PaperStateStore(config).latest_proposal()
+        raise PaperLoopStageError(
+            loop_name="scheduler",
+            stage="paper-submit-reconcile",
+            cause=exc,
+            proposal_id=str((proposal or {}).get("proposal_id", "")),
+            trade_date=str((proposal or {}).get("effective_date", "")),
+        ) from exc
+    if reconciliation is not None:
+        events.append({"phase": "submission_reconcile", **reconciliation})
 
     _clear_scheduler_error_state(state)
     state["last_checked_at"] = _now_utc(now).isoformat()
