@@ -44,8 +44,12 @@ def test_scheduler_iteration_runs_each_phase_once_per_market_date(
         events.append("submission")
         return {"submission_path": "submission.json", "status_path": "status.json", "status": {}}
 
+    def _fake_reconcile(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(scheduler, "run_paper_decision", _fake_decision)
     monkeypatch.setattr(scheduler, "run_paper_submit", _fake_submit)
+    monkeypatch.setattr(scheduler, "reconcile_latest_submission_status", _fake_reconcile)
 
     first = scheduler.run_scheduler_iteration(
         config,
@@ -59,6 +63,32 @@ def test_scheduler_iteration_runs_each_phase_once_per_market_date(
     assert [event["phase"] for event in first["events"]] == ["decision", "submission"]
     assert second["events"] == []
     assert events == ["decision", "submission"]
+
+
+def test_scheduler_iteration_appends_submission_reconciliation_events(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path)
+
+    monkeypatch.setattr(
+        scheduler,
+        "reconcile_latest_submission_status",
+        lambda *args, **kwargs: {
+            "proposal_id": "proposal-1",
+            "order_status": "rejected",
+            "submission_path": "submission.json",
+            "order_status_path": "order_status.json",
+            "poll_status": "observed",
+        },
+    )
+
+    result = scheduler.run_scheduler_iteration(
+        config,
+        now=datetime(2026, 4, 10, 18, 0, tzinfo=UTC),
+    )
+
+    assert [event["phase"] for event in result["events"]] == ["submission_reconcile"]
 
 
 def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
