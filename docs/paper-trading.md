@@ -65,7 +65,7 @@ Behavior:
 - `paper-status` reads the latest persisted status plus the latest proposal summary.
 - `paper-approve` records an `approve` or `reject` decision by actor `agent` or `manual`.
 - `paper-agent-approve` runs the autonomous agent worker once or in a loop. It may use `openai`, `claude`, or `deterministic_consensus`, but it may only approve or reject the existing proposal as written.
-- `paper-submit` enforces the approval mode, reconciles against the current paper position, and either submits one fractional `DAY` market order or records a skipped or no-op submission.
+- `paper-submit` enforces the approval mode, refreshes the latest broker order status when a submission already exists, reconciles against the current paper position, and either submits one buy-side notional `DAY` market order, one sell-side fractional `DAY` market order, or records a skipped or no-op submission.
 - `paper-scheduler` is the long-running local loop used by Docker Compose.
 - `paper-report` reconstructs the paper-run outcome over a chosen date range and compares the realized paper path, the consensus path, each model path, `buy_hold`, and `sma`.
 
@@ -195,6 +195,8 @@ docker compose --env-file .env -f docker/compose.paper.yml up -d --build
 ```
 
 The scheduler uses the tracked repo config at `/app/repo/configs/experiment.qqq_paper_daily.yaml` and a writable artifact submount at `/app/repo/artifacts`.
+
+On each loop, the scheduler also refreshes the latest persisted submission against Alpaca so later broker-side terminal states such as `filled` or `rejected` are written back into `submission.json` and `order_status.json`.
 
 The agent worker uses the same tracked config and artifact mount, so the approval loop and the scheduler see the same proposal, approval, and submission state.
 

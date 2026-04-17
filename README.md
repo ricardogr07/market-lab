@@ -42,7 +42,7 @@ marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-ro
 - `paper-status`: read the latest persisted paper-trading status plus the latest proposal summary.
 - `paper-approve`: approve or reject one persisted proposal by actor `agent` or `manual`.
 - `paper-agent-approve`: run the autonomous agent worker once or in a loop, using `openai`, `claude`, or deterministic fallback to approve or reject pending proposals.
-- `paper-submit`: reconcile the approved proposal against the Alpaca paper account and persist either a submitted fractional `DAY` market order, a no-op, or a skipped submission.
+- `paper-submit`: reconcile the approved proposal against the Alpaca paper account, refresh any previously submitted broker status, and persist either a submitted buy-side notional `DAY` market order, a submitted sell-side fractional `DAY` market order, a no-op, or a skipped submission.
 - `paper-scheduler`: run the long-lived local paper loop for the configured decision and submission windows.
 - `paper-report`: build a month-run paper report comparing the realized paper path, the consensus path, each model path, `buy_hold`, and `sma`.
 
