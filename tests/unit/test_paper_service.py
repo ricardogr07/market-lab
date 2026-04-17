@@ -296,6 +296,40 @@ def test_run_paper_submit_uses_notional_buy_buffer_for_long_entries(tmp_path: Pa
     assert broker.submitted_orders[-1]["notional"] == "990.00"
 
 
+def test_run_paper_submit_does_not_sell_when_long_signal_has_no_buying_power(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", equity=1000.0, buying_power=0.0, cash=0.0)
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert submission["status"] == "no_trade_required"
+    assert submission["reason"] == "insufficient_buying_power"
+    assert not broker.submitted_orders
+
+
 def test_reconcile_latest_submission_status_refreshes_broker_rejection(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
     broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
@@ -337,6 +371,58 @@ def test_reconcile_latest_submission_status_refreshes_broker_rejection(tmp_path:
     assert reconciliation is not None
     assert reconciliation["order_status"] == "rejected"
     assert submission["order_status"] == "rejected"
+
+
+def test_reconcile_latest_submission_status_uses_latest_submitted_trade(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )
+
+    newer_proposal = dict(proposal)
+    newer_proposal["proposal_id"] = "2026-04-14-QQQ-2026-04-13"
+    newer_proposal["signal_date"] = "2026-04-13"
+    newer_proposal["effective_date"] = "2026-04-14"
+    newer_proposal["approval_status"] = "pending"
+    newer_proposal["approval_actor"] = ""
+    store.save_proposal(newer_proposal)
+
+    broker.order_status = "rejected"
+    reconciliation = reconcile_latest_submission_status(
+        config,
+        now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
+        broker=broker,
+    )
+
+    older_submission = json.loads(
+        store.trade_submission_path("2026-04-13").read_text(encoding="utf-8")
+    )
+    assert reconciliation is not None
+    assert reconciliation["proposal_id"] == proposal_result["proposal_id"]
+    assert reconciliation["order_status"] == "rejected"
+    assert older_submission["order_status"] == "rejected"
 
 
 def test_run_paper_submit_can_retry_failed_submission(tmp_path: Path) -> None:

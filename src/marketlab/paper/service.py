@@ -1005,6 +1005,26 @@ def _poll_order_status(
     return order_status, poll_status
 
 
+def _latest_submitted_proposal_requiring_reconciliation(
+    store: PaperStateStore,
+) -> tuple[dict[str, Any], dict[str, Any], Path] | None:
+    for proposal in store.list_proposals():
+        trade_date = str(proposal.get("effective_date", ""))
+        if trade_date == "":
+            continue
+        submission_path = store.trade_submission_path(trade_date)
+        if not submission_path.exists():
+            continue
+        submission = _json_load(submission_path)
+        if submission.get("status") != SUBMISSION_SUBMITTED:
+            continue
+        order_status = str(submission.get("order_status", "")).lower()
+        if order_status in TERMINAL_ORDER_STATUSES:
+            continue
+        return proposal, submission, submission_path
+    return None
+
+
 def _refresh_submission_order_status(
     config: ExperimentConfig,
     store: PaperStateStore,
@@ -1068,16 +1088,11 @@ def reconcile_latest_submission_status(
 ) -> dict[str, Any] | None:
     validate_paper_trading_config(config)
     store = PaperStateStore(config)
-    proposal = store.latest_proposal()
-    if proposal is None:
+    latest_submitted = _latest_submitted_proposal_requiring_reconciliation(store)
+    if latest_submitted is None:
         return None
-
-    trade_date = str(proposal["effective_date"])
-    submission_path = store.trade_submission_path(trade_date)
-    if not submission_path.exists():
-        return None
-
-    submission = _json_load(submission_path)
+    proposal, submission, submission_path = latest_submitted
+    trade_date = str(submission["trade_date"])
     broker_client = broker or AlpacaPaperBrokerClient()
     refreshed_submission = _refresh_submission_order_status(
         config,
@@ -1261,7 +1276,12 @@ def run_paper_submit(
         )
         desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
     delta_qty = round(desired_qty - current_qty, 6)
-    side = "buy" if target_weight > 0.0 and order_notional > 0.0 else "sell"
+    if delta_qty > 1e-6:
+        side = "buy"
+    elif delta_qty < -1e-6:
+        side = "sell"
+    else:
+        side = "none"
     order_preview = {
         "proposal_id": proposal["proposal_id"],
         "trade_date": trade_date,
@@ -1275,17 +1295,17 @@ def run_paper_submit(
         "order_notional": order_notional,
         "desired_qty": desired_qty,
         "delta_qty": delta_qty,
-        "side": side if (order_notional > 0.0 or abs(delta_qty) > 0.0) else "none",
+        "side": side,
         "updated_at": _now_utc(now).isoformat(),
     }
     _json_dump(store.trade_order_preview_path(trade_date), order_preview)
 
-    if order_notional <= 1e-6 and abs(delta_qty) < 1e-6:
+    if side == "none" or (side == "buy" and order_notional <= 1e-6):
         submission = {
             "proposal_id": proposal["proposal_id"],
             "trade_date": trade_date,
             "status": SUBMISSION_NOOP,
-            "reason": "already_at_target",
+            "reason": "already_at_target" if side == "none" else "insufficient_buying_power",
             "order_preview_path": str(store.trade_order_preview_path(trade_date)),
             "updated_at": _now_utc(now).isoformat(),
         }
