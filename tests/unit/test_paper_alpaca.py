@@ -53,10 +53,23 @@ class _FakeAlpacaHandler(BaseHTTPRequestHandler):
             )
             return
         if parsed.path == "/v2/account":
-            self._json_response({"equity": "10000.00", "status": "ACTIVE"})
+            self._json_response(
+                {
+                    "equity": "10000.00",
+                    "buying_power": "10000.00",
+                    "cash": "10000.00",
+                    "status": "ACTIVE",
+                }
+            )
             return
         if parsed.path == "/v2/positions/VOO":
-            self._json_response({"symbol": "VOO", "qty": "0.250000"})
+            self._json_response(
+                {
+                    "symbol": "VOO",
+                    "qty": "0.250000",
+                    "market_value": "25.00",
+                }
+            )
             return
         if parsed.path == "/v2/orders/order-1":
             self._json_response(
@@ -74,13 +87,16 @@ class _FakeAlpacaHandler(BaseHTTPRequestHandler):
         if parsed.path == "/v2/orders":
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            self._json_response(
-                {
-                    "id": "order-1",
-                    "status": "accepted",
-                    "client_order_id": payload["client_order_id"],
-                }
-            )
+            response = {
+                "id": "order-1",
+                "status": "accepted",
+                "client_order_id": payload["client_order_id"],
+            }
+            if "qty" in payload:
+                response["qty"] = payload["qty"]
+            if "notional" in payload:
+                response["notional"] = payload["notional"]
+            self._json_response(response)
             return
         self.send_error(404)
 
@@ -132,6 +148,12 @@ def test_alpaca_clients_parse_local_fake_server(
         client_order_id="marketlab-test-order",
     )
     order_status = broker.get_order("order-1")
+    notional_order = broker.submit_notional_day_market_order(
+        symbol="VOO",
+        notional=500.0,
+        side="buy",
+        client_order_id="marketlab-test-notional",
+    )
 
     assert list(frame.columns) == ["Date", "Open", "High", "Low", "Close", "Adj Close", "Volume"]
     assert len(frame) == 2
@@ -140,6 +162,7 @@ def test_alpaca_clients_parse_local_fake_server(
     assert position["qty"] == "0.250000"
     assert order["id"] == "order-1"
     assert order_status["status"] == "accepted"
+    assert notional_order["notional"] == "500.00"
 
 
 def test_alpaca_client_reads_configured_symbol_position(

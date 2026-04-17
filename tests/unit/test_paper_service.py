@@ -245,10 +245,54 @@ def test_run_paper_submit_places_fractional_order_after_agent_approval(monkeypat
     assert len(calls) == 1
     if submission["status"] == "submitted":
         assert broker.submitted_orders
+        order = broker.submitted_orders[-1]
         assert submission["order_status"] == "accepted"
+        if submission["side"] == "buy":
+            assert "notional" in order
+            assert submission["notional"] is not None
+            assert submission["qty"] is None
+        else:
+            assert "qty" in order
         assert "outcome: submitted" in calls[0]["payload"]["text"]
     else:
         assert "outcome: no_trade_required" in calls[0]["payload"]["text"]
+
+
+def test_run_paper_submit_uses_notional_buy_buffer_for_long_entries(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", equity=1000.0, buying_power=1000.0, cash=1000.0)
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+
+    submission_result = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )
+
+    submission = submission_result["submission"]
+    assert submission["status"] == "submitted"
+    assert submission["side"] == "buy"
+    assert submission["notional"] == pytest.approx(990.0)
+    assert submission["qty"] is None
+    assert broker.submitted_orders[-1]["notional"] == "990.00"
 
 
 def test_run_paper_decision_notifies_existing_proposal(monkeypatch, tmp_path: Path) -> None:

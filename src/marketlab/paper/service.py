@@ -44,6 +44,7 @@ SUBMISSION_NOOP = "no_trade_required"
 SUBMISSION_SKIPPED = "skipped"
 CONSENSUS_POLICY = "consensus_vote"
 TERMINAL_ORDER_STATUSES = {"canceled", "expired", "filled", "rejected"}
+BUY_NOTIONAL_BUFFER_RATIO = 0.99
 
 
 def _now_utc(now: datetime | None = None) -> datetime:
@@ -81,6 +82,39 @@ def _json_dump(path: Path, payload: dict[str, Any]) -> Path:
 
 def _json_load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _client_order_id(proposal_id: str) -> str:
+    return f"marketlab-{proposal_id}".replace("_", "-")[:48]
+
+
+def _position_market_value(position: dict[str, Any] | None, *, reference_price: float) -> float:
+    if position is None:
+        return 0.0
+    market_value = _safe_float(position.get("market_value"), default=float("nan"))
+    if pd.notna(market_value):
+        return abs(market_value)
+    return abs(_safe_float(position.get("qty"))) * reference_price
+
+
+def _buy_order_notional(
+    *,
+    equity: float,
+    buying_power: float,
+    current_market_value: float,
+    target_weight: float,
+) -> tuple[float, float]:
+    desired_notional = max(equity * target_weight * BUY_NOTIONAL_BUFFER_RATIO, 0.0)
+    available_notional = max(buying_power * BUY_NOTIONAL_BUFFER_RATIO, 0.0)
+    order_notional = min(max(desired_notional - current_market_value, 0.0), available_notional)
+    return desired_notional, order_notional
 
 
 def _paper_symbol(config: ExperimentConfig) -> str:
@@ -404,6 +438,7 @@ def _notify_paper_submission(
         "reason": (submission or {}).get("reason") or status.get("reason"),
         "side": (submission or {}).get("side"),
         "qty": (submission or {}).get("qty"),
+        "notional": (submission or {}).get("notional"),
         "order_id": (submission or {}).get("order_id"),
         "order_status": (submission or {}).get("order_status"),
     }
@@ -943,6 +978,27 @@ def _submission_gate_status(
     return "ready", ""
 
 
+def _poll_order_status(
+    *,
+    broker_client: AlpacaPaperBrokerClient,
+    order_id: str,
+    fallback_status: str,
+    client_order_id: str,
+) -> tuple[dict[str, Any], str]:
+    try:
+        order_status = broker_client.get_order(order_id)
+        poll_status = "observed"
+    except RuntimeError as exc:
+        order_status = {
+            "id": order_id,
+            "client_order_id": client_order_id,
+            "status": fallback_status,
+            "poll_error": str(exc),
+        }
+        poll_status = "timeout"
+    return order_status, poll_status
+
+
 def run_paper_submit(
     config: ExperimentConfig,
     *,
@@ -1049,30 +1105,45 @@ def run_paper_submit(
     account = broker_client.get_account()
     _json_dump(store.trade_account_snapshot_path(trade_date), account)
     position = broker_client.get_position(paper_symbol)
-    current_qty = float(position["qty"]) if position is not None else 0.0
-    equity = float(account["equity"])
+    current_qty = _safe_float((position or {}).get("qty"))
+    current_market_value = _position_market_value(position, reference_price=float(proposal["reference_price"]))
+    equity = _safe_float(account.get("equity"))
+    buying_power = _safe_float(account.get("buying_power"), default=_safe_float(account.get("cash"), default=equity))
     reference_price = float(proposal["reference_price"])
+    target_weight = _safe_float(proposal.get("target_weight"))
+    desired_notional = 0.0
+    order_notional = 0.0
     desired_qty = 0.0
-    if float(proposal["target_weight"]) > 0.0:
-        desired_qty = equity / reference_price
+    if target_weight > 0.0:
+        desired_notional, order_notional = _buy_order_notional(
+            equity=equity,
+            buying_power=buying_power,
+            current_market_value=current_market_value,
+            target_weight=target_weight,
+        )
+        desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
 
     delta_qty = round(desired_qty - current_qty, 6)
-    side = "buy" if delta_qty > 0.0 else "sell"
+    side = "buy" if target_weight > 0.0 and order_notional > 0.0 else "sell"
     order_preview = {
         "proposal_id": proposal["proposal_id"],
         "trade_date": trade_date,
         "symbol": paper_symbol,
         "equity": equity,
+        "buying_power": buying_power,
         "reference_price": reference_price,
         "current_qty": current_qty,
+        "current_market_value": current_market_value,
+        "desired_notional": desired_notional,
+        "order_notional": order_notional,
         "desired_qty": desired_qty,
         "delta_qty": delta_qty,
-        "side": side if abs(delta_qty) > 0.0 else "none",
+        "side": side if (order_notional > 0.0 or abs(delta_qty) > 0.0) else "none",
         "updated_at": _now_utc(now).isoformat(),
     }
     _json_dump(store.trade_order_preview_path(trade_date), order_preview)
 
-    if abs(delta_qty) < 1e-6:
+    if order_notional <= 1e-6 and abs(delta_qty) < 1e-6:
         submission = {
             "proposal_id": proposal["proposal_id"],
             "trade_date": trade_date,
@@ -1107,24 +1178,27 @@ def run_paper_submit(
             "submission": submission,
         }
 
-    client_order_id = f"marketlab-{proposal['proposal_id']}".replace("_", "-")[:48]
-    order = broker_client.submit_fractional_day_market_order(
-        symbol=paper_symbol,
-        qty=abs(delta_qty),
-        side=side,
-        client_order_id=client_order_id,
+    client_order_id = _client_order_id(proposal["proposal_id"])
+    if side == "buy":
+        order = broker_client.submit_notional_day_market_order(
+            symbol=paper_symbol,
+            notional=order_notional,
+            side=side,
+            client_order_id=client_order_id,
+        )
+    else:
+        order = broker_client.submit_fractional_day_market_order(
+            symbol=paper_symbol,
+            qty=abs(delta_qty),
+            side=side,
+            client_order_id=client_order_id,
+        )
+    order_status, poll_status = _poll_order_status(
+        broker_client=broker_client,
+        order_id=str(order["id"]),
+        fallback_status=str(order.get("status", "unknown")),
+        client_order_id=str(order.get("client_order_id", client_order_id)),
     )
-    try:
-        order_status = broker_client.get_order(str(order["id"]))
-        poll_status = "observed"
-    except RuntimeError as exc:
-        order_status = {
-            "id": order.get("id"),
-            "client_order_id": order.get("client_order_id", client_order_id),
-            "status": order.get("status", "unknown"),
-            "poll_error": str(exc),
-        }
-        poll_status = "timeout"
     _json_dump(store.trade_order_status_path(trade_date), order_status)
 
     submission = {
@@ -1132,10 +1206,11 @@ def run_paper_submit(
         "trade_date": trade_date,
         "status": SUBMISSION_SUBMITTED,
         "side": side,
-        "qty": abs(delta_qty),
+        "qty": abs(delta_qty) if side == "sell" else None,
+        "notional": order_notional if side == "buy" else None,
         "order_id": order["id"],
         "client_order_id": order.get("client_order_id", client_order_id),
-        "order_status": order_status.get("status", order.get("status", "unknown")),
+        "order_status": str(order_status.get("status", order.get("status", "unknown"))).lower(),
         "poll_status": poll_status,
         "order_preview_path": str(store.trade_order_preview_path(trade_date)),
         "account_snapshot_path": str(store.trade_account_snapshot_path(trade_date)),
@@ -1148,6 +1223,7 @@ def run_paper_submit(
         "status": SUBMISSION_SUBMITTED,
         "proposal_id": proposal["proposal_id"],
         "submission_path": str(submission_path),
+        "order_status": submission["order_status"],
         "updated_at": _now_utc(now).isoformat(),
     }
     status_path = store.write_status(status)
