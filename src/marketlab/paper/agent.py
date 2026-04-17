@@ -215,20 +215,45 @@ def _proposal_is_consistent(proposal: dict[str, Any], evidence: dict[str, Any]) 
         return False, "effective_date mismatch"
     if proposal.get("decision_policy") != "consensus_vote":
         return False, "unsupported decision policy"
-    if proposal.get("decision") != evidence.get("decision"):
-        return False, "decision mismatch"
-    if float(proposal.get("target_weight", 0.0)) != float(evidence.get("target_weight", 0.0)):
-        return False, "target_weight mismatch"
-    if int(proposal.get("long_vote_count", -1)) != int(evidence.get("long_vote_count", -2)):
-        return False, "long_vote_count mismatch"
-    if int(proposal.get("cash_vote_count", -1)) != int(evidence.get("cash_vote_count", -2)):
-        return False, "cash_vote_count mismatch"
     models = evidence.get("models", [])
     if not isinstance(models, list) or len(models) == 0:
         return False, "missing model evidence"
+    consensus_rule = evidence.get("consensus_rule")
+    if not isinstance(consensus_rule, dict):
+        return False, "missing consensus rule"
+    try:
+        proposal_target_weight = float(proposal.get("target_weight", 0.0))
+        evidence_target_weight = float(evidence.get("target_weight", 0.0))
+        proposal_long_vote_count = int(proposal.get("long_vote_count", -1))
+        evidence_long_vote_count = int(evidence.get("long_vote_count", -2))
+        proposal_cash_vote_count = int(proposal.get("cash_vote_count", -1))
+        evidence_cash_vote_count = int(evidence.get("cash_vote_count", -2))
+        threshold = int(consensus_rule.get("min_long_votes", -1))
+        model_count = int(consensus_rule.get("model_count", len(models)))
+    except (TypeError, ValueError):
+        return False, "invalid numeric proposal or evidence fields"
+    if proposal.get("decision") != evidence.get("decision"):
+        return False, "decision mismatch"
+    if proposal_target_weight != evidence_target_weight:
+        return False, "target_weight mismatch"
+    if proposal_long_vote_count != evidence_long_vote_count:
+        return False, "long_vote_count mismatch"
+    if proposal_cash_vote_count != evidence_cash_vote_count:
+        return False, "cash_vote_count mismatch"
     long_votes = sum(1 for row in models if row.get("vote") == "long")
-    if long_votes != int(evidence.get("long_vote_count", -1)):
+    if long_votes != evidence_long_vote_count:
         return False, "model vote tally mismatch"
+    cash_votes = len(models) - long_votes
+    if cash_votes != evidence_cash_vote_count:
+        return False, "cash vote tally mismatch"
+    if model_count != len(models):
+        return False, "consensus model_count mismatch"
+    expected_target_weight = 1.0 if long_votes >= threshold else 0.0
+    expected_decision = "long" if expected_target_weight > 0.0 else "cash"
+    if proposal.get("decision") != expected_decision:
+        return False, "consensus decision mismatch"
+    if proposal_target_weight != expected_target_weight:
+        return False, "consensus target_weight mismatch"
     return True, ""
 
 
@@ -279,7 +304,7 @@ def _guardrail_primary_decision(
     account_context: dict[str, Any],
     primary_result: AgentDecision,
 ) -> AgentDecision:
-    if requested_backend == "deterministic_consensus":
+    if requested_backend == "deterministic_consensus" or primary_result.decision != "reject":
         return primary_result
 
     deterministic_result = DeterministicConsensusBackend().evaluate(
@@ -289,7 +314,7 @@ def _guardrail_primary_decision(
         status=status,
         account_context=account_context,
     )
-    if primary_result.decision == deterministic_result.decision:
+    if deterministic_result.decision != "approve":
         return primary_result
 
     return AgentDecision(

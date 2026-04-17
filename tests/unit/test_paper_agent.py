@@ -234,6 +234,190 @@ def test_agent_worker_overrides_primary_rejection_when_evidence_requires_approva
     assert "requires 'approve'" in proposal["approval_fallback_reason"]
 
 
+def test_agent_worker_does_not_override_rejection_for_under_threshold_consensus(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        agent_backend="claude",
+        agent_model="claude-sonnet-4-5",
+    )
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="VOO"),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    store = PaperStateStore(config)
+    proposal = store.latest_proposal()
+    assert proposal is not None
+    evidence = store.load_evidence(proposal["effective_date"])
+    models = evidence["models"]
+    for index, row in enumerate(models):
+        vote = "long" if index == 0 else "cash"
+        row["vote"] = vote
+        row["target_weight"] = 1.0 if vote == "long" else 0.0
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["long_vote_count"] = 1
+    proposal["cash_vote_count"] = len(models) - 1
+    evidence["decision"] = "long"
+    evidence["target_weight"] = 1.0
+    evidence["long_vote_count"] = 1
+    evidence["cash_vote_count"] = len(models) - 1
+    evidence["consensus_rule"]["min_long_votes"] = 4
+    evidence["consensus_rule"]["model_count"] = len(models)
+    store.update_proposal(proposal)
+    store.save_evidence(evidence)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                content=[
+                    types.SimpleNamespace(
+                        text='{"decision":"reject","rationale":"The proposal does not meet the threshold."}'
+                    )
+                ]
+            )
+
+    class FakeAnthropicClient:
+        def __init__(self, api_key: str, timeout: int) -> None:
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropicClient),
+    )
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    proposal = PaperStateStore(config).latest_proposal()
+    assert result["processed_count"] == 1
+    assert proposal is not None
+    assert proposal["approval_status"] == "rejected"
+    assert proposal["approval_backend"] == "claude"
+    assert proposal["approval_model"] == "claude-sonnet-4-5"
+    assert proposal["approval_fallback_used"] is False
+
+
+def test_agent_worker_preserves_primary_decision_when_guardrail_cannot_validate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        agent_backend="claude",
+        agent_model="claude-sonnet-4-5",
+    )
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="VOO"),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    store = PaperStateStore(config)
+    proposal = store.latest_proposal()
+    assert proposal is not None
+    proposal["target_weight"] = "not-a-float"
+    store.update_proposal(proposal)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                content=[
+                    types.SimpleNamespace(
+                        text='{"decision":"approve","rationale":"Approve the persisted proposal."}'
+                    )
+                ]
+            )
+
+    class FakeAnthropicClient:
+        def __init__(self, api_key: str, timeout: int) -> None:
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropicClient),
+    )
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    proposal = PaperStateStore(config).latest_proposal()
+    assert result["processed_count"] == 1
+    assert proposal is not None
+    assert proposal["approval_status"] == "approved"
+    assert proposal["approval_backend"] == "claude"
+    assert proposal["approval_model"] == "claude-sonnet-4-5"
+    assert proposal["approval_fallback_used"] is False
+
+
+def test_agent_worker_fallback_rejects_cleanly_on_malformed_persisted_values(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        agent_backend="openai",
+        agent_model="gpt-4o-mini",
+    )
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="VOO"),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    store = PaperStateStore(config)
+    proposal = store.latest_proposal()
+    assert proposal is not None
+    proposal["target_weight"] = "not-a-float"
+    store.update_proposal(proposal)
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(output_text="not-json")
+
+    class FakeOpenAIClient:
+        def __init__(self, api_key: str, timeout: int) -> None:
+            self.responses = FakeResponses()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAIClient))
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="VOO"),
+    )
+
+    proposal = PaperStateStore(config).latest_proposal()
+    assert result["processed_count"] == 1
+    assert proposal is not None
+    assert proposal["approval_status"] == "rejected"
+    assert proposal["approval_backend"] == "deterministic_consensus"
+    assert proposal["approval_model"] == "deterministic_consensus"
+    assert proposal["approval_fallback_used"] is True
+    assert "openai backend failed" in proposal["approval_fallback_reason"]
+
+
 def test_agent_worker_is_idempotent_after_first_approval(monkeypatch, tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval")
     run_paper_decision(
