@@ -46,6 +46,7 @@ CONSENSUS_POLICY = "consensus_vote"
 TERMINAL_ORDER_STATUSES = {"canceled", "expired", "filled", "rejected"}
 FAILED_ORDER_STATUSES = {"canceled", "expired", "rejected"}
 BUY_NOTIONAL_BUFFER_RATIO = 0.99
+ALPACA_MIN_NOTIONAL_ORDER = 1.0
 
 
 def _now_utc(now: datetime | None = None) -> datetime:
@@ -121,6 +122,10 @@ def _buy_order_notional(
     available_notional = max(buying_power * BUY_NOTIONAL_BUFFER_RATIO, 0.0)
     order_notional = min(max(desired_notional - current_market_value, 0.0), available_notional)
     return desired_notional, order_notional
+
+
+def _rounded_notional(value: float) -> float:
+    return float(f"{max(value, 0.0):.2f}")
 
 
 def _paper_symbol(config: ExperimentConfig) -> str:
@@ -1264,17 +1269,25 @@ def run_paper_submit(
     buying_power = _safe_float(account.get("buying_power"), default=_safe_float(account.get("cash"), default=equity))
     reference_price = float(proposal["reference_price"])
     target_weight = _safe_float(proposal.get("target_weight"))
+    hold_existing_long = target_weight > 0.0 and current_market_value >= ALPACA_MIN_NOTIONAL_ORDER
     desired_notional = 0.0
     order_notional = 0.0
+    gap_notional = 0.0
     desired_qty = 0.0
     if target_weight > 0.0:
-        desired_notional, order_notional = _buy_order_notional(
-            equity=equity,
-            buying_power=buying_power,
-            current_market_value=current_market_value,
-            target_weight=target_weight,
-        )
-        desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
+        if hold_existing_long:
+            desired_notional = current_market_value
+            desired_qty = current_qty
+        else:
+            desired_notional, order_notional = _buy_order_notional(
+                equity=equity,
+                buying_power=buying_power,
+                current_market_value=current_market_value,
+                target_weight=target_weight,
+            )
+            gap_notional = max(desired_notional - current_market_value, 0.0)
+            order_notional = _rounded_notional(order_notional)
+            desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
     delta_qty = round(desired_qty - current_qty, 6)
     if delta_qty > 1e-6:
         side = "buy"
@@ -1300,12 +1313,15 @@ def run_paper_submit(
     }
     _json_dump(store.trade_order_preview_path(trade_date), order_preview)
 
-    if side == "none" or (side == "buy" and order_notional <= 1e-6):
+    if side == "none" or (side == "buy" and order_notional < ALPACA_MIN_NOTIONAL_ORDER):
+        buy_reason = "already_at_target"
+        if _rounded_notional(gap_notional) >= ALPACA_MIN_NOTIONAL_ORDER:
+            buy_reason = "insufficient_buying_power"
         submission = {
             "proposal_id": proposal["proposal_id"],
             "trade_date": trade_date,
             "status": SUBMISSION_NOOP,
-            "reason": "already_at_target" if side == "none" else "insufficient_buying_power",
+            "reason": "already_at_target" if side == "none" else buy_reason,
             "order_preview_path": str(store.trade_order_preview_path(trade_date)),
             "updated_at": _now_utc(now).isoformat(),
         }

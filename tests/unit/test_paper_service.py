@@ -330,6 +330,88 @@ def test_run_paper_submit_does_not_sell_when_long_signal_has_no_buying_power(tmp
     assert not broker.submitted_orders
 
 
+def test_run_paper_submit_does_not_top_up_existing_long_position(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(
+        symbol="QQQ",
+        equity=1000.0,
+        buying_power=500.0,
+        cash=500.0,
+        current_qty=1.0,
+        market_price=500.0,
+    )
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 500.0
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert submission["status"] == "no_trade_required"
+    assert submission["reason"] == "already_at_target"
+    assert not broker.submitted_orders
+
+
+def test_run_paper_submit_treats_sub_dollar_long_gap_as_already_at_target(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(
+        symbol="QQQ",
+        equity=999.37,
+        buying_power=10.0,
+        cash=10.0,
+        current_qty=1.525090041,
+        market_price=648.73,
+    )
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 648.73
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert submission["status"] == "no_trade_required"
+    assert submission["reason"] == "already_at_target"
+    assert not broker.submitted_orders
+
+
 def test_reconcile_latest_submission_status_refreshes_broker_rejection(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
     broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
@@ -454,6 +536,7 @@ def test_run_paper_submit_can_retry_failed_submission(tmp_path: Path) -> None:
     )["submission"]
 
     broker.order_status = "accepted"
+    broker.current_qty = 0.0
     second_submission = run_paper_submit(
         config,
         now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
