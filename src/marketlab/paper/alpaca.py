@@ -254,6 +254,34 @@ class AlpacaPaperBrokerClient:
             raise RuntimeError("Alpaca order submission response must be an object.")
         return payload
 
+    def submit_notional_day_market_order(
+        self,
+        *,
+        symbol: str,
+        notional: float,
+        side: str,
+        client_order_id: str,
+    ) -> dict[str, Any]:
+        payload = _json_request(
+            method="POST",
+            base_url=self._credentials.trading_base_url,
+            path="/v2/orders",
+            api_key_id=self._credentials.api_key_id,
+            api_secret_key=self._credentials.api_secret_key,
+            timeout_seconds=self._credentials.timeout_seconds,
+            payload={
+                "symbol": symbol,
+                "notional": f"{notional:.2f}",
+                "side": side,
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": client_order_id,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Alpaca order submission response must be an object.")
+        return payload
+
     def get_order(self, order_id: str) -> dict[str, Any]:
         payload = _json_request(
             method="GET",

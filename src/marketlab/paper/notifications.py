@@ -175,6 +175,9 @@ def build_submission_message(
     qty = (submission or {}).get("qty")
     if qty is not None:
         _append_line(lines, "qty", _format_number(qty))
+    notional = (submission or {}).get("notional")
+    if notional is not None:
+        _append_line(lines, "notional", _format_number(notional))
     _append_line(lines, "order_id", (submission or {}).get("order_id"))
     _append_line(lines, "order_status", (submission or {}).get("order_status"))
     return "\n".join(lines)

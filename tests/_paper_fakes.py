@@ -152,7 +152,10 @@ class FakeAlpacaBroker:
         *,
         trading_days: Sequence[date] | None = None,
         equity: float = 10_000.0,
+        buying_power: float | None = None,
+        cash: float | None = None,
         current_qty: float = 0.0,
+        market_price: float = 100.0,
         order_status: str = "accepted",
         symbol: str = "VOO",
     ) -> None:
@@ -162,7 +165,10 @@ class FakeAlpacaBroker:
             )
         self.trading_days = list(trading_days)
         self.equity = equity
+        self.buying_power = buying_power if buying_power is not None else equity
+        self.cash = cash if cash is not None else self.buying_power
         self.current_qty = current_qty
+        self.market_price = market_price
         self.order_status = order_status
         self.symbol = symbol
         self.submitted_orders: list[dict[str, object]] = []
@@ -178,13 +184,19 @@ class FakeAlpacaBroker:
         return {
             "account_number": "PA123456",
             "equity": f"{self.equity:.2f}",
+            "buying_power": f"{self.buying_power:.2f}",
+            "cash": f"{self.cash:.2f}",
             "status": "ACTIVE",
         }
 
     def get_position(self, symbol: str) -> dict[str, object] | None:
         if symbol != self.symbol or self.current_qty == 0.0:
             return None
-        return {"symbol": symbol, "qty": f"{self.current_qty:.6f}"}
+        return {
+            "symbol": symbol,
+            "qty": f"{self.current_qty:.6f}",
+            "market_value": f"{self.current_qty * self.market_price:.2f}",
+        }
 
     def submit_fractional_day_market_order(
         self,
@@ -207,6 +219,29 @@ class FakeAlpacaBroker:
             self.current_qty += qty
         else:
             self.current_qty = max(0.0, self.current_qty - qty)
+        return order
+
+    def submit_notional_day_market_order(
+        self,
+        *,
+        symbol: str,
+        notional: float,
+        side: str,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        order = {
+            "id": f"order-{len(self.submitted_orders) + 1}",
+            "symbol": symbol,
+            "notional": f"{notional:.2f}",
+            "side": side,
+            "client_order_id": client_order_id,
+            "status": self.order_status,
+        }
+        self.submitted_orders.append(order)
+        if side == "buy" and self.market_price > 0:
+            self.current_qty += notional / self.market_price
+            self.buying_power = max(0.0, self.buying_power - notional)
+            self.cash = max(0.0, self.cash - notional)
         return order
 
     def get_order(self, order_id: str) -> dict[str, object]:
