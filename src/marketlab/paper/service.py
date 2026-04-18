@@ -1269,7 +1269,12 @@ def run_paper_submit(
     buying_power = _safe_float(account.get("buying_power"), default=_safe_float(account.get("cash"), default=equity))
     reference_price = float(proposal["reference_price"])
     target_weight = _safe_float(proposal.get("target_weight"))
-    hold_existing_long = target_weight > 0.0 and current_market_value >= ALPACA_MIN_NOTIONAL_ORDER
+    current_signed_market_value = current_qty * reference_price
+    hold_existing_long = (
+        target_weight > 0.0
+        and current_qty > 0.0
+        and current_market_value >= ALPACA_MIN_NOTIONAL_ORDER
+    )
     desired_notional = 0.0
     order_notional = 0.0
     gap_notional = 0.0
@@ -1282,10 +1287,10 @@ def run_paper_submit(
             desired_notional, order_notional = _buy_order_notional(
                 equity=equity,
                 buying_power=buying_power,
-                current_market_value=current_market_value,
+                current_market_value=current_signed_market_value,
                 target_weight=target_weight,
             )
-            gap_notional = max(desired_notional - current_market_value, 0.0)
+            gap_notional = max(desired_notional - current_signed_market_value, 0.0)
             order_notional = _rounded_notional(order_notional)
             desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
     delta_qty = round(desired_qty - current_qty, 6)
