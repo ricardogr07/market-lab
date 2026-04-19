@@ -3,6 +3,7 @@
 MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly and daily supervised timing rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, reviewable artifact summaries, and a local Alpaca paper-trading MVP for a configurable daily single-ETF timing loop.
 
 See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
+See [docs/solid-architecture-audit.md](docs/solid-architecture-audit.md) for the SOLID-first technical-debt audit and the pre-cloud persistence-hardening roadmap.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
 See [docs/paper-trading.md](docs/paper-trading.md) for the Phase 7 daily single-ETF paper-trading loop and local Docker Compose shape.
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
