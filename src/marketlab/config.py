@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import yaml
 
@@ -18,6 +18,7 @@ PAPER_ORDER_TYPES = {"day_market"}
 PAPER_POSITION_SIZING = {"full_equity_fractional"}
 PAPER_AGENT_BACKENDS = {"claude", "deterministic_consensus", "openai"}
 WEIGHT_TOLERANCE = 1e-6
+_ConfigSectionT = TypeVar("_ConfigSectionT")
 
 
 @dataclass(slots=True)
@@ -260,9 +261,12 @@ class ExperimentConfig:
         return self.resolve_path(path)
 
 
-def _section(cls: type[Any], data: dict[str, Any] | None) -> Any:
+def _section(
+    cls: type[_ConfigSectionT],
+    data: dict[str, Any] | None,
+) -> _ConfigSectionT:
     values = data or {}
-    allowed = {field.name for field in cls.__dataclass_fields__.values()}
+    allowed = {item.name for item in fields(cast(Any, cls))}
     filtered = {key: value for key, value in values.items() if key in allowed}
     return cls(**filtered)
 
@@ -586,6 +590,8 @@ def _validate_config(config: ExperimentConfig) -> None:
 def load_config(path: str | Path) -> ExperimentConfig:
     config_path = Path(path).resolve()
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    baselines_payload = payload.get("baselines") or {}
+    optimized_payload = baselines_payload.get("optimized") or {}
     paper_payload = payload.get("paper") or {}
     paper_notifications_payload = paper_payload.get("notifications") or {}
     paper_defaults = PaperConfig()
@@ -610,16 +616,13 @@ def load_config(path: str | Path) -> ExperimentConfig:
             ),
         ),
         baselines=BaselinesConfig(
-            buy_hold=(payload.get("baselines") or {}).get("buy_hold", True),
-            sma=_section(SMAConfig, (payload.get("baselines") or {}).get("sma")),
+            buy_hold=baselines_payload.get("buy_hold", True),
+            sma=_section(SMAConfig, baselines_payload.get("sma")),
             allocation=_section(
                 AllocationConfig,
-                (payload.get("baselines") or {}).get("allocation"),
+                baselines_payload.get("allocation"),
             ),
-            optimized=_section(
-                OptimizedConfig,
-                (payload.get("baselines") or {}).get("optimized"),
-            ),
+            optimized=_section(OptimizedConfig, optimized_payload),
         ),
         models=[
             _section(ModelSpec, item)
@@ -686,7 +689,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     _normalize_mapping_sections(config)
     config.baselines.optimized.views = [
         _section(BlackLittermanViewConfig, view)
-        for view in config.baselines.optimized.views
+        for view in optimized_payload.get("views") or []
     ]
     _validate_config(config)
     return config
