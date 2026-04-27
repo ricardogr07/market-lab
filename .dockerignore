@@ -5,12 +5,15 @@
 .github/
 .pytest_cache/
 .pytest_tmp*/
+.tox_tmp*/
+.virtualenv_appdata/
 .tox/
 .tox-phase3/
 .venv/
 __pycache__/
 *.pyc
 .pt*/
+pytest_tmp*/
 scratch_*/
 tmp_*/
 artifacts/
