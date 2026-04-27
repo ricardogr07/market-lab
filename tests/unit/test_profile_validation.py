@@ -23,8 +23,8 @@ def _load_module():
 def test_resolve_envs_defaults_to_ci_matching_lanes() -> None:
     module = _load_module()
 
-    assert module.resolve_envs(None) == ["lint", "docs", "py312", "package", "integration"]
-    assert module.resolve_envs([]) == ["lint", "docs", "py312", "package", "integration"]
+    assert module.resolve_envs(None) == ["lint", "docs", "typecheck", "py312", "package", "integration"]
+    assert module.resolve_envs([]) == ["lint", "docs", "typecheck", "py312", "package", "integration"]
 
 
 def test_resolve_envs_preserves_requested_order() -> None:
@@ -104,16 +104,17 @@ def test_tox_preflight_tiers_match_expected_commands() -> None:
 
     assert "preflight-fast" in parser["tox"]["env_list"]
     assert "preflight-slow" in parser["tox"]["env_list"]
+    assert "typecheck" in parser["tox"]["env_list"]
 
-    for env_name in ("lint", "docs", "package", "integration"):
+    for env_name in ("lint", "docs", "typecheck", "package", "integration"):
         assert parser[f"testenv:{env_name}"]["basepython"] == "py312"
 
     assert parser["testenv:preflight-fast"]["basepython"] == "py312"
-    assert parser["testenv:preflight-fast"]["commands"].strip() == "{envpython} -m tox -e lint,docs,py312"
+    assert parser["testenv:preflight-fast"]["commands"].strip() == "{envpython} -m tox -e lint,docs,typecheck,py312"
 
     assert parser["testenv:preflight-slow"]["basepython"] == "py312"
     assert parser["testenv:preflight-slow"]["commands"].strip() == "{envpython} -m tox -e package,integration"
 
     assert parser["testenv:preflight"]["basepython"] == "py312"
-    assert parser["testenv:preflight"]["commands"].strip() == "{envpython} -m tox -e lint,docs,package,py312,integration"
+    assert parser["testenv:preflight"]["commands"].strip() == "{envpython} -m tox -e lint,docs,typecheck,package,py312,integration"
 

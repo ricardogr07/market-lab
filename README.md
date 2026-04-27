@@ -414,6 +414,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-e2e.ps1
 python -m uv sync --group dev
 py -3.12 -m tox -e lint
 py -3.12 -m tox -e docs
+py -3.12 -m tox -e typecheck
 py -3.12 -m tox -e py312
 py -3.12 -m tox -e package
 py -3.12 -m tox -e integration
@@ -430,6 +431,7 @@ Current measured local Windows budgets are roughly:
 
 - `lint`: under `30s`
 - `docs`: under `30s`
+- `typecheck`: about `30s`
 - `py312`: under `60s`
 - `package`: about `4-6m`
 - `integration`: about `8-10m`
@@ -443,11 +445,12 @@ Use this sequence when `preflight` feels slow or unstable:
 
 1. `py -3.12 -m tox -e lint`
 2. `py -3.12 -m tox -e docs`
-3. `py -3.12 -m tox -e py312`
-4. `py -3.12 -m tox -e package`
-5. `py -3.12 -m tox -e integration`
-6. `py -3.12 scripts/profile_validation.py --env package --env integration`
-7. `py -3.12 -m tox -e preflight`
+3. `py -3.12 -m tox -e typecheck`
+4. `py -3.12 -m tox -e py312`
+5. `py -3.12 -m tox -e package`
+6. `py -3.12 -m tox -e integration`
+7. `py -3.12 scripts/profile_validation.py --env package --env integration`
+8. `py -3.12 -m tox -e preflight`
 
 Interpret the result this way:
 
