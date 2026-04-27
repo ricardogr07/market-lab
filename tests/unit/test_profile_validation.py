@@ -108,6 +108,12 @@ def test_tox_preflight_tiers_match_expected_commands() -> None:
 
     for env_name in ("lint", "docs", "typecheck", "package", "integration"):
         assert parser[f"testenv:{env_name}"]["basepython"] == "py312"
+    assert parser["testenv:typecheck"]["commands"].strip() == (
+        "{envpython} -m mypy src/marketlab/config.py src/marketlab/data/market.py "
+        "src/marketlab/paper/alpaca.py src/marketlab/paper/notifications.py "
+        "src/marketlab/paper/contracts.py src/marketlab/paper/agent.py "
+        "src/marketlab/paper/scheduler.py"
+    )
 
     assert parser["testenv:preflight-fast"]["basepython"] == "py312"
     assert parser["testenv:preflight-fast"]["commands"].strip() == "{envpython} -m tox -e lint,docs,typecheck,py312"

@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from marketlab.config import ExperimentConfig
-from marketlab.paper.alpaca import AlpacaMarketDataProvider
+from marketlab.paper.contracts import PaperHistoryProvider
 from marketlab.paper.service import (
     PaperStateStore,
     _paper_symbol,
@@ -63,11 +63,17 @@ def _load_price_frame(
     symbol: str,
     start_date: str,
     end_date: str,
-    provider: AlpacaMarketDataProvider | None = None,
+    provider: PaperHistoryProvider | None = None,
 ) -> pd.DataFrame:
     slow_window = int(config.baselines.sma.slow_window)
     start_lookup = (pd.Timestamp(start_date) - timedelta(days=max(120, slow_window * 3))).date()
-    frame = (provider or AlpacaMarketDataProvider()).download_symbol_history(
+    if provider is None:
+        from marketlab.paper.alpaca import AlpacaMarketDataProvider
+
+        history_provider: PaperHistoryProvider = AlpacaMarketDataProvider()
+    else:
+        history_provider = provider
+    frame = history_provider.download_symbol_history(
         symbol,
         start_lookup.isoformat(),
         end_date,
@@ -258,7 +264,7 @@ def run_paper_report(
     *,
     start_date: str,
     end_date: str,
-    provider: AlpacaMarketDataProvider | None = None,
+    provider: PaperHistoryProvider | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
     symbol = _paper_symbol(config)

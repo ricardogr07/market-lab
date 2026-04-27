@@ -25,6 +25,7 @@ from marketlab.paper.alpaca import (
     AlpacaMarketDataProvider,
     AlpacaPaperBrokerClient,
 )
+from marketlab.paper.contracts import PaperBroker, PaperHistoryProvider
 from marketlab.paper.notifications import (
     TelegramTransport,
     build_approval_message,
@@ -475,7 +476,7 @@ def _notify_paper_submission(
 
 def _build_alpaca_panel(
     config: ExperimentConfig,
-    provider: AlpacaMarketDataProvider | None = None,
+    provider: PaperHistoryProvider | None = None,
 ) -> pd.DataFrame:
     frames = load_symbol_frames(
         config,
@@ -486,7 +487,7 @@ def _build_alpaca_panel(
 
 
 def _is_trading_day(
-    broker: AlpacaPaperBrokerClient,
+    broker: PaperBroker,
     *,
     market_date: date,
 ) -> bool:
@@ -495,7 +496,7 @@ def _is_trading_day(
 
 
 def _next_trading_date(
-    broker: AlpacaPaperBrokerClient,
+    broker: PaperBroker,
     *,
     market_date: date,
 ) -> date:
@@ -632,8 +633,8 @@ def run_paper_decision(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
-    provider: AlpacaMarketDataProvider | None = None,
-    broker: AlpacaPaperBrokerClient | None = None,
+    provider: PaperHistoryProvider | None = None,
+    broker: PaperBroker | None = None,
     notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
@@ -1089,7 +1090,7 @@ def reconcile_latest_submission_status(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
-    broker: AlpacaPaperBrokerClient | None = None,
+    broker: PaperBroker | None = None,
 ) -> dict[str, Any] | None:
     validate_paper_trading_config(config)
     store = PaperStateStore(config)
@@ -1142,7 +1143,7 @@ def run_paper_submit(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
-    broker: AlpacaPaperBrokerClient | None = None,
+    broker: PaperBroker | None = None,
     notification_transport: TelegramTransport | None = None,
     retry_failed_submission: bool = False,
 ) -> dict[str, Any]:
