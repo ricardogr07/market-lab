@@ -5,11 +5,13 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib import error, request
 
 from marketlab.config import ExperimentConfig
 from marketlab.env import load_env_file
+from marketlab.paper.state import PaperStateStore
 
 TELEGRAM_API_BASE_URL_ENV = "MARKETLAB_TELEGRAM_API_BASE_URL"
 TELEGRAM_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
@@ -303,3 +305,167 @@ def deliver_telegram_notification(
         record["error"] = f"{type(exc).__name__}: {exc}"
 
     return record
+
+
+def write_notification_record(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    stage: str,
+    outcome: str,
+    message: str,
+    details: Mapping[str, Any],
+    proposal_id: str = "",
+    trade_date: str = "",
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    record = deliver_telegram_notification(
+        config,
+        stage=stage,
+        outcome=outcome,
+        message=message,
+        details=details,
+        proposal_id=proposal_id,
+        trade_date=trade_date,
+        now=now,
+        transport=transport,
+    )
+    return store.write_notification_record(
+        stage=stage,
+        outcome=outcome,
+        payload=record,
+        now=now,
+    )
+
+
+def notify_paper_decision(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    outcome: str,
+    status: Mapping[str, Any],
+    proposal: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    details: dict[str, Any] = {
+        "experiment_name": config.experiment_name,
+        "market_date": status.get("market_date"),
+        "latest_signal_date": status.get("latest_signal_date"),
+        "reason": status.get("reason"),
+    }
+    if proposal is not None:
+        details.update(
+            {
+                "symbol": proposal.get("symbol"),
+                "signal_date": proposal.get("signal_date"),
+                "effective_date": proposal.get("effective_date"),
+                "decision": proposal.get("decision"),
+                "target_weight": proposal.get("target_weight"),
+                "long_vote_count": proposal.get("long_vote_count"),
+                "cash_vote_count": proposal.get("cash_vote_count"),
+                "threshold": config.paper.consensus_min_long_votes,
+                "reference_price": proposal.get("reference_price"),
+            }
+        )
+    return write_notification_record(
+        config,
+        store,
+        stage="paper-decision",
+        outcome=outcome,
+        message=build_decision_message(
+            config,
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+        ),
+        details=details,
+        proposal_id=str((proposal or {}).get("proposal_id", "")),
+        trade_date=str((proposal or {}).get("effective_date", "")),
+        now=now,
+        transport=transport,
+    )
+
+
+def notify_paper_approval(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    proposal: Mapping[str, Any],
+    approval_record: Mapping[str, Any],
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    outcome = str(approval_record["approval_status"])
+    details = {
+        "experiment_name": config.experiment_name,
+        "symbol": proposal.get("symbol"),
+        "signal_date": proposal.get("signal_date"),
+        "effective_date": proposal.get("effective_date"),
+        "actor": approval_record.get("actor"),
+        "provider": approval_record.get("provider"),
+        "model": approval_record.get("model"),
+        "fallback_used": approval_record.get("fallback_used", False),
+        "fallback_reason": approval_record.get("fallback_reason"),
+        "rationale": approval_record.get("rationale"),
+    }
+    return write_notification_record(
+        config,
+        store,
+        stage="paper-approve",
+        outcome=outcome,
+        message=build_approval_message(
+            config,
+            proposal=proposal,
+            approval=approval_record,
+        ),
+        details=details,
+        proposal_id=str(proposal["proposal_id"]),
+        trade_date=str(proposal["effective_date"]),
+        now=now,
+        transport=transport,
+    )
+
+
+def notify_paper_submission(
+    config: ExperimentConfig,
+    store: PaperStateStore,
+    *,
+    outcome: str,
+    status: Mapping[str, Any],
+    proposal: Mapping[str, Any] | None = None,
+    submission: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    transport: TelegramTransport | None = None,
+) -> Path:
+    details = {
+        "experiment_name": config.experiment_name,
+        "symbol": (proposal or {}).get("symbol"),
+        "signal_date": (proposal or {}).get("signal_date"),
+        "effective_date": (proposal or {}).get("effective_date"),
+        "reason": (submission or {}).get("reason") or status.get("reason"),
+        "side": (submission or {}).get("side"),
+        "qty": (submission or {}).get("qty"),
+        "notional": (submission or {}).get("notional"),
+        "order_id": (submission or {}).get("order_id"),
+        "order_status": (submission or {}).get("order_status"),
+    }
+    return write_notification_record(
+        config,
+        store,
+        stage="paper-submit",
+        outcome=outcome,
+        message=build_submission_message(
+            config,
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+            submission=submission,
+        ),
+        details=details,
+        proposal_id=str((proposal or {}).get("proposal_id") or (submission or {}).get("proposal_id") or ""),
+        trade_date=str((submission or {}).get("trade_date") or (proposal or {}).get("effective_date") or ""),
+        now=now,
+        transport=transport,
+    )
