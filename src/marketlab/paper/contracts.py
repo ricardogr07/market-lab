@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any, runtime_checkable
 
 import pandas as pd
 from typing_extensions import Protocol
+
+from marketlab.paper.notifications import TelegramTransport
 
 
 def _string_field(payload: dict[str, Any], key: str) -> str:
@@ -20,6 +22,13 @@ def _status_field(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(status, dict):
         return {}
     return dict(status)
+
+
+def _mapping_field(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return None
+    return dict(value)
 
 
 @runtime_checkable
@@ -68,12 +77,50 @@ class PaperBroker(Protocol):
 
 
 @dataclass(slots=True, frozen=True)
+class PaperDecisionRequest:
+    now: datetime | None = None
+    provider: PaperHistoryProvider | None = None
+    broker: PaperBroker | None = None
+    notification_transport: TelegramTransport | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PaperApprovalRequest:
+    proposal_id: str
+    decision: str
+    actor: str
+    rationale: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    now: datetime | None = None
+    notification_transport: TelegramTransport | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PaperSubmissionRequest:
+    now: datetime | None = None
+    broker: PaperBroker | None = None
+    notification_transport: TelegramTransport | None = None
+    retry_failed_submission: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class PaperReconciliationRequest:
+    now: datetime | None = None
+    broker: PaperBroker | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class PaperDecisionResult:
     proposal_id: str = ""
     proposal_path: str = ""
     evidence_path: str = ""
     status_path: str = ""
     status: dict[str, Any] = field(default_factory=dict)
+    proposal: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any]) -> PaperDecisionResult:
@@ -83,6 +130,8 @@ class PaperDecisionResult:
             evidence_path=_string_field(payload, "evidence_path"),
             status_path=_string_field(payload, "status_path"),
             status=_status_field(payload),
+            proposal=_mapping_field(payload, "proposal"),
+            evidence=_mapping_field(payload, "evidence"),
         )
 
     def as_legacy_payload(self) -> dict[str, Any]:
@@ -106,6 +155,8 @@ class PaperApprovalResult:
     approval_path: str = ""
     status_path: str = ""
     status: dict[str, Any] = field(default_factory=dict)
+    proposal: dict[str, Any] | None = None
+    approval: dict[str, Any] | None = None
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any]) -> PaperApprovalResult:
@@ -115,6 +166,8 @@ class PaperApprovalResult:
             approval_path=_string_field(payload, "approval_path"),
             status_path=_string_field(payload, "status_path"),
             status=_status_field(payload),
+            proposal=_mapping_field(payload, "proposal"),
+            approval=_mapping_field(payload, "approval"),
         )
 
     def as_legacy_payload(self) -> dict[str, Any]:
@@ -137,6 +190,7 @@ class PaperSubmissionResult:
     submission_path: str = ""
     status_path: str = ""
     status: dict[str, Any] = field(default_factory=dict)
+    submission: dict[str, Any] | None = None
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any]) -> PaperSubmissionResult:
@@ -145,6 +199,7 @@ class PaperSubmissionResult:
             submission_path=_string_field(payload, "submission_path"),
             status_path=_string_field(payload, "status_path"),
             status=_status_field(payload),
+            submission=_mapping_field(payload, "submission"),
         )
 
     def as_legacy_payload(self) -> dict[str, Any]:
@@ -166,6 +221,7 @@ class PaperReconciliationResult:
     order_status_path: str
     order_status: str
     poll_status: str
+    submission: dict[str, Any] | None = None
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any]) -> PaperReconciliationResult:
@@ -175,6 +231,7 @@ class PaperReconciliationResult:
             order_status_path=_string_field(payload, "order_status_path"),
             order_status=_string_field(payload, "order_status"),
             poll_status=_string_field(payload, "poll_status"),
+            submission=_mapping_field(payload, "submission"),
         )
 
     def as_legacy_payload(self) -> dict[str, Any]:
