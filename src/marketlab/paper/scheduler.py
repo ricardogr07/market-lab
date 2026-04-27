@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.paper.contracts import (
+    PaperDecisionResult,
+    PaperReconciliationResult,
+    PaperSubmissionResult,
+)
 from marketlab.paper.notifications import (
     PaperLoopStageError,
     TelegramTransport,
@@ -143,13 +148,14 @@ def run_scheduler_iteration(
                 now=now,
                 notification_transport=notification_transport,
             )
+            decision_result = PaperDecisionResult.from_legacy(result)
         except Exception as exc:
             raise PaperLoopStageError(
                 loop_name="scheduler",
                 stage="paper-decision",
                 cause=exc,
             ) from exc
-        events.append({"phase": "decision", **result})
+        events.append({"phase": "decision", **decision_result.as_legacy_payload()})
         state["last_decision_market_date"] = market_date
         state["last_decision_at"] = _now_utc(now).isoformat()
 
@@ -160,6 +166,7 @@ def run_scheduler_iteration(
                 now=now,
                 notification_transport=notification_transport,
             )
+            submission_result = PaperSubmissionResult.from_legacy(result)
         except Exception as exc:
             proposal = PaperStateStore(config).latest_proposal()
             raise PaperLoopStageError(
@@ -169,7 +176,7 @@ def run_scheduler_iteration(
                 proposal_id=str((proposal or {}).get("proposal_id", "")),
                 trade_date=str((proposal or {}).get("effective_date", "")),
             ) from exc
-        events.append({"phase": "submission", **result})
+        events.append({"phase": "submission", **submission_result.as_legacy_payload()})
         state["last_submission_market_date"] = market_date
         state["last_submission_at"] = _now_utc(now).isoformat()
 
@@ -185,7 +192,8 @@ def run_scheduler_iteration(
             trade_date=str((proposal or {}).get("effective_date", "")),
         ) from exc
     if reconciliation is not None:
-        events.append({"phase": "submission_reconcile", **reconciliation})
+        reconciliation_result = PaperReconciliationResult.from_legacy(reconciliation)
+        events.append({"phase": "submission_reconcile", **reconciliation_result.as_legacy_payload()})
 
     _clear_scheduler_error_state(state)
     state["last_checked_at"] = _now_utc(now).isoformat()

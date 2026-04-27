@@ -10,7 +10,7 @@ from typing import Any
 
 from marketlab.config import ExperimentConfig
 from marketlab.env import load_env_file
-from marketlab.paper.alpaca import AlpacaPaperBrokerClient
+from marketlab.paper.contracts import PaperApprovalResult, PaperBroker
 from marketlab.paper.notifications import (
     PaperLoopStageError,
     TelegramTransport,
@@ -533,10 +533,15 @@ def _evaluate_with_fallback(
 def _current_account_context(
     config: ExperimentConfig,
     *,
-    broker: AlpacaPaperBrokerClient | None = None,
+    broker: PaperBroker | None = None,
 ) -> dict[str, Any]:
     symbol = str(config.data.symbols[0])
-    client = broker or AlpacaPaperBrokerClient()
+    if broker is None:
+        from marketlab.paper.alpaca import AlpacaPaperBrokerClient
+
+        client: PaperBroker = AlpacaPaperBrokerClient()
+    else:
+        client = broker
     account = client.get_account()
     position = client.get_position(symbol)
     return {
@@ -549,7 +554,7 @@ def run_agent_approval_iteration(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
-    broker: AlpacaPaperBrokerClient | None = None,
+    broker: PaperBroker | None = None,
     notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
@@ -604,6 +609,7 @@ def run_agent_approval_iteration(
                 now=now,
                 notification_transport=notification_transport,
             )
+            approval_result = PaperApprovalResult.from_legacy(result)
             events.append(
                 {
                     "proposal_id": proposal["proposal_id"],
@@ -612,7 +618,7 @@ def run_agent_approval_iteration(
                     "model": "",
                     "fallback_used": False,
                     "fallback_reason": str(exc),
-                    "approval_path": result["approval_path"],
+                    "approval_path": approval_result.approval_path,
                 }
             )
             continue
@@ -637,6 +643,7 @@ def run_agent_approval_iteration(
                 now=now,
                 notification_transport=notification_transport,
             )
+            approval_result = PaperApprovalResult.from_legacy(result)
         except Exception as exc:
             raise PaperLoopStageError(
                 loop_name="agent",
@@ -653,7 +660,7 @@ def run_agent_approval_iteration(
                 "model": decision.model,
                 "fallback_used": decision.fallback_used,
                 "fallback_reason": decision.fallback_reason,
-                "approval_path": result["approval_path"],
+                "approval_path": approval_result.approval_path,
             }
         )
 
