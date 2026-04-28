@@ -624,6 +624,34 @@ def test_run_paper_decision_notifies_existing_proposal(monkeypatch, tmp_path: Pa
     assert "outcome: existing_proposal" in calls[0]["payload"]["text"]
 
 
+def test_run_paper_decision_existing_proposal_tolerates_missing_evidence(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        telegram_enabled=False,
+    )
+    provider = FakeAlpacaProvider(symbol="VOO")
+    broker = FakeAlpacaBroker(symbol="VOO")
+    first_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=provider,
+        broker=broker,
+    )
+    evidence_path = Path(first_result["evidence_path"])
+    evidence_path.unlink()
+
+    result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 11, tzinfo=UTC),
+        provider=provider,
+        broker=broker,
+    )
+
+    assert result["status"]["status"] == "existing_proposal"
+    assert Path(result["evidence_path"]).name == "evidence.json"
+
+
 def test_decide_paper_proposal_notifies_manual_rejection(monkeypatch, tmp_path: Path) -> None:
     config = build_phase7_paper_config(
         tmp_path,

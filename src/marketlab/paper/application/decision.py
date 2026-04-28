@@ -307,7 +307,10 @@ class DecisionService:
                 "updated_at": _now_utc(request.now).isoformat(),
             }
             status_path = store.write_status(status)
-            evidence = store.load_evidence(existing["effective_date"])
+            try:
+                evidence = store.load_evidence(existing["effective_date"])
+            except FileNotFoundError:
+                evidence = None
             notify_paper_decision(
                 config,
                 store,
