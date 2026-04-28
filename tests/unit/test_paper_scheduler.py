@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests._paper_fakes import build_phase7_paper_config
+from tests._paper_fakes import FakePaperNotificationSink, build_phase7_paper_config
 
 from marketlab.paper import scheduler
+from marketlab.paper.notifications import build_telegram_paper_notification_sink
 
 
 def _capture_transport(calls: list[dict[str, object]]):
@@ -65,6 +66,35 @@ def test_scheduler_iteration_runs_each_phase_once_per_market_date(
     assert events == ["decision", "submission"]
 
 
+def test_scheduler_iteration_forwards_injected_notification_sink(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path)
+    sink = FakePaperNotificationSink()
+    forwarded_sinks: list[object] = []
+
+    def _fake_decision(*args, **kwargs):
+        forwarded_sinks.append(kwargs["notification_sink"])
+        return {"proposal_path": "proposal.json", "status_path": "status.json", "status": {}}
+
+    def _fake_submit(*args, **kwargs):
+        forwarded_sinks.append(kwargs["notification_sink"])
+        return {"submission_path": "submission.json", "status_path": "status.json", "status": {}}
+
+    monkeypatch.setattr(scheduler, "run_paper_decision", _fake_decision)
+    monkeypatch.setattr(scheduler, "run_paper_submit", _fake_submit)
+    monkeypatch.setattr(scheduler, "reconcile_latest_submission_status", lambda *args, **kwargs: None)
+
+    scheduler.run_scheduler_iteration(
+        config,
+        now=datetime(2026, 4, 10, 23, 10, tzinfo=UTC),
+        notification_sink=sink,
+    )
+
+    assert forwarded_sinks == [sink, sink]
+
+
 def test_scheduler_iteration_appends_submission_reconciliation_events(
     monkeypatch,
     tmp_path: Path,
@@ -118,20 +148,29 @@ def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
         scheduler.run_scheduler_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
     with pytest.raises(RuntimeError, match="decision phase failed"):
         scheduler.run_scheduler_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     monkeypatch.setattr(scheduler, "run_scheduler_iteration", _successful_iteration)
     scheduler.run_scheduler_loop(
         config,
         once=True,
-        notification_transport=_capture_transport(calls),
+        notification_sink=build_telegram_paper_notification_sink(
+            config,
+            transport=_capture_transport(calls),
+        ),
     )
 
     monkeypatch.setattr(scheduler, "run_scheduler_iteration", _failing_iteration)
@@ -139,7 +178,10 @@ def test_scheduler_loop_deduplicates_repeated_error_alerts_until_recovery(
         scheduler.run_scheduler_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     records = [
@@ -168,7 +210,10 @@ def test_scheduler_loop_once_propagates_iteration_failures_after_notifying(
         scheduler.run_scheduler_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     records = [

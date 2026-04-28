@@ -9,21 +9,20 @@ from typing import Any
 from marketlab.config import ExperimentConfig
 from marketlab.paper.contracts import (
     PaperDecisionResult,
+    PaperNotificationSink,
     PaperReconciliationResult,
     PaperSubmissionResult,
 )
 from marketlab.paper.notifications import (
     PaperLoopStageError,
-    TelegramTransport,
     build_error_fingerprint,
-    build_error_message,
+    build_telegram_paper_notification_sink,
 )
 from marketlab.paper.service import (
     PaperStateStore,
     _clock_value,
     _local_now,
     _now_utc,
-    _write_notification_record,
     reconcile_latest_submission_status,
     run_paper_decision,
     run_paper_submit,
@@ -61,13 +60,17 @@ def _clear_scheduler_error_state(state: dict[str, Any]) -> None:
         state.pop(key, None)
 
 
+def _paper_notification_sink(config: ExperimentConfig) -> PaperNotificationSink:
+    return build_telegram_paper_notification_sink(config)
+
+
 def _notify_scheduler_error(
     config: ExperimentConfig,
     *,
     state: dict[str, Any],
     exc: Exception,
     now: datetime | None = None,
-    transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
 ) -> Path | None:
     if isinstance(exc, PaperLoopStageError):
         stage = exc.stage
@@ -98,33 +101,14 @@ def _notify_scheduler_error(
     state["last_error_proposal_id"] = proposal_id
     state["last_error_trade_date"] = trade_date
     state["last_error_alert_at"] = _now_utc(now).isoformat()
-    store = PaperStateStore(config)
-    return _write_notification_record(
-        config,
-        store,
-        stage="paper-error",
-        outcome="error",
-        message=build_error_message(
-            config,
-            loop_name="scheduler",
-            stage=stage,
-            exc=root_error,
-            proposal_id=proposal_id,
-            trade_date=trade_date,
-        ),
-        details={
-            "experiment_name": config.experiment_name,
-            "loop": "scheduler",
-            "failed_stage": stage,
-            "proposal_id": proposal_id,
-            "trade_date": trade_date,
-            "exception_type": type(root_error).__name__,
-            "exception_message": str(root_error),
-        },
+    sink = notification_sink or _paper_notification_sink(config)
+    return sink.notify_error(
+        loop_name="scheduler",
+        stage=stage,
+        exc=root_error,
         proposal_id=proposal_id,
         trade_date=trade_date,
         now=now,
-        transport=transport,
     )
 
 
@@ -132,7 +116,7 @@ def run_scheduler_iteration(
     config: ExperimentConfig,
     *,
     now: datetime | None = None,
-    notification_transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
 ) -> dict[str, Any]:
     local_now = _local_now(config, now)
     market_date = local_now.date().isoformat()
@@ -146,7 +130,7 @@ def run_scheduler_iteration(
             result = run_paper_decision(
                 config,
                 now=now,
-                notification_transport=notification_transport,
+                notification_sink=notification_sink,
             )
             decision_result = PaperDecisionResult.from_legacy(result)
         except Exception as exc:
@@ -164,7 +148,7 @@ def run_scheduler_iteration(
             result = run_paper_submit(
                 config,
                 now=now,
-                notification_transport=notification_transport,
+                notification_sink=notification_sink,
             )
             submission_result = PaperSubmissionResult.from_legacy(result)
         except Exception as exc:
@@ -210,14 +194,14 @@ def run_scheduler_loop(
     config: ExperimentConfig,
     *,
     once: bool = False,
-    notification_transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
 ) -> None:
     while True:
         loop_error: Exception | None = None
         try:
             summary = run_scheduler_iteration(
                 config,
-                notification_transport=notification_transport,
+                notification_sink=notification_sink,
             )
         except Exception as exc:
             loop_error = exc
@@ -226,7 +210,7 @@ def run_scheduler_loop(
                 config,
                 state=state,
                 exc=exc,
-                transport=notification_transport,
+                notification_sink=notification_sink,
             )
             state_path = _save_scheduler_state(config, state)
             summary = {

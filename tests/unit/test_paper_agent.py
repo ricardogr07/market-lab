@@ -10,11 +10,15 @@ import pytest
 from tests._paper_fakes import (
     FakeAlpacaBroker,
     FakeAlpacaProvider,
+    FakePaperApprovalClient,
+    FakePaperNotificationSink,
     build_phase7_paper_config,
 )
 
 import marketlab.paper.agent as agent_module
 from marketlab.paper.agent import run_agent_approval_iteration, run_agent_approval_loop
+from marketlab.paper.contracts import PaperApprovalClientDecision
+from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.service import PaperStateStore, run_paper_decision
 
 
@@ -161,7 +165,10 @@ def test_agent_worker_falls_back_to_deterministic_consensus(monkeypatch, tmp_pat
         config,
         now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
         broker=FakeAlpacaBroker(symbol="VOO"),
-        notification_transport=_capture_transport(calls),
+        notification_sink=build_telegram_paper_notification_sink(
+            config,
+            transport=_capture_transport(calls),
+        ),
     )
 
     proposal = PaperStateStore(config).latest_proposal()
@@ -174,6 +181,46 @@ def test_agent_worker_falls_back_to_deterministic_consensus(monkeypatch, tmp_pat
     assert "provider: deterministic_consensus" in calls[0]["payload"]["text"]
     assert "fallback_used: true" in calls[0]["payload"]["text"]
     assert "fallback_reason: openai backend failed" in calls[0]["payload"]["text"]
+
+
+def test_agent_worker_supports_injected_approval_client_and_notification_sink(
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=FakeAlpacaBroker(symbol="QQQ"),
+    )
+    approval_client = FakePaperApprovalClient(
+        decision=PaperApprovalClientDecision(
+            decision="approve",
+            rationale="Approved by injected fake client.",
+            provider="fake",
+            model="fake-model",
+            fallback_used=True,
+            fallback_reason="fake backend requested fallback metadata",
+        )
+    )
+    sink = FakePaperNotificationSink()
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="QQQ"),
+        notification_sink=sink,
+        approval_client=approval_client,
+    )
+
+    proposal = PaperStateStore(config).latest_proposal()
+    assert result["processed_count"] == 1
+    assert len(approval_client.requests) == 1
+    assert len(sink.approval_calls) == 1
+    assert proposal is not None
+    assert proposal["approval_backend"] == "fake"
+    assert proposal["approval_model"] == "fake-model"
+    assert proposal["approval_fallback_used"] is True
 
 
 def test_agent_worker_overrides_primary_rejection_when_evidence_requires_approval(
@@ -501,20 +548,29 @@ def test_agent_worker_loop_deduplicates_repeated_error_alerts_until_recovery(
         run_agent_approval_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
     with pytest.raises(RuntimeError, match="approval backend exploded"):
         run_agent_approval_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _successful_iteration)
     run_agent_approval_loop(
         config,
         once=True,
-        notification_transport=_capture_transport(calls),
+        notification_sink=build_telegram_paper_notification_sink(
+            config,
+            transport=_capture_transport(calls),
+        ),
     )
 
     monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _failing_iteration)
@@ -522,7 +578,10 @@ def test_agent_worker_loop_deduplicates_repeated_error_alerts_until_recovery(
         run_agent_approval_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     records = [
@@ -551,7 +610,10 @@ def test_agent_worker_loop_once_propagates_iteration_failures_after_notifying(
         run_agent_approval_loop(
             config,
             once=True,
-            notification_transport=_capture_transport(calls),
+            notification_sink=build_telegram_paper_notification_sink(
+                config,
+                transport=_capture_transport(calls),
+            ),
         )
 
     records = [

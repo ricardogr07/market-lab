@@ -11,6 +11,7 @@ from urllib import error, request
 
 from marketlab.config import ExperimentConfig
 from marketlab.env import load_env_file
+from marketlab.paper.contracts import PaperNotificationSink
 from marketlab.paper.state import PaperStateStore
 
 TELEGRAM_API_BASE_URL_ENV = "MARKETLAB_TELEGRAM_API_BASE_URL"
@@ -337,6 +338,120 @@ def write_notification_record(
         payload=record,
         now=now,
     )
+
+
+class TelegramPaperNotificationSink(PaperNotificationSink):
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        *,
+        transport: TelegramTransport | None = None,
+    ) -> None:
+        self._config = config
+        self._transport = transport
+
+    def _store(self) -> PaperStateStore:
+        return PaperStateStore(self._config)
+
+    def notify_decision(
+        self,
+        *,
+        outcome: str,
+        status: Mapping[str, Any],
+        proposal: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> Path:
+        return notify_paper_decision(
+            self._config,
+            self._store(),
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+            now=now,
+            transport=self._transport,
+        )
+
+    def notify_approval(
+        self,
+        *,
+        proposal: Mapping[str, Any],
+        approval_record: Mapping[str, Any],
+        now: datetime | None = None,
+    ) -> Path:
+        return notify_paper_approval(
+            self._config,
+            self._store(),
+            proposal=proposal,
+            approval_record=approval_record,
+            now=now,
+            transport=self._transport,
+        )
+
+    def notify_submission(
+        self,
+        *,
+        outcome: str,
+        status: Mapping[str, Any],
+        proposal: Mapping[str, Any] | None = None,
+        submission: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> Path:
+        return notify_paper_submission(
+            self._config,
+            self._store(),
+            outcome=outcome,
+            status=status,
+            proposal=proposal,
+            submission=submission,
+            now=now,
+            transport=self._transport,
+        )
+
+    def notify_error(
+        self,
+        *,
+        loop_name: str,
+        stage: str,
+        exc: Exception,
+        proposal_id: str = "",
+        trade_date: str = "",
+        now: datetime | None = None,
+    ) -> Path:
+        return write_notification_record(
+            self._config,
+            self._store(),
+            stage="paper-error",
+            outcome="error",
+            message=build_error_message(
+                self._config,
+                loop_name=loop_name,
+                stage=stage,
+                exc=exc,
+                proposal_id=proposal_id,
+                trade_date=trade_date,
+            ),
+            details={
+                "experiment_name": self._config.experiment_name,
+                "loop": loop_name,
+                "failed_stage": stage,
+                "proposal_id": proposal_id,
+                "trade_date": trade_date,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+            proposal_id=proposal_id,
+            trade_date=trade_date,
+            now=now,
+            transport=self._transport,
+        )
+
+
+def build_telegram_paper_notification_sink(
+    config: ExperimentConfig,
+    *,
+    transport: TelegramTransport | None = None,
+) -> PaperNotificationSink:
+    return TelegramPaperNotificationSink(config, transport=transport)
 
 
 def notify_paper_decision(

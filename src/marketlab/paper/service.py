@@ -19,6 +19,7 @@ from marketlab.paper.contracts import (
     PaperDecisionRequest,
     PaperHistoryProvider,
     PaperHistoryProviderFactory,
+    PaperNotificationSink,
     PaperReconciliationRequest,
     PaperSubmissionRequest,
     PaperUnitOfWorkFactory,
@@ -44,13 +45,7 @@ from marketlab.paper.core import (
 from marketlab.paper.core import (
     validate_paper_trading_config,
 )
-from marketlab.paper.notifications import (
-    TelegramTransport,
-    notify_paper_approval,
-    notify_paper_decision,
-    notify_paper_submission,
-    write_notification_record,
-)
+from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_uow_factory,
@@ -63,7 +58,6 @@ _clock_value = _core_clock_value
 _local_now = _core_local_now
 _now_utc = _core_now_utc
 _paper_symbol = _core_paper_symbol
-_write_notification_record = write_notification_record
 
 
 def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
@@ -86,6 +80,14 @@ def _paper_artifact_store(config: ExperimentConfig) -> PaperArtifactStore:
     return build_filesystem_paper_artifact_store(config)
 
 
+def _paper_notification_sink(config: ExperimentConfig) -> PaperNotificationSink:
+    return build_telegram_paper_notification_sink(config)
+
+
+def _paper_state_store(config: ExperimentConfig) -> PaperStateStore:
+    return PaperStateStore(config)
+
+
 def _decision_notification_outcome(status: dict[str, Any]) -> str:
     outcome = str(status.get("status", ""))
     if outcome == SUBMISSION_SKIPPED:
@@ -101,7 +103,7 @@ def run_paper_decision(
     now: datetime | None = None,
     provider: PaperHistoryProvider | None = None,
     broker: PaperBroker | None = None,
-    notification_transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
 ) -> dict[str, Any]:
     result = DecisionService(
         config,
@@ -113,17 +115,14 @@ def run_paper_decision(
             now=now,
             provider=provider,
             broker=broker,
-            notification_transport=notification_transport,
         )
     )
-    notify_paper_decision(
-        config,
-        PaperStateStore(config),
+    sink = notification_sink or _paper_notification_sink(config)
+    sink.notify_decision(
         outcome=_decision_notification_outcome(result.status),
         status=result.status,
         proposal=result.proposal,
         now=now,
-        transport=notification_transport,
     )
     return result.as_legacy_payload()
 
@@ -175,7 +174,7 @@ def decide_paper_proposal(
     fallback_used: bool = False,
     fallback_reason: str | None = None,
     now: datetime | None = None,
-    notification_transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
 ) -> dict[str, Any]:
     result = ApprovalService(config, uow_factory=_paper_uow_factory(config)).run(
         PaperApprovalRequest(
@@ -188,17 +187,14 @@ def decide_paper_proposal(
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
             now=now,
-            notification_transport=notification_transport,
         )
     )
     if result.proposal is not None and result.approval is not None:
-        notify_paper_approval(
-            config,
-            PaperStateStore(config),
+        sink = notification_sink or _paper_notification_sink(config)
+        sink.notify_approval(
             proposal=result.proposal,
             approval_record=result.approval,
             now=now,
-            transport=notification_transport,
         )
     return result.as_legacy_payload()
 
@@ -229,7 +225,7 @@ def run_paper_submit(
     *,
     now: datetime | None = None,
     broker: PaperBroker | None = None,
-    notification_transport: TelegramTransport | None = None,
+    notification_sink: PaperNotificationSink | None = None,
     retry_failed_submission: bool = False,
 ) -> dict[str, Any]:
     result = SubmissionService(
@@ -241,19 +237,16 @@ def run_paper_submit(
         PaperSubmissionRequest(
             now=now,
             broker=broker,
-            notification_transport=notification_transport,
             retry_failed_submission=retry_failed_submission,
         )
     )
-    notify_paper_submission(
-        config,
-        PaperStateStore(config),
+    sink = notification_sink or _paper_notification_sink(config)
+    sink.notify_submission(
         outcome=str(result.status.get("status", "")),
         status=result.status,
         proposal=result.proposal,
         submission=result.submission,
         now=now,
-        transport=notification_transport,
     )
     legacy = result.as_legacy_payload()
     legacy.pop("proposal_id", None)
