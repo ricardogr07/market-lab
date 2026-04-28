@@ -25,6 +25,7 @@ from marketlab.paper.contracts import (
     PaperDecisionRequest,
     PaperDecisionResult,
     PaperHistoryProvider,
+    PaperUnitOfWorkFactory,
 )
 from marketlab.paper.core import (
     APPROVAL_NOT_REQUIRED,
@@ -39,8 +40,7 @@ from marketlab.paper.core import (
     _paper_symbol,
     validate_paper_trading_config,
 )
-from marketlab.paper.notifications import notify_paper_decision
-from marketlab.paper.state import PaperStateStore
+from marketlab.paper.persistence import build_filesystem_paper_uow_factory
 from marketlab.targets import add_forward_targets, build_rebalance_snapshots
 
 
@@ -200,14 +200,19 @@ def _reference_price_for_signal(
 
 
 class DecisionService:
-    def __init__(self, config: ExperimentConfig) -> None:
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        *,
+        uow_factory: PaperUnitOfWorkFactory | None = None,
+    ) -> None:
         self._config = config
+        self._uow_factory = uow_factory or build_filesystem_paper_uow_factory(config)
 
     def run(self, request: PaperDecisionRequest) -> PaperDecisionResult:
         config = self._config
         validate_paper_trading_config(config)
         paper_symbol = _paper_symbol(config)
-        store = PaperStateStore(config)
         local_now = _local_now(config, request.now)
         broker_client = request.broker or AlpacaPaperBrokerClient()
         market_date = local_now.date()
@@ -220,15 +225,9 @@ class DecisionService:
                 "market_date": market_date.isoformat(),
                 "updated_at": _now_utc(request.now).isoformat(),
             }
-            status_path = store.write_status(status)
-            notify_paper_decision(
-                config,
-                store,
-                outcome="non_trading_day",
-                status=status,
-                now=request.now,
-                transport=request.notification_transport,
-            )
+            with self._uow_factory() as uow:
+                status_path = uow.status.write_status(status)
+                uow.commit()
             return PaperDecisionResult(
                 status_path=str(status_path),
                 status=status,
@@ -253,15 +252,9 @@ class DecisionService:
                 "latest_signal_date": latest_signal_date.date().isoformat(),
                 "updated_at": _now_utc(request.now).isoformat(),
             }
-            status_path = store.write_status(status)
-            notify_paper_decision(
-                config,
-                store,
-                outcome="stale_signal_date",
-                status=status,
-                now=request.now,
-                transport=request.notification_transport,
-            )
+            with self._uow_factory() as uow:
+                status_path = uow.status.write_status(status)
+                uow.commit()
             return PaperDecisionResult(
                 status_path=str(status_path),
                 status=status,
@@ -293,42 +286,30 @@ class DecisionService:
             symbol=paper_symbol,
         )
 
-        try:
-            existing = store.load_proposal(proposal_id)
-        except FileNotFoundError:
-            existing = None
-        if existing is not None:
-            evidence_path = store.trade_evidence_path(existing["effective_date"])
-            status = {
-                "event": "paper-decision",
-                "status": "existing_proposal",
-                "proposal_id": proposal_id,
-                "proposal_path": str(store.inbox_proposal_path(proposal_id)),
-                "updated_at": _now_utc(request.now).isoformat(),
-            }
-            status_path = store.write_status(status)
-            try:
-                evidence = store.load_evidence(existing["effective_date"])
-            except FileNotFoundError:
-                evidence = None
-            notify_paper_decision(
-                config,
-                store,
-                outcome="existing_proposal",
-                status=status,
-                proposal=existing,
-                now=request.now,
-                transport=request.notification_transport,
-            )
-            return PaperDecisionResult(
-                proposal_id=proposal_id,
-                proposal_path=str(store.inbox_proposal_path(proposal_id)),
-                evidence_path=str(evidence_path),
-                status_path=str(status_path),
-                status=status,
-                proposal=existing,
-                evidence=evidence,
-            )
+        with self._uow_factory() as uow:
+            existing = uow.trades.get_proposal(proposal_id)
+            if existing is not None:
+                evidence = uow.trades.get_evidence(str(existing["effective_date"]))
+                evidence_path = uow.trades.trade_evidence_path(str(existing["effective_date"]))
+                proposal_path = uow.trades.proposal_path(proposal_id)
+                status = {
+                    "event": "paper-decision",
+                    "status": "existing_proposal",
+                    "proposal_id": proposal_id,
+                    "proposal_path": str(proposal_path),
+                    "updated_at": _now_utc(request.now).isoformat(),
+                }
+                status_path = uow.status.write_status(status)
+                uow.commit()
+                return PaperDecisionResult(
+                    proposal_id=proposal_id,
+                    proposal_path=str(proposal_path),
+                    evidence_path=str(evidence_path),
+                    status_path=str(status_path),
+                    status=status,
+                    proposal=existing,
+                    evidence=evidence,
+                )
 
         train_rows = _training_rows_for_latest_signal(labeled_dataset, config, latest_signal_date)
         if len(train_rows) < max(1, config.evaluation.walk_forward.min_train_rows):
@@ -379,48 +360,40 @@ class DecisionService:
             **consensus_summary,
             "created_at": _now_utc(request.now).isoformat(),
         }
-        evidence_path = store.save_evidence(evidence)
-
-        proposal = {
-            "proposal_id": proposal_id,
-            "experiment_name": config.experiment_name,
-            "symbol": paper_symbol,
-            "signal_date": _iso_date(latest_signal_date),
-            "effective_date": effective_date,
-            "reference_price": reference_price,
-            "execution_mode": config.paper.execution_mode,
-            "approval_status": approval_status,
-            "submission_status": SUBMISSION_PENDING,
-            "min_score_threshold": float(config.portfolio.ranking.min_score_threshold),
-            "train_rows": int(len(train_rows)),
-            "train_start": evidence["train_start"],
-            "train_end": evidence["train_end"],
-            "train_positive_rate": train_positive_rate,
-            "created_at": _now_utc(request.now).isoformat(),
-            "data_provider": config.paper.data_provider,
-            "broker": config.paper.broker,
-            "evidence_path": str(evidence_path),
-            **consensus_summary,
-        }
-        proposal_path = store.save_proposal(proposal)
-        status = {
-            "event": "paper-decision",
-            "status": "proposal_created",
-            "proposal_id": proposal_id,
-            "proposal_path": str(proposal_path),
-            "evidence_path": str(evidence_path),
-            "updated_at": _now_utc(request.now).isoformat(),
-        }
-        status_path = store.write_status(status)
-        notify_paper_decision(
-            config,
-            store,
-            outcome="proposal_created",
-            status=status,
-            proposal=proposal,
-            now=request.now,
-            transport=request.notification_transport,
-        )
+        with self._uow_factory() as uow:
+            evidence_path = uow.trades.save_evidence(evidence)
+            proposal = {
+                "proposal_id": proposal_id,
+                "experiment_name": config.experiment_name,
+                "symbol": paper_symbol,
+                "signal_date": _iso_date(latest_signal_date),
+                "effective_date": effective_date,
+                "reference_price": reference_price,
+                "execution_mode": config.paper.execution_mode,
+                "approval_status": approval_status,
+                "submission_status": SUBMISSION_PENDING,
+                "min_score_threshold": float(config.portfolio.ranking.min_score_threshold),
+                "train_rows": int(len(train_rows)),
+                "train_start": evidence["train_start"],
+                "train_end": evidence["train_end"],
+                "train_positive_rate": train_positive_rate,
+                "created_at": _now_utc(request.now).isoformat(),
+                "data_provider": config.paper.data_provider,
+                "broker": config.paper.broker,
+                "evidence_path": str(evidence_path),
+                **consensus_summary,
+            }
+            proposal_path = uow.trades.save_proposal(proposal)
+            status = {
+                "event": "paper-decision",
+                "status": "proposal_created",
+                "proposal_id": proposal_id,
+                "proposal_path": str(proposal_path),
+                "evidence_path": str(evidence_path),
+                "updated_at": _now_utc(request.now).isoformat(),
+            }
+            status_path = uow.status.write_status(status)
+            uow.commit()
         return PaperDecisionResult(
             proposal_id=proposal_id,
             proposal_path=str(proposal_path),
