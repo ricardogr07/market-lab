@@ -136,11 +136,12 @@ class ReconciliationService:
         trade_date = str(submission["trade_date"])
         with self._uow_factory() as path_uow:
             order_status_path = path_uow.trades.trade_order_status_path(trade_date)
+            has_order_status_path = path_uow.trades.order_status_path_exists(trade_date)
         broker_client = self._broker(request)
         refreshed = _refresh_submission_order_status(
             submission=submission,
             order_status_path=order_status_path,
-            has_order_status_path=str(submission.get("order_status_path", "")).strip() != "",
+            has_order_status_path=has_order_status_path,
             broker_client=broker_client,
             now=request.now,
         )

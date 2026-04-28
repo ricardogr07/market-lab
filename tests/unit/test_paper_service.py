@@ -498,6 +498,53 @@ def test_reconcile_latest_submission_status_refreshes_broker_rejection(tmp_path:
     assert submission["order_status"] == "rejected"
 
 
+def test_reconcile_latest_submission_status_recreates_missing_order_status_artifact(
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(proposal_result["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )
+
+    order_status_path = store.trade_order_status_path("2026-04-13")
+    order_status = json.loads(order_status_path.read_text(encoding="utf-8"))
+    order_status_path.unlink()
+    assert not order_status_path.exists()
+
+    broker.order_status = str(order_status["status"])
+    reconciliation = reconcile_latest_submission_status(
+        config,
+        now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
+        broker=broker,
+    )
+
+    recreated_order_status = json.loads(order_status_path.read_text(encoding="utf-8"))
+    assert reconciliation is not None
+    assert recreated_order_status == order_status
+
+
 def test_reconcile_latest_submission_status_uses_latest_submitted_trade(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
     broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")

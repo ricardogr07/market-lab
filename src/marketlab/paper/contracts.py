@@ -117,6 +117,8 @@ class PaperTradeRepository(Protocol):
 
     def trade_order_status_path(self, trade_date: str) -> Path: ...
 
+    def order_status_path_exists(self, trade_date: str) -> bool: ...
+
     def backup_submission_attempt_artifacts(
         self,
         *,

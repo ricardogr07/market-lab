@@ -148,6 +148,12 @@ class InMemoryPaperTradeRepository(PaperTradeRepository):
     def trade_order_status_path(self, trade_date: str) -> Path:
         return self._trade_path(trade_date) / "order_status.json"
 
+    def order_status_path_exists(self, trade_date: str) -> bool:
+        return (
+            trade_date in self._pending.order_status_by_trade_date
+            or trade_date in self._state.order_status_by_trade_date
+        )
+
     def backup_submission_attempt_artifacts(
         self,
         *,

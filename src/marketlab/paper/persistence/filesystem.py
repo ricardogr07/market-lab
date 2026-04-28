@@ -109,6 +109,10 @@ class FilesystemPaperTradeRepository(PaperTradeRepository):
     def trade_order_status_path(self, trade_date: str) -> Path:
         return self._store.trade_order_status_path(trade_date)
 
+    def order_status_path_exists(self, trade_date: str) -> bool:
+        path = self._store.trade_order_status_path(trade_date)
+        return path in self._pending_writes or path.exists()
+
     def backup_submission_attempt_artifacts(
         self,
         *,

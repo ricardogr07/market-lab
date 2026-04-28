@@ -95,6 +95,7 @@ class SubmissionService:
             trade_date = str(proposal["effective_date"])
             submission_path = uow.trades.trade_submission_path(trade_date)
             order_status_path = uow.trades.trade_order_status_path(trade_date)
+            has_order_status_path = uow.trades.order_status_path_exists(trade_date)
             submission = uow.trades.get_submission(trade_date)
 
         if submission is not None:
@@ -102,7 +103,7 @@ class SubmissionService:
             refreshed = _refresh_submission_order_status(
                 submission=submission,
                 order_status_path=order_status_path,
-                has_order_status_path=str(submission.get("order_status_path", "")).strip() != "",
+                has_order_status_path=has_order_status_path,
                 broker_client=broker_client,
                 now=request.now,
             )
