@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from marketlab.config import ExperimentConfig
-from marketlab.paper.alpaca import AlpacaPaperBrokerClient
 from marketlab.paper.contracts import (
+    PaperArtifactStore,
+    PaperBroker,
+    PaperBrokerFactory,
     PaperSubmissionRequest,
     PaperSubmissionResult,
     PaperUnitOfWorkFactory,
@@ -26,11 +28,6 @@ from marketlab.paper.core import (
     _rounded_notional,
     _safe_float,
     validate_paper_trading_config,
-)
-from marketlab.paper.persistence import (
-    build_filesystem_paper_uow_factory,
-    write_trade_account_snapshot,
-    write_trade_order_preview,
 )
 
 from .reconciliation import _poll_order_status, _refresh_submission_order_status
@@ -60,10 +57,21 @@ class SubmissionService:
         self,
         config: ExperimentConfig,
         *,
-        uow_factory: PaperUnitOfWorkFactory | None = None,
+        uow_factory: PaperUnitOfWorkFactory,
+        artifact_store: PaperArtifactStore,
+        broker_factory: PaperBrokerFactory | None = None,
     ) -> None:
         self._config = config
-        self._uow_factory = uow_factory or build_filesystem_paper_uow_factory(config)
+        self._uow_factory = uow_factory
+        self._artifact_store = artifact_store
+        self._broker_factory = broker_factory
+
+    def _broker(self, request: PaperSubmissionRequest) -> PaperBroker:
+        if request.broker is not None:
+            return request.broker
+        if self._broker_factory is None:
+            raise RuntimeError("SubmissionService requires a broker or broker_factory.")
+        return self._broker_factory()
 
     def run(self, request: PaperSubmissionRequest) -> PaperSubmissionResult:
         config = self._config
@@ -90,10 +98,11 @@ class SubmissionService:
             submission = uow.trades.get_submission(trade_date)
 
         if submission is not None:
-            broker_client = request.broker or AlpacaPaperBrokerClient()
+            broker_client = self._broker(request)
             refreshed = _refresh_submission_order_status(
                 submission=submission,
                 order_status_path=order_status_path,
+                has_order_status_path=str(submission.get("order_status_path", "")).strip() != "",
                 broker_client=broker_client,
                 now=request.now,
             )
@@ -149,7 +158,7 @@ class SubmissionService:
                     "paper-submit is only allowed at or after "
                     f"{config.paper.submission_time} {config.paper.schedule_timezone}."
                 )
-            broker_client = request.broker or AlpacaPaperBrokerClient()
+            broker_client = self._broker(request)
             retry_suffix = ""
 
         gate_status, gate_reason = _submission_gate_status(config, proposal)
@@ -186,8 +195,7 @@ class SubmissionService:
             )
 
         account = broker_client.get_account()
-        account_snapshot_path = write_trade_account_snapshot(
-            config,
+        account_snapshot_path = self._artifact_store.write_trade_account_snapshot(
             trade_date=trade_date,
             payload=account,
         )
@@ -251,8 +259,7 @@ class SubmissionService:
             "side": side,
             "updated_at": _now_utc(request.now).isoformat(),
         }
-        order_preview_path = write_trade_order_preview(
-            config,
+        order_preview_path = self._artifact_store.write_trade_order_preview(
             trade_date=trade_date,
             payload=order_preview,
         )
