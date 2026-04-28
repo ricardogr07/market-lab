@@ -22,6 +22,9 @@ from marketlab.paper.core import (
     APPROVAL_PENDING as _APPROVAL_PENDING,
 )
 from marketlab.paper.core import (
+    SUBMISSION_SKIPPED as _SUBMISSION_SKIPPED,
+)
+from marketlab.paper.core import (
     _clock_value as _core_clock_value,
 )
 from marketlab.paper.core import (
@@ -36,15 +39,36 @@ from marketlab.paper.core import (
 from marketlab.paper.core import (
     validate_paper_trading_config,
 )
-from marketlab.paper.notifications import TelegramTransport, write_notification_record
+from marketlab.paper.notifications import (
+    TelegramTransport,
+    notify_paper_approval,
+    notify_paper_decision,
+    notify_paper_submission,
+    write_notification_record,
+)
+from marketlab.paper.persistence import build_filesystem_paper_uow_factory
 from marketlab.paper.state import PaperStateStore
 
 APPROVAL_PENDING = _APPROVAL_PENDING
+SUBMISSION_SKIPPED = _SUBMISSION_SKIPPED
 _clock_value = _core_clock_value
 _local_now = _core_local_now
 _now_utc = _core_now_utc
 _paper_symbol = _core_paper_symbol
 _write_notification_record = write_notification_record
+
+
+def _paper_uow_factory(config: ExperimentConfig):
+    return build_filesystem_paper_uow_factory(config)
+
+
+def _decision_notification_outcome(status: dict[str, Any]) -> str:
+    outcome = str(status.get("status", ""))
+    if outcome == SUBMISSION_SKIPPED:
+        reason = str(status.get("reason", "")).strip()
+        if reason != "":
+            return reason
+    return outcome
 
 
 def run_paper_decision(
@@ -55,7 +79,7 @@ def run_paper_decision(
     broker: PaperBroker | None = None,
     notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
-    result = DecisionService(config).run(
+    result = DecisionService(config, uow_factory=_paper_uow_factory(config)).run(
         PaperDecisionRequest(
             now=now,
             provider=provider,
@@ -63,12 +87,22 @@ def run_paper_decision(
             notification_transport=notification_transport,
         )
     )
+    notify_paper_decision(
+        config,
+        PaperStateStore(config),
+        outcome=_decision_notification_outcome(result.status),
+        status=result.status,
+        proposal=result.proposal,
+        now=now,
+        transport=notification_transport,
+    )
     return result.as_legacy_payload()
 
 
 def list_paper_proposals(config: ExperimentConfig) -> list[dict[str, Any]]:
     validate_paper_trading_config(config)
-    return PaperStateStore(config).list_proposals()
+    with _paper_uow_factory(config)() as uow:
+        return uow.trades.list_proposals()
 
 
 def read_paper_proposal(
@@ -77,7 +111,11 @@ def read_paper_proposal(
     proposal_id: str,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
-    return PaperStateStore(config).load_proposal(proposal_id)
+    with _paper_uow_factory(config)() as uow:
+        proposal = uow.trades.get_proposal(proposal_id)
+    if proposal is None:
+        raise FileNotFoundError(f"Unknown proposal_id: {proposal_id}")
+    return proposal
 
 
 def read_paper_evidence(
@@ -86,9 +124,14 @@ def read_paper_evidence(
     proposal_id: str,
 ) -> dict[str, Any]:
     validate_paper_trading_config(config)
-    store = PaperStateStore(config)
-    proposal = store.load_proposal(proposal_id)
-    return store.load_evidence(proposal["effective_date"])
+    with _paper_uow_factory(config)() as uow:
+        proposal = uow.trades.get_proposal(proposal_id)
+        if proposal is None:
+            raise FileNotFoundError(f"Unknown proposal_id: {proposal_id}")
+        evidence = uow.trades.get_evidence(str(proposal["effective_date"]))
+    if evidence is None:
+        raise FileNotFoundError(f"Missing evidence for proposal_id: {proposal_id}")
+    return evidence
 
 
 def decide_paper_proposal(
@@ -105,7 +148,7 @@ def decide_paper_proposal(
     now: datetime | None = None,
     notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
-    result = ApprovalService(config).run(
+    result = ApprovalService(config, uow_factory=_paper_uow_factory(config)).run(
         PaperApprovalRequest(
             proposal_id=proposal_id,
             decision=decision,
@@ -119,6 +162,15 @@ def decide_paper_proposal(
             notification_transport=notification_transport,
         )
     )
+    if result.proposal is not None and result.approval is not None:
+        notify_paper_approval(
+            config,
+            PaperStateStore(config),
+            proposal=result.proposal,
+            approval_record=result.approval,
+            now=now,
+            transport=notification_transport,
+        )
     return result.as_legacy_payload()
 
 
@@ -128,7 +180,7 @@ def reconcile_latest_submission_status(
     now: datetime | None = None,
     broker: PaperBroker | None = None,
 ) -> dict[str, Any] | None:
-    result = ReconciliationService(config).run(
+    result = ReconciliationService(config, uow_factory=_paper_uow_factory(config)).run(
         PaperReconciliationRequest(
             now=now,
             broker=broker,
@@ -147,13 +199,23 @@ def run_paper_submit(
     notification_transport: TelegramTransport | None = None,
     retry_failed_submission: bool = False,
 ) -> dict[str, Any]:
-    result = SubmissionService(config).run(
+    result = SubmissionService(config, uow_factory=_paper_uow_factory(config)).run(
         PaperSubmissionRequest(
             now=now,
             broker=broker,
             notification_transport=notification_transport,
             retry_failed_submission=retry_failed_submission,
         )
+    )
+    notify_paper_submission(
+        config,
+        PaperStateStore(config),
+        outcome=str(result.status.get("status", "")),
+        status=result.status,
+        proposal=result.proposal,
+        submission=result.submission,
+        now=now,
+        transport=notification_transport,
     )
     legacy = result.as_legacy_payload()
     legacy.pop("proposal_id", None)
@@ -164,17 +226,19 @@ def run_paper_submit(
 
 def get_paper_status(config: ExperimentConfig) -> dict[str, Any]:
     validate_paper_trading_config(config)
-    store = PaperStateStore(config)
-    latest_proposal = store.latest_proposal()
-    proposals = store.list_proposals()
+    with _paper_uow_factory(config)() as uow:
+        latest_proposal = uow.trades.get_latest_proposal()
+        proposals = uow.trades.list_proposals()
+        status = uow.status.read_status()
+        status_path = uow.status.status_path
     pending_proposals = [
         proposal
         for proposal in proposals
         if proposal.get("approval_status", APPROVAL_PENDING) == APPROVAL_PENDING
     ]
     return {
-        "status_path": str(store.status_path),
-        "status": store.read_status(),
+        "status_path": str(status_path),
+        "status": status,
         "latest_proposal": latest_proposal,
         "pending_proposal_count": len(pending_proposals),
     }
