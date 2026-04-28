@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, runtime_checkable
 
 import pandas as pd
@@ -74,6 +75,76 @@ class PaperBroker(Protocol):
     ) -> dict[str, Any]: ...
 
     def get_order(self, order_id: str) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class PaperTradeRepository(Protocol):
+    def list_proposals(self) -> list[dict[str, Any]]: ...
+
+    def get_latest_proposal(self) -> dict[str, Any] | None: ...
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None: ...
+
+    def get_evidence(self, trade_date: str) -> dict[str, Any] | None: ...
+
+    def get_submission(self, trade_date: str) -> dict[str, Any] | None: ...
+
+    def save_evidence(self, evidence: dict[str, Any]) -> Path: ...
+
+    def save_proposal(self, proposal: dict[str, Any]) -> Path: ...
+
+    def save_approval(self, *, trade_date: str, approval: dict[str, Any]) -> Path: ...
+
+    def save_submission(self, *, trade_date: str, submission: dict[str, Any]) -> Path: ...
+
+    def save_order_status(self, *, trade_date: str, order_status: dict[str, Any]) -> Path: ...
+
+    def proposal_path(self, proposal_id: str) -> Path: ...
+
+    def trade_evidence_path(self, trade_date: str) -> Path: ...
+
+    def trade_submission_path(self, trade_date: str) -> Path: ...
+
+    def trade_order_status_path(self, trade_date: str) -> Path: ...
+
+    def backup_submission_attempt_artifacts(
+        self,
+        *,
+        trade_date: str,
+        now: datetime | None = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class PaperStatusRepository(Protocol):
+    @property
+    def status_path(self) -> Path: ...
+
+    def read_status(self) -> dict[str, Any] | None: ...
+
+    def write_status(self, payload: dict[str, Any]) -> Path: ...
+
+
+@runtime_checkable
+class PaperUnitOfWork(Protocol):
+    @property
+    def trades(self) -> PaperTradeRepository: ...
+
+    @property
+    def status(self) -> PaperStatusRepository: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+    def __enter__(self) -> PaperUnitOfWork: ...
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+
+
+@runtime_checkable
+class PaperUnitOfWorkFactory(Protocol):
+    def __call__(self) -> PaperUnitOfWork: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -191,6 +262,7 @@ class PaperSubmissionResult:
     status_path: str = ""
     status: dict[str, Any] = field(default_factory=dict)
     submission: dict[str, Any] | None = None
+    proposal: dict[str, Any] | None = None
 
     @classmethod
     def from_legacy(cls, payload: dict[str, Any]) -> PaperSubmissionResult:
@@ -200,6 +272,7 @@ class PaperSubmissionResult:
             status_path=_string_field(payload, "status_path"),
             status=_status_field(payload),
             submission=_mapping_field(payload, "submission"),
+            proposal=_mapping_field(payload, "proposal"),
         )
 
     def as_legacy_payload(self) -> dict[str, Any]:
