@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from tests._paper_fakes import (
     FakeAlpacaBroker,
@@ -17,9 +18,14 @@ from marketlab.paper.application import (
 )
 from marketlab.paper.contracts import (
     PaperApprovalRequest,
+    PaperArtifactStore,
     PaperDecisionRequest,
     PaperReconciliationRequest,
     PaperSubmissionRequest,
+)
+from marketlab.paper.persistence import (
+    build_filesystem_paper_artifact_store,
+    build_filesystem_paper_uow_factory,
 )
 from marketlab.paper.service import (
     PaperStateStore,
@@ -29,6 +35,37 @@ from marketlab.paper.service import (
     run_paper_submit,
 )
 from marketlab.paper.state import _json_load
+
+
+class _RecordingArtifactStore(PaperArtifactStore):
+    def __init__(self, delegate: PaperArtifactStore) -> None:
+        self._delegate = delegate
+        self.account_snapshot_writes: list[tuple[str, dict[str, Any]]] = []
+        self.order_preview_writes: list[tuple[str, dict[str, Any]]] = []
+
+    def write_trade_account_snapshot(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path:
+        self.account_snapshot_writes.append((trade_date, dict(payload)))
+        return self._delegate.write_trade_account_snapshot(
+            trade_date=trade_date,
+            payload=payload,
+        )
+
+    def write_trade_order_preview(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path:
+        self.order_preview_writes.append((trade_date, dict(payload)))
+        return self._delegate.write_trade_order_preview(
+            trade_date=trade_date,
+            payload=payload,
+        )
 
 
 def _normalize_proposal(proposal: dict[str, object]) -> dict[str, object]:
@@ -131,7 +168,10 @@ def test_decision_service_matches_legacy_wrapper(tmp_path: Path) -> None:
     direct_config = build_phase7_paper_config(tmp_path / "direct")
     wrapper_config = build_phase7_paper_config(tmp_path / "wrapper")
 
-    direct_result = DecisionService(direct_config).run(
+    direct_result = DecisionService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+    ).run(
         PaperDecisionRequest(
             now=decision_now,
             provider=FakeAlpacaProvider(symbol="VOO"),
@@ -164,13 +204,46 @@ def test_decision_service_matches_legacy_wrapper(tmp_path: Path) -> None:
     assert wrapped_evidence == direct_evidence
 
 
+def test_decision_service_supports_injected_broker_and_provider_factories(tmp_path: Path) -> None:
+    decision_now = datetime(2026, 4, 10, 20, 10, tzinfo=UTC)
+    config = build_phase7_paper_config(tmp_path, symbol="QQQ")
+    provider = FakeAlpacaProvider(symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ")
+    provider_calls = 0
+    broker_calls = 0
+
+    def _provider_factory() -> FakeAlpacaProvider:
+        nonlocal provider_calls
+        provider_calls += 1
+        return provider
+
+    def _broker_factory() -> FakeAlpacaBroker:
+        nonlocal broker_calls
+        broker_calls += 1
+        return broker
+
+    result = DecisionService(
+        config,
+        uow_factory=build_filesystem_paper_uow_factory(config),
+        history_provider_factory=_provider_factory,
+        broker_factory=_broker_factory,
+    ).run(PaperDecisionRequest(now=decision_now))
+
+    assert result.proposal_id != ""
+    assert provider_calls == 1
+    assert broker_calls == 1
+
+
 def test_approval_service_matches_legacy_wrapper(tmp_path: Path) -> None:
     decision_now = datetime(2026, 4, 10, 20, 10, tzinfo=UTC)
     approval_now = datetime(2026, 4, 10, 20, 20, tzinfo=UTC)
     direct_config = build_phase7_paper_config(tmp_path / "direct")
     wrapper_config = build_phase7_paper_config(tmp_path / "wrapper")
 
-    direct_decision = DecisionService(direct_config).run(
+    direct_decision = DecisionService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+    ).run(
         PaperDecisionRequest(
             now=decision_now,
             provider=FakeAlpacaProvider(symbol="VOO"),
@@ -184,7 +257,10 @@ def test_approval_service_matches_legacy_wrapper(tmp_path: Path) -> None:
         broker=FakeAlpacaBroker(symbol="VOO"),
     )
 
-    direct_result = ApprovalService(direct_config).run(
+    direct_result = ApprovalService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+    ).run(
         PaperApprovalRequest(
             proposal_id=direct_decision.proposal_id,
             decision="approve",
@@ -248,7 +324,12 @@ def test_submission_service_matches_legacy_wrapper(tmp_path: Path) -> None:
         broker=wrapper_broker,
     )
 
-    direct_result = SubmissionService(direct_config).run(
+    recording_store = _RecordingArtifactStore(build_filesystem_paper_artifact_store(direct_config))
+    direct_result = SubmissionService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+        artifact_store=recording_store,
+    ).run(
         PaperSubmissionRequest(
             now=submission_now,
             broker=direct_broker,
@@ -286,6 +367,18 @@ def test_submission_service_matches_legacy_wrapper(tmp_path: Path) -> None:
     assert wrapper_order_status == direct_order_status
     assert wrapper_order_preview == direct_order_preview
     assert wrapper_account_snapshot == direct_account_snapshot
+    assert recording_store.account_snapshot_writes == [
+        (
+            direct_trade_date,
+            direct_account_snapshot,
+        )
+    ]
+    assert recording_store.order_preview_writes == [
+        (
+            direct_trade_date,
+            direct_order_preview,
+        )
+    ]
 
 
 def test_reconciliation_service_matches_legacy_wrapper(tmp_path: Path) -> None:
@@ -310,7 +403,11 @@ def test_reconciliation_service_matches_legacy_wrapper(tmp_path: Path) -> None:
 
     _, direct_trade_date = _seed_approved_long_proposal(direct_config, broker=direct_broker)
     _, wrapper_trade_date = _seed_approved_long_proposal(wrapper_config, broker=wrapper_broker)
-    SubmissionService(direct_config).run(
+    SubmissionService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+        artifact_store=build_filesystem_paper_artifact_store(direct_config),
+    ).run(
         PaperSubmissionRequest(
             now=submission_now,
             broker=direct_broker,
@@ -324,7 +421,10 @@ def test_reconciliation_service_matches_legacy_wrapper(tmp_path: Path) -> None:
 
     direct_broker.order_status = "rejected"
     wrapper_broker.order_status = "rejected"
-    direct_result = ReconciliationService(direct_config).run(
+    direct_result = ReconciliationService(
+        direct_config,
+        uow_factory=build_filesystem_paper_uow_factory(direct_config),
+    ).run(
         PaperReconciliationRequest(
             now=reconciliation_now,
             broker=direct_broker,

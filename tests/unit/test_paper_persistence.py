@@ -19,9 +19,8 @@ from marketlab.paper.contracts import (
     PaperUnitOfWorkFactory,
 )
 from marketlab.paper.persistence import (
+    build_filesystem_paper_artifact_store,
     build_filesystem_paper_uow_factory,
-    write_trade_account_snapshot,
-    write_trade_order_preview,
 )
 from marketlab.paper.state import PaperStateStore
 
@@ -420,6 +419,7 @@ def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str
 def test_filesystem_trade_repository_retry_backup_preserves_attempt_artifacts(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, symbol="QQQ")
     factory = build_filesystem_paper_uow_factory(config)
+    artifact_store = build_filesystem_paper_artifact_store(config)
     trade_date = "2026-04-13"
     store = PaperStateStore(config)
 
@@ -433,13 +433,11 @@ def test_filesystem_trade_repository_retry_backup_preserves_attempt_artifacts(tm
             order_status={"id": "order-1", "status": "accepted"},
         )
         uow.commit()
-    write_trade_order_preview(
-        config,
+    artifact_store.write_trade_order_preview(
         trade_date=trade_date,
         payload={"proposal_id": "proposal-1", "trade_date": trade_date, "side": "buy"},
     )
-    write_trade_account_snapshot(
-        config,
+    artifact_store.write_trade_account_snapshot(
         trade_date=trade_date,
         payload={"equity": "1000.00"},
     )
