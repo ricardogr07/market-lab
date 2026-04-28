@@ -6,6 +6,7 @@ from typing import Any
 
 from marketlab.config import ExperimentConfig
 from marketlab.paper.contracts import (
+    PaperArtifactStore,
     PaperStatusRepository,
     PaperTradeRepository,
     PaperUnitOfWork,
@@ -198,19 +199,26 @@ def build_filesystem_paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfW
     return FilesystemPaperUnitOfWorkFactory(config)
 
 
-def write_trade_account_snapshot(
-    config: ExperimentConfig,
-    *,
-    trade_date: str,
-    payload: dict[str, Any],
-) -> Path:
-    return _json_dump(PaperStateStore(config).trade_account_snapshot_path(trade_date), payload)
+class FilesystemPaperArtifactStore(PaperArtifactStore):
+    def __init__(self, config: ExperimentConfig) -> None:
+        self._store = PaperStateStore(config)
+
+    def write_trade_account_snapshot(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path:
+        return _json_dump(self._store.trade_account_snapshot_path(trade_date), payload)
+
+    def write_trade_order_preview(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path:
+        return _json_dump(self._store.trade_order_preview_path(trade_date), payload)
 
 
-def write_trade_order_preview(
-    config: ExperimentConfig,
-    *,
-    trade_date: str,
-    payload: dict[str, Any],
-) -> Path:
-    return _json_dump(PaperStateStore(config).trade_order_preview_path(trade_date), payload)
+def build_filesystem_paper_artifact_store(config: ExperimentConfig) -> PaperArtifactStore:
+    return FilesystemPaperArtifactStore(config)
