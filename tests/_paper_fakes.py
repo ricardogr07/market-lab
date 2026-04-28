@@ -21,6 +21,10 @@ from marketlab.config import (
     TelegramNotificationsConfig,
     WalkForwardConfig,
 )
+from marketlab.paper.contracts import (
+    PaperApprovalClientDecision,
+    PaperApprovalEvaluationRequest,
+)
 
 
 def build_paper_history_frame(
@@ -250,6 +254,116 @@ class FakeAlpacaBroker:
             "status": self.order_status,
             "client_order_id": self.submitted_orders[-1]["client_order_id"],
         }
+
+
+class FakePaperNotificationSink:
+    def __init__(self) -> None:
+        self.decision_calls: list[dict[str, object]] = []
+        self.approval_calls: list[dict[str, object]] = []
+        self.submission_calls: list[dict[str, object]] = []
+        self.error_calls: list[dict[str, object]] = []
+
+    def notify_decision(
+        self,
+        *,
+        outcome: str,
+        status: dict[str, object],
+        proposal: dict[str, object] | None = None,
+        now=None,
+    ) -> Path:
+        self.decision_calls.append(
+            {
+                "outcome": outcome,
+                "status": dict(status),
+                "proposal": dict(proposal) if proposal is not None else None,
+                "now": now,
+            }
+        )
+        return Path("fake-paper-decision.json")
+
+    def notify_approval(
+        self,
+        *,
+        proposal: dict[str, object],
+        approval_record: dict[str, object],
+        now=None,
+    ) -> Path:
+        self.approval_calls.append(
+            {
+                "proposal": dict(proposal),
+                "approval_record": dict(approval_record),
+                "now": now,
+            }
+        )
+        return Path("fake-paper-approval.json")
+
+    def notify_submission(
+        self,
+        *,
+        outcome: str,
+        status: dict[str, object],
+        proposal: dict[str, object] | None = None,
+        submission: dict[str, object] | None = None,
+        now=None,
+    ) -> Path:
+        self.submission_calls.append(
+            {
+                "outcome": outcome,
+                "status": dict(status),
+                "proposal": dict(proposal) if proposal is not None else None,
+                "submission": dict(submission) if submission is not None else None,
+                "now": now,
+            }
+        )
+        return Path("fake-paper-submission.json")
+
+    def notify_error(
+        self,
+        *,
+        loop_name: str,
+        stage: str,
+        exc: Exception,
+        proposal_id: str = "",
+        trade_date: str = "",
+        now=None,
+    ) -> Path:
+        self.error_calls.append(
+            {
+                "loop_name": loop_name,
+                "stage": stage,
+                "exc": exc,
+                "proposal_id": proposal_id,
+                "trade_date": trade_date,
+                "now": now,
+            }
+        )
+        return Path("fake-paper-error.json")
+
+
+class FakePaperApprovalClient:
+    def __init__(
+        self,
+        *,
+        decision: PaperApprovalClientDecision | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._decision = decision or PaperApprovalClientDecision(
+            decision="approve",
+            rationale="Approved by fake client.",
+            provider="fake",
+            model="fake-model",
+        )
+        self._error = error
+        self.requests: list[PaperApprovalEvaluationRequest] = []
+
+    def evaluate(
+        self,
+        request: PaperApprovalEvaluationRequest,
+    ) -> PaperApprovalClientDecision:
+        self.requests.append(request)
+        if self._error is not None:
+            raise self._error
+        return self._decision
 
 
 def write_phase7_paper_config(

@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests._paper_fakes import FakeAlpacaBroker, build_phase7_paper_config
+from tests._paper_fakes import (
+    FakeAlpacaBroker,
+    FakePaperNotificationSink,
+    build_phase7_paper_config,
+)
 
 import marketlab.paper.service as service_module
 from marketlab.paper.application import ReconciliationService
@@ -564,21 +568,21 @@ def test_submission_service_and_wrapper_keep_broker_and_notifications_outside_uo
     _seed_submission_ready_proposal(factory)
     broker = _BoundaryBroker(factory=factory)
     notification_events: list[str] = []
+    notification_sink = FakePaperNotificationSink()
 
     monkeypatch.setattr(service_module, "_paper_uow_factory", lambda _config: factory)
-
-    def _notify_submission(*args, **kwargs) -> None:
-        assert factory.active_count == 0
-        assert factory.commit_count >= 1
-        notification_events.append("notified")
-
-    monkeypatch.setattr(service_module, "notify_paper_submission", _notify_submission)
+    monkeypatch.setattr(service_module, "_paper_notification_sink", lambda _config: notification_sink)
 
     result = service_module.run_paper_submit(
         config,
         now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
         broker=broker,
     )
+
+    assert len(notification_sink.submission_calls) == 1
+    assert factory.active_count == 0
+    assert factory.commit_count >= 1
+    notification_events.append("notified")
 
     assert result["status"]["status"] == "submitted"
     assert broker.calls == [
