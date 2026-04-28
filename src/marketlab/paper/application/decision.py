@@ -16,15 +16,13 @@ from marketlab.models import (
     predict_direction_scores,
 )
 from marketlab.models.training import modeling_feature_columns
-from marketlab.paper.alpaca import (
-    AlpacaMarketDataProvider,
-    AlpacaPaperBrokerClient,
-)
 from marketlab.paper.contracts import (
     PaperBroker,
+    PaperBrokerFactory,
     PaperDecisionRequest,
     PaperDecisionResult,
     PaperHistoryProvider,
+    PaperHistoryProviderFactory,
     PaperUnitOfWorkFactory,
 )
 from marketlab.paper.core import (
@@ -40,17 +38,17 @@ from marketlab.paper.core import (
     _paper_symbol,
     validate_paper_trading_config,
 )
-from marketlab.paper.persistence import build_filesystem_paper_uow_factory
 from marketlab.targets import add_forward_targets, build_rebalance_snapshots
 
 
-def _build_alpaca_panel(
+def _build_market_panel(
     config: ExperimentConfig,
-    provider: PaperHistoryProvider | None = None,
+    *,
+    provider: PaperHistoryProvider,
 ) -> pd.DataFrame:
     frames = load_symbol_frames(
         config,
-        provider=provider or AlpacaMarketDataProvider(),
+        provider=provider,
         force_refresh=True,
     )
     return build_market_panel(frames)
@@ -82,7 +80,7 @@ def _next_trading_date(
     for candidate in future_dates:
         if candidate > market_date:
             return candidate
-    raise RuntimeError("The Alpaca calendar did not provide a future trading date for the paper decision.")
+    raise RuntimeError("The broker calendar did not provide a future trading date for the paper decision.")
 
 
 def _proposal_id(signal_date: str, effective_date: str, symbol: str) -> str:
@@ -204,17 +202,37 @@ class DecisionService:
         self,
         config: ExperimentConfig,
         *,
-        uow_factory: PaperUnitOfWorkFactory | None = None,
+        uow_factory: PaperUnitOfWorkFactory,
+        history_provider_factory: PaperHistoryProviderFactory | None = None,
+        broker_factory: PaperBrokerFactory | None = None,
     ) -> None:
         self._config = config
-        self._uow_factory = uow_factory or build_filesystem_paper_uow_factory(config)
+        self._uow_factory = uow_factory
+        self._history_provider_factory = history_provider_factory
+        self._broker_factory = broker_factory
+
+    def _provider(self, request: PaperDecisionRequest) -> PaperHistoryProvider:
+        if request.provider is not None:
+            return request.provider
+        if self._history_provider_factory is None:
+            raise RuntimeError(
+                "DecisionService requires a history provider or history_provider_factory."
+            )
+        return self._history_provider_factory()
+
+    def _broker(self, request: PaperDecisionRequest) -> PaperBroker:
+        if request.broker is not None:
+            return request.broker
+        if self._broker_factory is None:
+            raise RuntimeError("DecisionService requires a broker or broker_factory.")
+        return self._broker_factory()
 
     def run(self, request: PaperDecisionRequest) -> PaperDecisionResult:
         config = self._config
         validate_paper_trading_config(config)
         paper_symbol = _paper_symbol(config)
         local_now = _local_now(config, request.now)
-        broker_client = request.broker or AlpacaPaperBrokerClient()
+        broker_client = self._broker(request)
         market_date = local_now.date()
 
         if not _is_trading_day(broker_client, market_date=market_date):
@@ -233,7 +251,7 @@ class DecisionService:
                 status=status,
             )
 
-        panel = _build_alpaca_panel(config, provider=request.provider)
+        panel = _build_market_panel(config, provider=self._provider(request))
         featured_panel = add_feature_set(panel=panel, **asdict(config.features))
         historical_snapshots = build_rebalance_snapshots(
             featured_panel,

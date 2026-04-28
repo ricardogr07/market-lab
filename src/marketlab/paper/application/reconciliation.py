@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from marketlab.config import ExperimentConfig
-from marketlab.paper.alpaca import AlpacaPaperBrokerClient
 from marketlab.paper.contracts import (
     PaperBroker,
+    PaperBrokerFactory,
     PaperReconciliationRequest,
     PaperReconciliationResult,
     PaperTradeRepository,
@@ -19,7 +19,6 @@ from marketlab.paper.core import (
     _now_utc,
     validate_paper_trading_config,
 )
-from marketlab.paper.persistence import build_filesystem_paper_uow_factory
 
 
 def _poll_order_status(
@@ -66,6 +65,7 @@ def _refresh_submission_order_status(
     *,
     submission: dict[str, Any],
     order_status_path: Path,
+    has_order_status_path: bool,
     broker_client: PaperBroker,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -91,7 +91,7 @@ def _refresh_submission_order_status(
     if (
         refreshed_order_status == current_order_status
         and poll_status == current_poll_status
-        and order_status_path.exists()
+        and has_order_status_path
     ):
         return None
 
@@ -108,10 +108,19 @@ class ReconciliationService:
         self,
         config: ExperimentConfig,
         *,
-        uow_factory: PaperUnitOfWorkFactory | None = None,
+        uow_factory: PaperUnitOfWorkFactory,
+        broker_factory: PaperBrokerFactory | None = None,
     ) -> None:
         self._config = config
-        self._uow_factory = uow_factory or build_filesystem_paper_uow_factory(config)
+        self._uow_factory = uow_factory
+        self._broker_factory = broker_factory
+
+    def _broker(self, request: PaperReconciliationRequest) -> PaperBroker:
+        if request.broker is not None:
+            return request.broker
+        if self._broker_factory is None:
+            raise RuntimeError("ReconciliationService requires a broker or broker_factory.")
+        return self._broker_factory()
 
     def run(
         self,
@@ -127,10 +136,12 @@ class ReconciliationService:
         trade_date = str(submission["trade_date"])
         with self._uow_factory() as path_uow:
             order_status_path = path_uow.trades.trade_order_status_path(trade_date)
-        broker_client = request.broker or AlpacaPaperBrokerClient()
+            has_order_status_path = path_uow.trades.order_status_path_exists(trade_date)
+        broker_client = self._broker(request)
         refreshed = _refresh_submission_order_status(
             submission=submission,
             order_status_path=order_status_path,
+            has_order_status_path=has_order_status_path,
             broker_client=broker_client,
             now=request.now,
         )

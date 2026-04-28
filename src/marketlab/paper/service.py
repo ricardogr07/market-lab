@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.paper.alpaca import AlpacaMarketDataProvider, AlpacaPaperBrokerClient
 from marketlab.paper.application import (
     ApprovalService,
     DecisionService,
@@ -12,11 +13,15 @@ from marketlab.paper.application import (
 )
 from marketlab.paper.contracts import (
     PaperApprovalRequest,
+    PaperArtifactStore,
     PaperBroker,
+    PaperBrokerFactory,
     PaperDecisionRequest,
     PaperHistoryProvider,
+    PaperHistoryProviderFactory,
     PaperReconciliationRequest,
     PaperSubmissionRequest,
+    PaperUnitOfWorkFactory,
 )
 from marketlab.paper.core import (
     APPROVAL_PENDING as _APPROVAL_PENDING,
@@ -46,7 +51,10 @@ from marketlab.paper.notifications import (
     notify_paper_submission,
     write_notification_record,
 )
-from marketlab.paper.persistence import build_filesystem_paper_uow_factory
+from marketlab.paper.persistence import (
+    build_filesystem_paper_artifact_store,
+    build_filesystem_paper_uow_factory,
+)
 from marketlab.paper.state import PaperStateStore
 
 APPROVAL_PENDING = _APPROVAL_PENDING
@@ -58,8 +66,24 @@ _paper_symbol = _core_paper_symbol
 _write_notification_record = write_notification_record
 
 
-def _paper_uow_factory(config: ExperimentConfig):
+def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
     return build_filesystem_paper_uow_factory(config)
+
+
+def _paper_history_provider_factory(config: ExperimentConfig) -> PaperHistoryProviderFactory:
+    if config.paper.data_provider != "alpaca":
+        raise ValueError(f"Unsupported paper data provider: {config.paper.data_provider}")
+    return AlpacaMarketDataProvider
+
+
+def _paper_broker_factory(config: ExperimentConfig) -> PaperBrokerFactory:
+    if config.paper.broker != "alpaca":
+        raise ValueError(f"Unsupported paper broker: {config.paper.broker}")
+    return AlpacaPaperBrokerClient
+
+
+def _paper_artifact_store(config: ExperimentConfig) -> PaperArtifactStore:
+    return build_filesystem_paper_artifact_store(config)
 
 
 def _decision_notification_outcome(status: dict[str, Any]) -> str:
@@ -79,7 +103,12 @@ def run_paper_decision(
     broker: PaperBroker | None = None,
     notification_transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
-    result = DecisionService(config, uow_factory=_paper_uow_factory(config)).run(
+    result = DecisionService(
+        config,
+        uow_factory=_paper_uow_factory(config),
+        history_provider_factory=_paper_history_provider_factory(config),
+        broker_factory=_paper_broker_factory(config),
+    ).run(
         PaperDecisionRequest(
             now=now,
             provider=provider,
@@ -180,7 +209,11 @@ def reconcile_latest_submission_status(
     now: datetime | None = None,
     broker: PaperBroker | None = None,
 ) -> dict[str, Any] | None:
-    result = ReconciliationService(config, uow_factory=_paper_uow_factory(config)).run(
+    result = ReconciliationService(
+        config,
+        uow_factory=_paper_uow_factory(config),
+        broker_factory=_paper_broker_factory(config),
+    ).run(
         PaperReconciliationRequest(
             now=now,
             broker=broker,
@@ -199,7 +232,12 @@ def run_paper_submit(
     notification_transport: TelegramTransport | None = None,
     retry_failed_submission: bool = False,
 ) -> dict[str, Any]:
-    result = SubmissionService(config, uow_factory=_paper_uow_factory(config)).run(
+    result = SubmissionService(
+        config,
+        uow_factory=_paper_uow_factory(config),
+        artifact_store=_paper_artifact_store(config),
+        broker_factory=_paper_broker_factory(config),
+    ).run(
         PaperSubmissionRequest(
             now=now,
             broker=broker,

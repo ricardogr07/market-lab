@@ -78,6 +78,16 @@ class PaperBroker(Protocol):
 
 
 @runtime_checkable
+class PaperHistoryProviderFactory(Protocol):
+    def __call__(self) -> PaperHistoryProvider: ...
+
+
+@runtime_checkable
+class PaperBrokerFactory(Protocol):
+    def __call__(self) -> PaperBroker: ...
+
+
+@runtime_checkable
 class PaperTradeRepository(Protocol):
     def list_proposals(self) -> list[dict[str, Any]]: ...
 
@@ -106,6 +116,8 @@ class PaperTradeRepository(Protocol):
     def trade_submission_path(self, trade_date: str) -> Path: ...
 
     def trade_order_status_path(self, trade_date: str) -> Path: ...
+
+    def order_status_path_exists(self, trade_date: str) -> bool: ...
 
     def backup_submission_attempt_artifacts(
         self,
@@ -145,6 +157,23 @@ class PaperUnitOfWork(Protocol):
 @runtime_checkable
 class PaperUnitOfWorkFactory(Protocol):
     def __call__(self) -> PaperUnitOfWork: ...
+
+
+@runtime_checkable
+class PaperArtifactStore(Protocol):
+    def write_trade_account_snapshot(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path: ...
+
+    def write_trade_order_preview(
+        self,
+        *,
+        trade_date: str,
+        payload: dict[str, Any],
+    ) -> Path: ...
 
 
 @dataclass(slots=True, frozen=True)

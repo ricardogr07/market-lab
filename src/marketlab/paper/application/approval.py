@@ -12,7 +12,6 @@ from marketlab.paper.core import (
     _now_utc,
     validate_paper_trading_config,
 )
-from marketlab.paper.persistence import build_filesystem_paper_uow_factory
 
 
 class ApprovalService:
@@ -20,10 +19,10 @@ class ApprovalService:
         self,
         config: ExperimentConfig,
         *,
-        uow_factory: PaperUnitOfWorkFactory | None = None,
+        uow_factory: PaperUnitOfWorkFactory,
     ) -> None:
         self._config = config
-        self._uow_factory = uow_factory or build_filesystem_paper_uow_factory(config)
+        self._uow_factory = uow_factory
 
     def run(self, request: PaperApprovalRequest) -> PaperApprovalResult:
         config = self._config
