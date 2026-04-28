@@ -3,11 +3,15 @@ from __future__ import annotations
 from tests._paper_fakes import FakeAlpacaBroker, FakeAlpacaProvider
 
 from marketlab.paper.contracts import (
+    PaperApprovalRequest,
     PaperApprovalResult,
     PaperBroker,
+    PaperDecisionRequest,
     PaperDecisionResult,
     PaperHistoryProvider,
+    PaperReconciliationRequest,
     PaperReconciliationResult,
+    PaperSubmissionRequest,
     PaperSubmissionResult,
 )
 
@@ -29,6 +33,26 @@ def test_paper_decision_result_round_trips_legacy_payload() -> None:
     result = PaperDecisionResult.from_legacy(payload)
 
     assert result.as_legacy_payload() == payload
+
+
+def test_paper_request_objects_preserve_phase_inputs() -> None:
+    decision_request = PaperDecisionRequest()
+    approval_request = PaperApprovalRequest(
+        proposal_id="proposal-1",
+        decision="approve",
+        actor="agent",
+        fallback_used=True,
+    )
+    submission_request = PaperSubmissionRequest(retry_failed_submission=True)
+    reconciliation_request = PaperReconciliationRequest()
+
+    assert decision_request.now is None
+    assert approval_request.proposal_id == "proposal-1"
+    assert approval_request.decision == "approve"
+    assert approval_request.actor == "agent"
+    assert approval_request.fallback_used is True
+    assert submission_request.retry_failed_submission is True
+    assert reconciliation_request.broker is None
 
 
 def test_paper_approval_result_round_trips_legacy_payload() -> None:
