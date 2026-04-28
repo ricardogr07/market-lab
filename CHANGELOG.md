@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.2.0...marketlab-v0.3.0) (2026-04-28)
+
+
+### Features
+
+* add autonomous single-ETF paper loop with LLM approvals ([#64](https://github.com/ricardogr07/market-lab/issues/64)) ([b7a3f46](https://github.com/ricardogr07/market-lab/commit/b7a3f46b9d465a021deb131ca3d11899ab225033))
+* add MarketLab MCP server and Docker sidecar ([#62](https://github.com/ricardogr07/market-lab/issues/62)) ([e2d84fb](https://github.com/ricardogr07/market-lab/commit/e2d84fbd926e1d6bfc1c785891f8ca7b74e3da81))
+* **contracts:** add typed paper contract module ([18a7d85](https://github.com/ricardogr07/market-lab/commit/18a7d85e5fab8f3f1cfd8a48fe5a048c8c253533))
+* **mcp:** finalize paper-sidecar MCP samples and docs ([c995db2](https://github.com/ricardogr07/market-lab/commit/c995db243022d78ca1ef0498c7f58f92c2636daa))
+* **paper:** add decision and approval service classes ([fa4f88d](https://github.com/ricardogr07/market-lab/commit/fa4f88de0d0c4ef43814c16459dfcffcdcedb219))
+* **paper:** add Telegram ops feed and harden paper loops ([0abd300](https://github.com/ricardogr07/market-lab/commit/0abd300f71f5427f6f95b23c53f0dc869523c276))
+
+
+### Bug Fixes
+
+* **paper:** harden approval guardrails and launch checks ([ba036c2](https://github.com/ricardogr07/market-lab/commit/ba036c277ec7a4239bf59ce868c5a3f758572d6d))
+* **paper:** hold existing longs on repeat signals ([0265f07](https://github.com/ricardogr07/market-lab/commit/0265f079a54e84fd006297528d766e7852e88d5d))
+* **paper:** narrow approval guardrail overrides ([6d5129a](https://github.com/ricardogr07/market-lab/commit/6d5129a3b499ce74c5caf958b644da25eec1d4dd))
+* **paper:** preserve once-loop failure exits ([c49ad61](https://github.com/ricardogr07/market-lab/commit/c49ad6181d10cafb0abfe910fc9c54d9881e832e))
+* **paper:** reconcile broker terminal status and preserve retry recovery ([1002823](https://github.com/ricardogr07/market-lab/commit/1002823036360fd352f8e16a00122093ba060afb))
+* **paper:** size long paper entries with notional-safe buys ([16f9571](https://github.com/ricardogr07/market-lab/commit/16f95713aac75da5b63e594b039a8e7648cbc495))
+* **paper:** tighten submit side selection and reconciliation target ([cc586f6](https://github.com/ricardogr07/market-lab/commit/cc586f616ee081ebef9c7b6a0402449ec7974f24))
+* **paper:** tolerate missing evidence for existing proposals ([436ab8c](https://github.com/ricardogr07/market-lab/commit/436ab8c8e737564c592e2980b464894f50c148ff))
+* **paper:** use signed exposure for long submit sizing ([10aa5dd](https://github.com/ricardogr07/market-lab/commit/10aa5ddbe2db9d895b9591228cc930105c783985))
+
+
+### Documentation
+
+* **architecture:** add cloud migration and solid audit plans ([78b712f](https://github.com/ricardogr07/market-lab/commit/78b712f4b7b3e6265358b367d1ff7fc8dfd48d63))
+* **nav:** link architecture planning documents ([c8c9324](https://github.com/ricardogr07/market-lab/commit/c8c9324fe2b64943b4e29b83248a7da0f0d71cee))
+* **paper:** document safe submit and broker reconciliation behavior ([e1c7257](https://github.com/ricardogr07/market-lab/commit/e1c725707ac27ce244e4c1f0fb76666ee732179d))
+* **roadmap:** add tracked hardening phases 1 to 6 ([0635dd7](https://github.com/ricardogr07/market-lab/commit/0635dd74ea8acb544b9697b4222394b2d63b9440))
+
 ## [0.2.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.1.0...marketlab-v0.2.0) (2026-04-10)
 
 
