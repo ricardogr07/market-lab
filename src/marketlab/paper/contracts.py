@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -7,8 +8,6 @@ from typing import Any, runtime_checkable
 
 import pandas as pd
 from typing_extensions import Protocol
-
-from marketlab.paper.notifications import TelegramTransport
 
 
 def _string_field(payload: dict[str, Any], key: str) -> str:
@@ -181,7 +180,6 @@ class PaperDecisionRequest:
     now: datetime | None = None
     provider: PaperHistoryProvider | None = None
     broker: PaperBroker | None = None
-    notification_transport: TelegramTransport | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -195,14 +193,12 @@ class PaperApprovalRequest:
     fallback_used: bool = False
     fallback_reason: str | None = None
     now: datetime | None = None
-    notification_transport: TelegramTransport | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class PaperSubmissionRequest:
     now: datetime | None = None
     broker: PaperBroker | None = None
-    notification_transport: TelegramTransport | None = None
     retry_failed_submission: bool = False
 
 
@@ -210,6 +206,83 @@ class PaperSubmissionRequest:
 class PaperReconciliationRequest:
     now: datetime | None = None
     broker: PaperBroker | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PaperApprovalEvaluationRequest:
+    proposal: Mapping[str, Any]
+    evidence: Mapping[str, Any]
+    status: Mapping[str, Any] | None = None
+    account_context: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class PaperApprovalClientDecision:
+    decision: str
+    rationale: str
+    provider: str
+    model: str
+    fallback_used: bool = False
+    fallback_reason: str = ""
+
+
+@runtime_checkable
+class PaperApprovalClient(Protocol):
+    def evaluate(
+        self,
+        request: PaperApprovalEvaluationRequest,
+    ) -> PaperApprovalClientDecision: ...
+
+
+@runtime_checkable
+class PaperApprovalClientFactory(Protocol):
+    def __call__(self) -> PaperApprovalClient: ...
+
+
+@runtime_checkable
+class PaperNotificationSink(Protocol):
+    def notify_decision(
+        self,
+        *,
+        outcome: str,
+        status: Mapping[str, Any],
+        proposal: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> Path: ...
+
+    def notify_approval(
+        self,
+        *,
+        proposal: Mapping[str, Any],
+        approval_record: Mapping[str, Any],
+        now: datetime | None = None,
+    ) -> Path: ...
+
+    def notify_submission(
+        self,
+        *,
+        outcome: str,
+        status: Mapping[str, Any],
+        proposal: Mapping[str, Any] | None = None,
+        submission: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> Path: ...
+
+    def notify_error(
+        self,
+        *,
+        loop_name: str,
+        stage: str,
+        exc: Exception,
+        proposal_id: str = "",
+        trade_date: str = "",
+        now: datetime | None = None,
+    ) -> Path: ...
+
+
+@runtime_checkable
+class PaperNotificationSinkFactory(Protocol):
+    def __call__(self) -> PaperNotificationSink: ...
 
 
 @dataclass(slots=True, frozen=True)

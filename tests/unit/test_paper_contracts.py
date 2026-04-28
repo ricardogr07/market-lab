@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from tests._paper_fakes import FakeAlpacaBroker, FakeAlpacaProvider
+from tests._paper_fakes import (
+    FakeAlpacaBroker,
+    FakeAlpacaProvider,
+    FakePaperApprovalClient,
+    FakePaperNotificationSink,
+)
 
 from marketlab.paper.contracts import (
+    PaperApprovalClient,
+    PaperApprovalClientDecision,
     PaperApprovalRequest,
     PaperApprovalResult,
     PaperBroker,
     PaperDecisionRequest,
     PaperDecisionResult,
     PaperHistoryProvider,
+    PaperNotificationSink,
     PaperReconciliationRequest,
     PaperReconciliationResult,
     PaperSubmissionRequest,
@@ -19,6 +27,8 @@ from marketlab.paper.contracts import (
 def test_paper_protocols_match_existing_fake_adapters() -> None:
     assert isinstance(FakeAlpacaProvider(), PaperHistoryProvider)
     assert isinstance(FakeAlpacaBroker(), PaperBroker)
+    assert isinstance(FakePaperNotificationSink(), PaperNotificationSink)
+    assert isinstance(FakePaperApprovalClient(), PaperApprovalClient)
 
 
 def test_paper_decision_result_round_trips_legacy_payload() -> None:
@@ -53,6 +63,23 @@ def test_paper_request_objects_preserve_phase_inputs() -> None:
     assert approval_request.fallback_used is True
     assert submission_request.retry_failed_submission is True
     assert reconciliation_request.broker is None
+
+
+def test_paper_approval_client_decision_preserves_fallback_fields() -> None:
+    decision = PaperApprovalClientDecision(
+        decision="approve",
+        rationale="Approved by contract test.",
+        provider="openai",
+        model="gpt-4o-mini",
+        fallback_used=True,
+        fallback_reason="openai backend failed: timeout",
+    )
+
+    assert decision.decision == "approve"
+    assert decision.provider == "openai"
+    assert decision.model == "gpt-4o-mini"
+    assert decision.fallback_used is True
+    assert decision.fallback_reason == "openai backend failed: timeout"
 
 
 def test_paper_approval_result_round_trips_legacy_payload() -> None:
