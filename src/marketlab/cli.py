@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+from collections.abc import Callable
+from time import perf_counter
 
 from marketlab._version import get_version
 from marketlab.config import load_config
-from marketlab.log import configure_logging
+from marketlab.log import (
+    ExecutionContext,
+    bind_execution_context,
+    configure_logging,
+    duration_ms_since,
+    emit_structured_log,
+)
 from marketlab.paper import (
     decide_paper_proposal,
     get_paper_status,
@@ -15,8 +24,14 @@ from marketlab.paper import (
     run_paper_submit,
     run_scheduler_loop,
 )
+from marketlab.paper.observability import (
+    paper_execution_context,
+    root_execution_context,
+)
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
+
+LOGGER = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +81,145 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_logged_paper_command(
+    command_name: str,
+    *,
+    action: Callable[[ExecutionContext], tuple[int, str | None]],
+    proposal_id: str | None = None,
+) -> int:
+    root_context = root_execution_context(
+        deployment="local_cli",
+        phase=command_name,
+        proposal_id=proposal_id,
+        details={"command": command_name},
+    )
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        f"Starting {command_name} command.",
+        event="paper.command.start",
+        execution_context=root_context,
+    )
+    start_time = perf_counter()
+    try:
+        with bind_execution_context(root_context):
+            exit_code, outcome = action(root_context)
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            f"{command_name} command failed.",
+            event="paper.command.error",
+            execution_context=paper_execution_context(
+                root_context,
+                phase=command_name,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"command": command_name},
+            ),
+            exc_info=exc,
+        )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        f"Finished {command_name} command.",
+        event="paper.command.finish",
+        execution_context=paper_execution_context(
+            root_context,
+            phase=command_name,
+            outcome=outcome or "success",
+            duration_ms=duration_ms_since(start_time),
+            details={"command": command_name},
+        ),
+    )
+    return exit_code
+
+
+def _run_paper_decision_command(
+    config,
+    *,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    result = run_paper_decision(config, execution_context=execution_context)
+    print(result.get("proposal_path", result["status_path"]))
+    return 0, str(result.get("status", {}).get("status", "success"))
+
+
+def _run_paper_submit_command(
+    config,
+    *,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    result = run_paper_submit(config, execution_context=execution_context)
+    print(result.get("submission_path", result["status_path"]))
+    return 0, str(result.get("status", {}).get("status", "success"))
+
+
+def _run_paper_approve_command(
+    config,
+    *,
+    proposal_id: str,
+    decision: str,
+    actor: str,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    result = decide_paper_proposal(
+        config,
+        proposal_id=proposal_id,
+        decision=decision,
+        actor=actor,
+        execution_context=execution_context,
+    )
+    print(result["approval_path"])
+    return 0, str(result.get("status", {}).get("status", "success"))
+
+
+def _run_paper_status_command(
+    config,
+    *,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    print(json.dumps(get_paper_status(config), indent=2, sort_keys=True))
+    return 0, "success"
+
+
+def _run_paper_agent_approve_command(
+    config,
+    *,
+    once: bool,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    run_agent_approval_loop(config, once=once)
+    return 0, "success"
+
+
+def _run_paper_scheduler_command(
+    config,
+    *,
+    once: bool,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    run_scheduler_loop(config, once=once)
+    return 0, "success"
+
+
+def _run_paper_report_command(
+    config,
+    *,
+    start_date: str,
+    end_date: str,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    result = run_paper_report(config, start_date=start_date, end_date=end_date)
+    print(result["report_path"])
+    return 0, "success"
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = build_parser()
@@ -87,41 +241,75 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
 
     if args.command == "paper-decision":
-        result = run_paper_decision(config)
-        print(result.get("proposal_path", result["status_path"]))
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_decision_command(
+                config,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-submit":
-        result = run_paper_submit(config)
-        print(result.get("submission_path", result["status_path"]))
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_submit_command(
+                config,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-approve":
-        result = decide_paper_proposal(
-            config,
+        return _run_logged_paper_command(
+            args.command,
             proposal_id=args.proposal_id,
-            decision=args.decision,
-            actor=args.actor,
+            action=lambda execution_context: _run_paper_approve_command(
+                config,
+                proposal_id=args.proposal_id,
+                decision=args.decision,
+                actor=args.actor,
+                execution_context=execution_context,
+            ),
         )
-        print(result["approval_path"])
-        return 0
 
     if args.command == "paper-status":
-        print(json.dumps(get_paper_status(config), indent=2, sort_keys=True))
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_status_command(
+                config,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-agent-approve":
-        run_agent_approval_loop(config, once=args.once)
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_agent_approve_command(
+                config,
+                once=args.once,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-scheduler":
-        run_scheduler_loop(config, once=args.once)
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_scheduler_command(
+                config,
+                once=args.once,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-report":
-        result = run_paper_report(config, start_date=args.start, end_date=args.end)
-        print(result["report_path"])
-        return 0
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_report_command(
+                config,
+                start_date=args.start,
+                end_date=args.end,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "prepare-data":
         _, panel_path = prepare_data(config)

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from urllib import error, request
 
 from marketlab.config import ExperimentConfig
 from marketlab.env import load_env_file
+from marketlab.log import duration_ms_since, emit_structured_log
 from marketlab.paper.contracts import PaperNotificationSink
+from marketlab.paper.observability import paper_execution_context
 from marketlab.paper.state import PaperStateStore
 
 TELEGRAM_API_BASE_URL_ENV = "MARKETLAB_TELEGRAM_API_BASE_URL"
@@ -25,6 +29,7 @@ DELIVERY_SKIPPED_MISSING_CREDENTIALS = "skipped_missing_credentials"
 DELIVERY_FAILED = "failed_delivery"
 
 TelegramTransport = Callable[[str, dict[str, Any], int], tuple[int, str]]
+LOGGER = logging.getLogger(__name__)
 
 
 class PaperLoopStageError(RuntimeError):
@@ -252,6 +257,7 @@ def deliver_telegram_notification(
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
 ) -> dict[str, Any]:
+    start_time = perf_counter()
     timestamp = _now_utc(now).isoformat()
     record: dict[str, Any] = {
         "channel": "telegram",
@@ -265,6 +271,14 @@ def deliver_telegram_notification(
     }
     if not config.paper.notifications.telegram.enabled:
         record["delivery_status"] = DELIVERY_SKIPPED_DISABLED
+        _log_notification_delivery(
+            stage=stage,
+            outcome=record["delivery_status"],
+            proposal_id=proposal_id,
+            trade_date=trade_date,
+            duration_ms=duration_ms_since(start_time),
+            details=record,
+        )
         return record
 
     load_env_file()
@@ -278,6 +292,14 @@ def deliver_telegram_notification(
             TELEGRAM_BOT_TOKEN_ENV: bot_token == "",
             TELEGRAM_CHAT_ID_ENV: chat_id == "",
         }
+        _log_notification_delivery(
+            stage=stage,
+            outcome=record["delivery_status"],
+            proposal_id=proposal_id,
+            trade_date=trade_date,
+            duration_ms=duration_ms_since(start_time),
+            details=record,
+        )
         return record
 
     payload = {
@@ -305,7 +327,42 @@ def deliver_telegram_notification(
         record["delivery_status"] = DELIVERY_FAILED
         record["error"] = f"{type(exc).__name__}: {exc}"
 
+    _log_notification_delivery(
+        stage=stage,
+        outcome=record["delivery_status"],
+        proposal_id=proposal_id,
+        trade_date=trade_date,
+        duration_ms=duration_ms_since(start_time),
+        details=record,
+    )
     return record
+
+
+def _log_notification_delivery(
+    *,
+    stage: str,
+    outcome: str,
+    proposal_id: str,
+    trade_date: str,
+    duration_ms: float,
+    details: Mapping[str, Any],
+) -> None:
+    level = logging.ERROR if outcome == DELIVERY_FAILED else logging.INFO
+    emit_structured_log(
+        LOGGER,
+        level,
+        "Processed paper notification delivery.",
+        event="paper.notification.delivery",
+        execution_context=paper_execution_context(
+            phase=stage,
+            proposal={"proposal_id": proposal_id, "effective_date": trade_date},
+            provider="telegram",
+            outcome=outcome,
+            duration_ms=duration_ms,
+            details=details,
+            refresh_execution_id=True,
+        ),
+    )
 
 
 def write_notification_record(

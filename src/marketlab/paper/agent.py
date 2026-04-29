@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.log import (
+    ExecutionContext,
+    bind_execution_context,
+    duration_ms_since,
+    emit_structured_log,
+)
 from marketlab.paper.approval_clients import build_default_paper_approval_client
 from marketlab.paper.contracts import (
     PaperApprovalClient,
@@ -20,6 +28,7 @@ from marketlab.paper.notifications import (
     build_error_fingerprint,
     build_telegram_paper_notification_sink,
 )
+from marketlab.paper.observability import paper_execution_context
 from marketlab.paper.service import (
     APPROVAL_PENDING,
     _now_utc,
@@ -29,6 +38,8 @@ from marketlab.paper.service import (
     validate_paper_trading_config,
 )
 from marketlab.paper.state import PaperStateStore
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _json_dump(path: Path, payload: dict[str, Any]) -> Path:
@@ -144,122 +155,198 @@ def run_agent_approval_iteration(
     broker: PaperBroker | None = None,
     notification_sink: PaperNotificationSink | None = None,
     approval_client: PaperApprovalClient | None = None,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any]:
+    iteration_context = paper_execution_context(
+        execution_context,
+        phase="paper-approve",
+        deployment="paper_agent",
+        refresh_execution_id=True,
+        details={"component": "agent_iteration"},
+    )
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper approval worker iteration.",
+        event="paper.agent.iteration.start",
+        execution_context=iteration_context,
+    )
+    start_time = perf_counter()
     validate_paper_trading_config(config)
     state = _load_worker_state(config)
     events: list[dict[str, Any]] = []
+    summary: dict[str, Any]
+    try:
+        with bind_execution_context(
+            paper_execution_context(
+                iteration_context,
+                phase="paper-approve",
+                deployment="paper_agent",
+                details={"component": "agent_iteration"},
+            )
+        ):
+            if config.paper.execution_mode != "agent_approval":
+                _clear_worker_error_state(state)
+                state["last_checked_at"] = _now_utc(now).isoformat()
+                state["last_result"] = "execution_mode_not_agent_approval"
+                state_path = _save_worker_state(config, state)
+                summary = {
+                    "agent_state_path": str(state_path),
+                    "events": [],
+                    "processed_count": 0,
+                }
+            else:
+                store = PaperStateStore(config)
+                proposals = sorted(
+                    [
+                        proposal
+                        for proposal in store.list_proposals()
+                        if proposal.get("approval_status", APPROVAL_PENDING) == APPROVAL_PENDING
+                        and not store.trade_submission_path(proposal["effective_date"]).exists()
+                    ],
+                    key=lambda proposal: (
+                        proposal.get("effective_date", ""),
+                        proposal.get("proposal_id", ""),
+                    ),
+                )
+                current_status = store.read_status()
+                account_context = _current_account_context(config, broker=broker) if proposals else {}
+                client = approval_client or _paper_approval_client(config)
 
-    if config.paper.execution_mode != "agent_approval":
-        _clear_worker_error_state(state)
-        state["last_checked_at"] = _now_utc(now).isoformat()
-        state["last_result"] = "execution_mode_not_agent_approval"
-        state_path = _save_worker_state(config, state)
-        return {
-            "agent_state_path": str(state_path),
-            "events": [],
-            "processed_count": 0,
-        }
+                for proposal in proposals:
+                    try:
+                        evidence = read_paper_evidence(config, proposal_id=proposal["proposal_id"])
+                    except FileNotFoundError as exc:
+                        result = decide_paper_proposal(
+                            config,
+                            proposal_id=proposal["proposal_id"],
+                            decision="reject",
+                            actor="agent",
+                            rationale=(
+                                "Rejected because the approval worker could not read the persisted "
+                                f"proposal evidence: {exc}."
+                            ),
+                            fallback_reason=str(exc),
+                            now=now,
+                            notification_sink=notification_sink,
+                            execution_context=paper_execution_context(
+                                iteration_context,
+                                phase="paper-approve",
+                                deployment="paper_agent",
+                                proposal=proposal,
+                                refresh_execution_id=True,
+                            ),
+                        )
+                        approval_result = PaperApprovalResult.from_legacy(result)
+                        events.append(
+                            {
+                                "proposal_id": proposal["proposal_id"],
+                                "decision": "reject",
+                                "provider": "",
+                                "model": "",
+                                "fallback_used": False,
+                                "fallback_reason": str(exc),
+                                "approval_path": approval_result.approval_path,
+                            }
+                        )
+                        continue
+                    try:
+                        decision = client.evaluate(
+                            PaperApprovalEvaluationRequest(
+                                proposal=proposal,
+                                evidence=evidence,
+                                status=current_status,
+                                account_context=account_context,
+                            )
+                        )
+                        result = decide_paper_proposal(
+                            config,
+                            proposal_id=proposal["proposal_id"],
+                            decision=decision.decision,
+                            actor="agent",
+                            rationale=decision.rationale,
+                            provider=decision.provider,
+                            model=decision.model,
+                            fallback_used=decision.fallback_used,
+                            fallback_reason=decision.fallback_reason,
+                            now=now,
+                            notification_sink=notification_sink,
+                            execution_context=paper_execution_context(
+                                iteration_context,
+                                phase="paper-approve",
+                                deployment="paper_agent",
+                                proposal=proposal,
+                                provider=decision.provider,
+                                refresh_execution_id=True,
+                            ),
+                        )
+                        approval_result = PaperApprovalResult.from_legacy(result)
+                    except Exception as exc:
+                        raise PaperLoopStageError(
+                            loop_name="agent",
+                            stage="paper-approve",
+                            cause=exc,
+                            proposal_id=str(proposal["proposal_id"]),
+                            trade_date=str(proposal["effective_date"]),
+                        ) from exc
+                    events.append(
+                        {
+                            "proposal_id": proposal["proposal_id"],
+                            "decision": decision.decision,
+                            "provider": decision.provider,
+                            "model": decision.model,
+                            "fallback_used": decision.fallback_used,
+                            "fallback_reason": decision.fallback_reason,
+                            "approval_path": approval_result.approval_path,
+                        }
+                    )
 
-    store = PaperStateStore(config)
-    proposals = sorted(
-        [
-            proposal
-            for proposal in store.list_proposals()
-            if proposal.get("approval_status", APPROVAL_PENDING) == APPROVAL_PENDING
-            and not store.trade_submission_path(proposal["effective_date"]).exists()
-        ],
-        key=lambda proposal: (
-            proposal.get("effective_date", ""),
-            proposal.get("proposal_id", ""),
+                _clear_worker_error_state(state)
+                state["last_checked_at"] = _now_utc(now).isoformat()
+                state["last_processed_count"] = len(events)
+                state["last_result"] = "processed" if events else "no_pending_proposals"
+                state_path = _save_worker_state(config, state)
+                summary = {
+                    "agent_state_path": str(state_path),
+                    "events": events,
+                    "processed_count": len(events),
+                }
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper approval worker iteration failed.",
+            event="paper.agent.iteration.error",
+            execution_context=paper_execution_context(
+                iteration_context,
+                phase="paper-approve",
+                deployment="paper_agent",
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "agent_iteration"},
+            ),
+            exc_info=exc,
+        )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper approval worker iteration.",
+        event="paper.agent.iteration.finish",
+        execution_context=paper_execution_context(
+            iteration_context,
+            phase="paper-approve",
+            deployment="paper_agent",
+            outcome="processed" if summary["processed_count"] > 0 else state.get("last_result", "idle"),
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "agent_iteration",
+                "agent_state_path": summary["agent_state_path"],
+                "processed_count": summary["processed_count"],
+            },
         ),
     )
-    current_status = store.read_status()
-    account_context = _current_account_context(config, broker=broker) if proposals else {}
-    client = approval_client or _paper_approval_client(config)
-
-    for proposal in proposals:
-        try:
-            evidence = read_paper_evidence(config, proposal_id=proposal["proposal_id"])
-        except FileNotFoundError as exc:
-            result = decide_paper_proposal(
-                config,
-                proposal_id=proposal["proposal_id"],
-                decision="reject",
-                actor="agent",
-                rationale=(
-                    "Rejected because the approval worker could not read the persisted "
-                    f"proposal evidence: {exc}."
-                ),
-                fallback_reason=str(exc),
-                now=now,
-                notification_sink=notification_sink,
-            )
-            approval_result = PaperApprovalResult.from_legacy(result)
-            events.append(
-                {
-                    "proposal_id": proposal["proposal_id"],
-                    "decision": "reject",
-                    "provider": "",
-                    "model": "",
-                    "fallback_used": False,
-                    "fallback_reason": str(exc),
-                    "approval_path": approval_result.approval_path,
-                }
-            )
-            continue
-        try:
-            decision = client.evaluate(
-                PaperApprovalEvaluationRequest(
-                    proposal=proposal,
-                    evidence=evidence,
-                    status=current_status,
-                    account_context=account_context,
-                )
-            )
-            result = decide_paper_proposal(
-                config,
-                proposal_id=proposal["proposal_id"],
-                decision=decision.decision,
-                actor="agent",
-                rationale=decision.rationale,
-                provider=decision.provider,
-                model=decision.model,
-                fallback_used=decision.fallback_used,
-                fallback_reason=decision.fallback_reason,
-                now=now,
-                notification_sink=notification_sink,
-            )
-            approval_result = PaperApprovalResult.from_legacy(result)
-        except Exception as exc:
-            raise PaperLoopStageError(
-                loop_name="agent",
-                stage="paper-approve",
-                cause=exc,
-                proposal_id=str(proposal["proposal_id"]),
-                trade_date=str(proposal["effective_date"]),
-            ) from exc
-        events.append(
-            {
-                "proposal_id": proposal["proposal_id"],
-                "decision": decision.decision,
-                "provider": decision.provider,
-                "model": decision.model,
-                "fallback_used": decision.fallback_used,
-                "fallback_reason": decision.fallback_reason,
-                "approval_path": approval_result.approval_path,
-            }
-        )
-
-    _clear_worker_error_state(state)
-    state["last_checked_at"] = _now_utc(now).isoformat()
-    state["last_processed_count"] = len(events)
-    state["last_result"] = "processed" if events else "no_pending_proposals"
-    state_path = _save_worker_state(config, state)
-    return {
-        "agent_state_path": str(state_path),
-        "events": events,
-        "processed_count": len(events),
-    }
+    return summary
 
 
 def run_agent_approval_loop(
@@ -270,13 +357,29 @@ def run_agent_approval_loop(
     approval_client: PaperApprovalClient | None = None,
 ) -> None:
     while True:
+        loop_context = paper_execution_context(
+            phase="paper-approve",
+            deployment="paper_agent",
+            refresh_execution_id=True,
+            details={"component": "agent_loop", "once": once},
+        )
+        emit_structured_log(
+            LOGGER,
+            logging.INFO,
+            "Starting paper approval worker loop run.",
+            event="paper.agent.loop.start",
+            execution_context=loop_context,
+        )
+        start_time = perf_counter()
         loop_error: Exception | None = None
         try:
-            summary = run_agent_approval_iteration(
-                config,
-                notification_sink=notification_sink,
-                approval_client=approval_client,
-            )
+            with bind_execution_context(loop_context):
+                summary = run_agent_approval_iteration(
+                    config,
+                    notification_sink=notification_sink,
+                    approval_client=approval_client,
+                    execution_context=loop_context,
+                )
         except Exception as exc:
             loop_error = exc
             state = _load_worker_state(config)
@@ -298,6 +401,44 @@ def run_agent_approval_loop(
                     "duplicate_suppressed": notification_path is None,
                 },
             }
+            emit_structured_log(
+                LOGGER,
+                logging.ERROR,
+                "Paper approval worker loop run failed.",
+                event="paper.agent.loop.error",
+                execution_context=paper_execution_context(
+                    loop_context,
+                    phase="paper-approve",
+                    deployment="paper_agent",
+                    outcome="error",
+                    duration_ms=duration_ms_since(start_time),
+                    details={
+                        "component": "agent_loop",
+                        "agent_state_path": summary["agent_state_path"],
+                        "duplicate_suppressed": notification_path is None,
+                    },
+                ),
+                exc_info=exc,
+            )
+        else:
+            emit_structured_log(
+                LOGGER,
+                logging.INFO,
+                "Finished paper approval worker loop run.",
+                event="paper.agent.loop.finish",
+                execution_context=paper_execution_context(
+                    loop_context,
+                    phase="paper-approve",
+                    deployment="paper_agent",
+                    outcome="processed" if summary["processed_count"] > 0 else "idle",
+                    duration_ms=duration_ms_since(start_time),
+                    details={
+                        "component": "agent_loop",
+                        "agent_state_path": summary["agent_state_path"],
+                        "processed_count": summary["processed_count"],
+                    },
+                ),
+            )
         print(json.dumps(summary, indent=2, sort_keys=True))
         if once:
             if loop_error is not None:

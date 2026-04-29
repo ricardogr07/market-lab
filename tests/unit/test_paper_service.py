@@ -12,6 +12,7 @@ from tests._paper_fakes import (
     build_phase7_paper_config,
 )
 
+from marketlab.log import configure_logging
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.persistence import build_sqlite_paper_uow_factory
 from marketlab.paper.service import (
@@ -50,6 +51,86 @@ def _notification_records(config) -> list[dict[str, object]]:
 def _configure_notification_env(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+
+def _stderr_records(stderr: str) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in stderr.splitlines()
+        if line.strip() != ""
+    ]
+
+
+def test_paper_service_logs_include_phase_ids_provider_and_duration(
+    capsys,
+    tmp_path: Path,
+) -> None:
+    configure_logging()
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    provider = FakeAlpacaProvider(symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ", equity=1_000.0, buying_power=1_000.0, cash=1_000.0)
+    sink = FakePaperNotificationSink()
+
+    decision = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=provider,
+        broker=broker,
+        notification_sink=sink,
+    )
+    store = PaperStateStore(config)
+    proposal = store.load_proposal(decision["proposal_id"])
+    proposal["decision"] = "long"
+    proposal["target_weight"] = 1.0
+    proposal["reference_price"] = 640.41
+    store.update_proposal(proposal)
+    decide_paper_proposal(
+        config,
+        proposal_id=decision["proposal_id"],
+        decision="approve",
+        actor="agent",
+        provider="approval-backend",
+        model="approval-model",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+        notification_sink=sink,
+    )
+    run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+        notification_sink=sink,
+    )
+    broker.order_status = "filled"
+    reconcile_latest_submission_status(
+        config,
+        now=datetime(2026, 4, 10, 23, 6, tzinfo=UTC),
+        broker=broker,
+    )
+
+    records = _stderr_records(capsys.readouterr().err)
+    finish_records = {record["event"]: record for record in records if str(record["event"]).endswith(".finish")}
+
+    assert finish_records["paper.decision.finish"]["phase"] == "paper-decision"
+    assert finish_records["paper.decision.finish"]["proposal_id"] == decision["proposal_id"]
+    assert finish_records["paper.decision.finish"]["provider"] == "alpaca"
+    assert finish_records["paper.decision.finish"]["outcome"] == "proposal_created"
+    assert isinstance(finish_records["paper.decision.finish"]["duration_ms"], float)
+
+    assert finish_records["paper.approval.finish"]["phase"] == "paper-approve"
+    assert finish_records["paper.approval.finish"]["proposal_id"] == decision["proposal_id"]
+    assert finish_records["paper.approval.finish"]["provider"] == "approval-backend"
+    assert finish_records["paper.approval.finish"]["outcome"] == "approved"
+
+    assert finish_records["paper.submit.finish"]["phase"] == "paper-submit"
+    assert finish_records["paper.submit.finish"]["proposal_id"] == decision["proposal_id"]
+    assert finish_records["paper.submit.finish"]["provider"] == "alpaca"
+    assert finish_records["paper.submit.finish"]["order_id"] == "order-1"
+    assert finish_records["paper.submit.finish"]["outcome"] == "submitted"
+
+    assert finish_records["paper.reconcile.finish"]["phase"] == "paper-submit-reconcile"
+    assert finish_records["paper.reconcile.finish"]["proposal_id"] == decision["proposal_id"]
+    assert finish_records["paper.reconcile.finish"]["provider"] == "alpaca"
+    assert finish_records["paper.reconcile.finish"]["outcome"] == "observed"
 
 
 def test_run_paper_decision_writes_latest_daily_proposal(monkeypatch, tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -8,6 +9,14 @@ import pytest
 
 from marketlab import cli
 from marketlab.resources.templates import get_config_template_text
+
+
+def _stderr_records(stderr: str) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in stderr.splitlines()
+        if line.strip() != ""
+    ]
 
 
 @contextmanager
@@ -149,3 +158,63 @@ def test_write_config_rejects_unknown_template_name() -> None:
 
         assert excinfo.value.code == 2
         assert not output_path.exists()
+
+
+def test_paper_status_keeps_json_stdout_and_structured_logs_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    monkeypatch.setattr(
+        cli,
+        "get_paper_status",
+        lambda config: {
+            "latest_proposal": {"proposal_id": "proposal-1"},
+            "pending_proposal_count": 0,
+            "status": {"status": "proposal_created"},
+            "status_path": "status.json",
+        },
+    )
+
+    exit_code = cli.main(["paper-status", "--config", "dummy.yaml"])
+
+    captured = capsys.readouterr()
+    records = _stderr_records(captured.err)
+
+    assert exit_code == 0
+    assert json.loads(captured.out)["latest_proposal"]["proposal_id"] == "proposal-1"
+    assert [record["event"] for record in records] == [
+        "paper.command.start",
+        "paper.command.finish",
+    ]
+    assert all(record["deployment"] == "local_cli" for record in records)
+    assert all(record["phase"] == "paper-status" for record in records)
+
+
+def test_paper_decision_keeps_path_stdout_and_structured_logs_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    monkeypatch.setattr(
+        cli,
+        "run_paper_decision",
+        lambda config, **kwargs: {
+            "proposal_path": "proposal.json",
+            "status_path": "status.json",
+            "status": {"status": "proposal_created"},
+        },
+    )
+
+    exit_code = cli.main(["paper-decision", "--config", "dummy.yaml"])
+
+    captured = capsys.readouterr()
+    records = _stderr_records(captured.err)
+
+    assert exit_code == 0
+    assert captured.out.strip() == "proposal.json"
+    assert [record["event"] for record in records] == [
+        "paper.command.start",
+        "paper.command.finish",
+    ]
+    assert records[-1]["outcome"] == "proposal_created"

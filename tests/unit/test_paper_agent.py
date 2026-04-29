@@ -16,6 +16,7 @@ from tests._paper_fakes import (
 )
 
 import marketlab.paper.agent as agent_module
+from marketlab.log import configure_logging
 from marketlab.paper.agent import run_agent_approval_iteration, run_agent_approval_loop
 from marketlab.paper.contracts import PaperApprovalClientDecision
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
@@ -39,6 +40,14 @@ def _capture_transport(calls: list[dict[str, object]]):
 def _configure_notification_env(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+
+def _stderr_records(stderr: str) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in stderr.splitlines()
+        if line.strip() != ""
+    ]
 
 
 def test_agent_worker_approves_with_openai_backend(monkeypatch, tmp_path: Path) -> None:
@@ -623,3 +632,33 @@ def test_agent_worker_loop_once_propagates_iteration_failures_after_notifying(
     assert len(calls) == 1
     assert len(records) == 1
     assert records[0]["stage"] == "paper-error"
+
+
+def test_agent_worker_loop_logs_start_and_error_with_shared_correlation_id(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    configure_logging()
+    config = build_phase7_paper_config(tmp_path)
+
+    def _failing_iteration(*args, **kwargs):
+        raise RuntimeError("agent loop boom")
+
+    monkeypatch.setattr(agent_module, "run_agent_approval_iteration", _failing_iteration)
+
+    with pytest.raises(RuntimeError, match="agent loop boom"):
+        run_agent_approval_loop(
+            config,
+            once=True,
+            notification_sink=FakePaperNotificationSink(),
+        )
+
+    records = _stderr_records(capsys.readouterr().err)
+    start_record = next(record for record in records if record["event"] == "paper.agent.loop.start")
+    error_record = next(record for record in records if record["event"] == "paper.agent.loop.error")
+
+    assert start_record["correlation_id"] == error_record["correlation_id"]
+    assert start_record["deployment"] == "paper_agent"
+    assert error_record["phase"] == "paper-approve"
+    assert error_record["outcome"] == "error"

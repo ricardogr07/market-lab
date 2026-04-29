@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.log import (
+    ExecutionContext,
+    bind_execution_context,
+    duration_ms_since,
+    emit_structured_log,
+)
 from marketlab.paper.contracts import (
     PaperDecisionResult,
     PaperNotificationSink,
@@ -18,6 +26,7 @@ from marketlab.paper.notifications import (
     build_error_fingerprint,
     build_telegram_paper_notification_sink,
 )
+from marketlab.paper.observability import paper_execution_context
 from marketlab.paper.service import (
     PaperStateStore,
     _clock_value,
@@ -27,6 +36,8 @@ from marketlab.paper.service import (
     run_paper_decision,
     run_paper_submit,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _scheduler_state_path(config: ExperimentConfig) -> Path:
@@ -117,77 +128,167 @@ def run_scheduler_iteration(
     *,
     now: datetime | None = None,
     notification_sink: PaperNotificationSink | None = None,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any]:
+    iteration_context = paper_execution_context(
+        execution_context,
+        phase="paper-scheduler",
+        deployment="paper_scheduler",
+        refresh_execution_id=True,
+        details={"component": "scheduler_iteration"},
+    )
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper scheduler iteration.",
+        event="paper.scheduler.iteration.start",
+        execution_context=iteration_context,
+    )
+    start_time = perf_counter()
     local_now = _local_now(config, now)
     market_date = local_now.date().isoformat()
     decision_clock = _clock_value(config.paper.decision_time)
     submission_clock = _clock_value(config.paper.submission_time)
     state = _load_scheduler_state(config)
     events: list[dict[str, Any]] = []
-
-    if local_now.time() >= decision_clock and state.get("last_decision_market_date") != market_date:
-        try:
-            result = run_paper_decision(
-                config,
-                now=now,
-                notification_sink=notification_sink,
-            )
-            decision_result = PaperDecisionResult.from_legacy(result)
-        except Exception as exc:
-            raise PaperLoopStageError(
-                loop_name="scheduler",
-                stage="paper-decision",
-                cause=exc,
-            ) from exc
-        events.append({"phase": "decision", **decision_result.as_legacy_payload()})
-        state["last_decision_market_date"] = market_date
-        state["last_decision_at"] = _now_utc(now).isoformat()
-
-    if local_now.time() >= submission_clock and state.get("last_submission_market_date") != market_date:
-        try:
-            result = run_paper_submit(
-                config,
-                now=now,
-                notification_sink=notification_sink,
-            )
-            submission_result = PaperSubmissionResult.from_legacy(result)
-        except Exception as exc:
-            proposal = PaperStateStore(config).latest_proposal()
-            raise PaperLoopStageError(
-                loop_name="scheduler",
-                stage="paper-submit",
-                cause=exc,
-                proposal_id=str((proposal or {}).get("proposal_id", "")),
-                trade_date=str((proposal or {}).get("effective_date", "")),
-            ) from exc
-        events.append({"phase": "submission", **submission_result.as_legacy_payload()})
-        state["last_submission_market_date"] = market_date
-        state["last_submission_at"] = _now_utc(now).isoformat()
-
     try:
-        reconciliation = reconcile_latest_submission_status(config, now=now)
-    except Exception as exc:
-        proposal = PaperStateStore(config).latest_proposal()
-        raise PaperLoopStageError(
-            loop_name="scheduler",
-            stage="paper-submit-reconcile",
-            cause=exc,
-            proposal_id=str((proposal or {}).get("proposal_id", "")),
-            trade_date=str((proposal or {}).get("effective_date", "")),
-        ) from exc
-    if reconciliation is not None:
-        reconciliation_result = PaperReconciliationResult.from_legacy(reconciliation)
-        events.append({"phase": "submission_reconcile", **reconciliation_result.as_legacy_payload()})
+        with bind_execution_context(
+            paper_execution_context(
+                iteration_context,
+                phase="paper-scheduler",
+                deployment="paper_scheduler",
+                trade_date=market_date,
+                details={"component": "scheduler_iteration"},
+            )
+        ):
+            if local_now.time() >= decision_clock and state.get("last_decision_market_date") != market_date:
+                try:
+                    result = run_paper_decision(
+                        config,
+                        now=now,
+                        notification_sink=notification_sink,
+                        execution_context=paper_execution_context(
+                            iteration_context,
+                            phase="paper-decision",
+                            deployment="paper_scheduler",
+                            trade_date=market_date,
+                            provider=config.paper.data_provider,
+                            refresh_execution_id=True,
+                        ),
+                    )
+                    decision_result = PaperDecisionResult.from_legacy(result)
+                except Exception as exc:
+                    raise PaperLoopStageError(
+                        loop_name="scheduler",
+                        stage="paper-decision",
+                        cause=exc,
+                    ) from exc
+                events.append({"phase": "decision", **decision_result.as_legacy_payload()})
+                state["last_decision_market_date"] = market_date
+                state["last_decision_at"] = _now_utc(now).isoformat()
 
-    _clear_scheduler_error_state(state)
-    state["last_checked_at"] = _now_utc(now).isoformat()
-    state["last_checked_market_date"] = market_date
-    state_path = _save_scheduler_state(config, state)
-    return {
-        "scheduler_state_path": str(state_path),
-        "market_date": market_date,
-        "events": events,
-    }
+            if local_now.time() >= submission_clock and state.get("last_submission_market_date") != market_date:
+                try:
+                    result = run_paper_submit(
+                        config,
+                        now=now,
+                        notification_sink=notification_sink,
+                        execution_context=paper_execution_context(
+                            iteration_context,
+                            phase="paper-submit",
+                            deployment="paper_scheduler",
+                            trade_date=market_date,
+                            provider=config.paper.broker,
+                            refresh_execution_id=True,
+                        ),
+                    )
+                    submission_result = PaperSubmissionResult.from_legacy(result)
+                except Exception as exc:
+                    proposal = PaperStateStore(config).latest_proposal()
+                    raise PaperLoopStageError(
+                        loop_name="scheduler",
+                        stage="paper-submit",
+                        cause=exc,
+                        proposal_id=str((proposal or {}).get("proposal_id", "")),
+                        trade_date=str((proposal or {}).get("effective_date", "")),
+                    ) from exc
+                events.append({"phase": "submission", **submission_result.as_legacy_payload()})
+                state["last_submission_market_date"] = market_date
+                state["last_submission_at"] = _now_utc(now).isoformat()
+
+            try:
+                reconciliation = reconcile_latest_submission_status(
+                    config,
+                    now=now,
+                    execution_context=paper_execution_context(
+                        iteration_context,
+                        phase="paper-submit-reconcile",
+                        deployment="paper_scheduler",
+                        trade_date=market_date,
+                        provider=config.paper.broker,
+                        refresh_execution_id=True,
+                    ),
+                )
+            except Exception as exc:
+                proposal = PaperStateStore(config).latest_proposal()
+                raise PaperLoopStageError(
+                    loop_name="scheduler",
+                    stage="paper-submit-reconcile",
+                    cause=exc,
+                    proposal_id=str((proposal or {}).get("proposal_id", "")),
+                    trade_date=str((proposal or {}).get("effective_date", "")),
+                ) from exc
+            if reconciliation is not None:
+                reconciliation_result = PaperReconciliationResult.from_legacy(reconciliation)
+                events.append({"phase": "submission_reconcile", **reconciliation_result.as_legacy_payload()})
+
+            _clear_scheduler_error_state(state)
+            state["last_checked_at"] = _now_utc(now).isoformat()
+            state["last_checked_market_date"] = market_date
+            state_path = _save_scheduler_state(config, state)
+            summary = {
+                "scheduler_state_path": str(state_path),
+                "market_date": market_date,
+                "events": events,
+            }
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper scheduler iteration failed.",
+            event="paper.scheduler.iteration.error",
+            execution_context=paper_execution_context(
+                iteration_context,
+                phase="paper-scheduler",
+                deployment="paper_scheduler",
+                trade_date=market_date,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "scheduler_iteration"},
+            ),
+            exc_info=exc,
+        )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper scheduler iteration.",
+        event="paper.scheduler.iteration.finish",
+        execution_context=paper_execution_context(
+            iteration_context,
+            phase="paper-scheduler",
+            deployment="paper_scheduler",
+            trade_date=market_date,
+            outcome="events_recorded" if events else "idle",
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "scheduler_iteration",
+                "event_count": len(events),
+                "scheduler_state_path": summary["scheduler_state_path"],
+            },
+        ),
+    )
+    return summary
 
 
 def run_scheduler_loop(
@@ -197,12 +298,28 @@ def run_scheduler_loop(
     notification_sink: PaperNotificationSink | None = None,
 ) -> None:
     while True:
+        loop_context = paper_execution_context(
+            phase="paper-scheduler",
+            deployment="paper_scheduler",
+            refresh_execution_id=True,
+            details={"component": "scheduler_loop", "once": once},
+        )
+        emit_structured_log(
+            LOGGER,
+            logging.INFO,
+            "Starting paper scheduler loop run.",
+            event="paper.scheduler.loop.start",
+            execution_context=loop_context,
+        )
+        start_time = perf_counter()
         loop_error: Exception | None = None
         try:
-            summary = run_scheduler_iteration(
-                config,
-                notification_sink=notification_sink,
-            )
+            with bind_execution_context(loop_context):
+                summary = run_scheduler_iteration(
+                    config,
+                    notification_sink=notification_sink,
+                    execution_context=loop_context,
+                )
         except Exception as exc:
             loop_error = exc
             state = _load_scheduler_state(config)
@@ -223,6 +340,44 @@ def run_scheduler_loop(
                     "duplicate_suppressed": notification_path is None,
                 },
             }
+            emit_structured_log(
+                LOGGER,
+                logging.ERROR,
+                "Paper scheduler loop run failed.",
+                event="paper.scheduler.loop.error",
+                execution_context=paper_execution_context(
+                    loop_context,
+                    phase="paper-scheduler",
+                    deployment="paper_scheduler",
+                    outcome="error",
+                    duration_ms=duration_ms_since(start_time),
+                    details={
+                        "component": "scheduler_loop",
+                        "scheduler_state_path": summary["scheduler_state_path"],
+                        "duplicate_suppressed": notification_path is None,
+                    },
+                ),
+                exc_info=exc,
+            )
+        else:
+            emit_structured_log(
+                LOGGER,
+                logging.INFO,
+                "Finished paper scheduler loop run.",
+                event="paper.scheduler.loop.finish",
+                execution_context=paper_execution_context(
+                    loop_context,
+                    phase="paper-scheduler",
+                    deployment="paper_scheduler",
+                    outcome="events_recorded" if summary["events"] else "idle",
+                    duration_ms=duration_ms_since(start_time),
+                    details={
+                        "component": "scheduler_loop",
+                        "scheduler_state_path": summary["scheduler_state_path"],
+                        "event_count": len(summary["events"]),
+                    },
+                ),
+            )
         print(json.dumps(summary, indent=2, sort_keys=True))
         if once:
             if loop_error is not None:
