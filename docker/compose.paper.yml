@@ -12,6 +12,8 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      MARKETLAB_PAPER_TELEGRAM_ENABLED: "${MARKETLAB_PAPER_TELEGRAM_ENABLED:-}"
+      MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS: "${MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS:-}"
     volumes:
       - ../workspace:/app/workspace
       - ../artifacts:/app/repo/artifacts
@@ -41,6 +43,8 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      MARKETLAB_PAPER_TELEGRAM_ENABLED: "${MARKETLAB_PAPER_TELEGRAM_ENABLED:-}"
+      MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS: "${MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS:-}"
     volumes:
       - ../workspace:/app/workspace
       - ../artifacts:/app/repo/artifacts
@@ -70,6 +74,8 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      MARKETLAB_PAPER_TELEGRAM_ENABLED: "${MARKETLAB_PAPER_TELEGRAM_ENABLED:-}"
+      MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS: "${MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS:-}"
     volumes:
       - ../workspace:/app/workspace
       - ../artifacts:/app/repo/artifacts

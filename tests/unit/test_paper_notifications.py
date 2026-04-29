@@ -31,6 +31,8 @@ def test_disabled_telegram_notification_records_skipped_disabled(
 ) -> None:
     config = build_phase7_paper_config(tmp_path, telegram_enabled=False)
     store = PaperStateStore(config)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
 
@@ -53,6 +55,100 @@ def test_disabled_telegram_notification_records_skipped_disabled(
     assert persisted["delivery_status"] == DELIVERY_SKIPPED_DISABLED
 
 
+def test_telegram_env_override_disables_yaml_enabled_notifications(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True)
+    request_calls: list[tuple[str, dict[str, object], int]] = []
+    monkeypatch.setenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", "false")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+    record = deliver_telegram_notification(
+        config,
+        stage="paper-decision",
+        outcome="proposal_created",
+        message="paper-decision\noutcome: proposal_created",
+        transport=lambda url, payload, timeout: request_calls.append((url, payload, timeout)) or (200, "{}"),
+    )
+
+    assert record["delivery_status"] == DELIVERY_SKIPPED_DISABLED
+    assert request_calls == []
+
+
+def test_telegram_experiment_allowlist_blocks_fixture_notifications(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True)
+    request_calls: list[tuple[str, dict[str, object], int]] = []
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.setenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", "qqq_paper_daily")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+    record = deliver_telegram_notification(
+        config,
+        stage="paper-decision",
+        outcome="proposal_created",
+        message="paper-decision\nexperiment: phase7_paper_fixture",
+        transport=lambda url, payload, timeout: request_calls.append((url, payload, timeout)) or (200, "{}"),
+    )
+
+    assert record["delivery_status"] == DELIVERY_SKIPPED_DISABLED
+    assert request_calls == []
+
+
+def test_telegram_experiment_allowlist_allows_qqq_notifications(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True, symbol="QQQ")
+    config.experiment_name = "qqq_paper_daily"
+    request_calls: list[tuple[str, dict[str, object], int]] = []
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.setenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", "qqq_paper_daily")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+    monkeypatch.setenv("MARKETLAB_TELEGRAM_API_BASE_URL", "http://127.0.0.1:9999")
+
+    record = deliver_telegram_notification(
+        config,
+        stage="paper-decision",
+        outcome="proposal_created",
+        message="paper-decision\nexperiment: qqq_paper_daily",
+        transport=lambda url, payload, timeout: request_calls.append((url, payload, timeout)) or (200, '{"ok": true}'),
+    )
+
+    assert record["delivery_status"] == DELIVERY_DELIVERED
+    assert len(request_calls) == 1
+
+
+def test_telegram_env_override_enables_yaml_disabled_notifications(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=False)
+    request_calls: list[tuple[str, dict[str, object], int]] = []
+    monkeypatch.setenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", "true")
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+    monkeypatch.setenv("MARKETLAB_TELEGRAM_API_BASE_URL", "http://127.0.0.1:9999")
+
+    record = deliver_telegram_notification(
+        config,
+        stage="paper-decision",
+        outcome="proposal_created",
+        message="paper-decision\noutcome: proposal_created",
+        transport=lambda url, payload, timeout: request_calls.append((url, payload, timeout)) or (200, '{"ok": true}'),
+    )
+
+    assert record["delivery_status"] == DELIVERY_DELIVERED
+    assert len(request_calls) == 1
+
+
 def test_enabled_telegram_notification_without_credentials_records_skip(
     monkeypatch,
     tmp_path: Path,
@@ -61,6 +157,8 @@ def test_enabled_telegram_notification_without_credentials_records_skip(
     store = PaperStateStore(config)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MARKETLAB_ENV_FILE", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
 
@@ -104,6 +202,8 @@ def test_successful_telegram_delivery_records_request_and_audit(
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
     monkeypatch.setenv("MARKETLAB_TELEGRAM_API_BASE_URL", "http://127.0.0.1:9999")
 
     record = deliver_telegram_notification(
@@ -149,6 +249,8 @@ def test_failed_telegram_delivery_records_failure_without_raising(
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
 
     record = deliver_telegram_notification(
         config,
@@ -184,6 +286,8 @@ def test_successful_telegram_delivery_emits_structured_delivery_log(
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", raising=False)
+    monkeypatch.delenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", raising=False)
 
     deliver_telegram_notification(
         config,

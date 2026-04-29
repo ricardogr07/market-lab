@@ -25,6 +25,18 @@ def _require_real_telegram_env() -> None:
         pytest.skip("Set MARKETLAB_RUN_REAL_TELEGRAM=1 to run the real Telegram smoke test.")
 
     load_env_file()
+    telegram_enabled = os.getenv("MARKETLAB_PAPER_TELEGRAM_ENABLED", "").strip().lower()
+    if telegram_enabled in {"0", "false", "no", "off"}:
+        pytest.skip("MARKETLAB_PAPER_TELEGRAM_ENABLED disables Telegram delivery.")
+
+    allowed_experiments = {
+        item.strip()
+        for item in os.getenv("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS", "").split(",")
+        if item.strip() != ""
+    }
+    if allowed_experiments and "phase7_paper_fixture" not in allowed_experiments:
+        pytest.skip("Telegram experiment allowlist excludes phase7_paper_fixture.")
+
     missing = [
         name
         for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
@@ -40,6 +52,7 @@ def test_real_telegram_smoke_sends_one_message_and_persists_audit_record(
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.delenv("MARKETLAB_ENV_FILE", raising=False)
     monkeypatch.delenv("MARKETLAB_TELEGRAM_API_BASE_URL", raising=False)
     _require_real_telegram_env()
 
