@@ -6,6 +6,7 @@ nav:
   - How It Works: how-it-works.md
   - Architecture: architecture.md
   - SOLID Audit: solid-architecture-audit.md
+  - Service Extraction Readiness: service-extraction-readiness.md
   - Phase 5 Scenarios: phase5-scenarios.md
   - Phase 7 Paper Trading: paper-trading.md
   - MCP Server: mcp-server.md
