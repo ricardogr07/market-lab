@@ -138,13 +138,19 @@ OPENAI_API_KEY="..."
 ANTHROPIC_API_KEY="..."
 TELEGRAM_BOT_TOKEN="..."
 TELEGRAM_CHAT_ID="..."
+MARKETLAB_PAPER_TELEGRAM_ENABLED=false
+MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS=qqq_paper_daily
 ```
 
 The paper broker path rejects non-paper trading endpoints at runtime unless the base URL is a local test server.
 
 ## Telegram Ops Feed
 
-Telegram credentials stay out of YAML. The tracked `QQQ` config already enables the ops feed, and the alternate `VOO` config leaves it explicit but disabled. To enable it in another paper config:
+Telegram credentials stay out of YAML. The tracked `QQQ` config already enables the ops feed, and the alternate `VOO` config leaves it explicit but disabled. Set `MARKETLAB_PAPER_TELEGRAM_ENABLED=false` in `.env` to force Telegram delivery off for local CLI, scheduler, agent, and paper MCP runs even when the YAML config enables it. Set it to `true` to force delivery on for a config that leaves Telegram disabled.
+
+Use `MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS=qqq_paper_daily` to restrict real delivery to the tracked QQQ paper experiment. This keeps fixture and smoke-test configs such as `phase7_paper_fixture` from sending Telegram messages even if their YAML enables notifications.
+
+To enable it in another paper config without an env override:
 
 ```yaml
 paper:

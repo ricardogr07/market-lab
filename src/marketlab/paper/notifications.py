@@ -21,6 +21,8 @@ from marketlab.paper.state import PaperStateStore
 TELEGRAM_API_BASE_URL_ENV = "MARKETLAB_TELEGRAM_API_BASE_URL"
 TELEGRAM_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TELEGRAM_CHAT_ID_ENV = "TELEGRAM_CHAT_ID"
+TELEGRAM_ENABLED_ENV = "MARKETLAB_PAPER_TELEGRAM_ENABLED"
+TELEGRAM_ALLOWED_EXPERIMENTS_ENV = "MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS"
 DEFAULT_TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 DEFAULT_TELEGRAM_TIMEOUT_SECONDS = 10
 DELIVERY_DELIVERED = "delivered"
@@ -238,6 +240,39 @@ def _telegram_api_base_url() -> str:
     return DEFAULT_TELEGRAM_API_BASE_URL
 
 
+def _parse_optional_bool_env(name: str) -> bool | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return None
+    value = raw_value.strip().lower()
+    if value == "":
+        return None
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return False
+
+
+def _telegram_notifications_enabled(config: ExperimentConfig) -> bool:
+    configured = _parse_optional_bool_env(TELEGRAM_ENABLED_ENV)
+    if configured is not None:
+        return configured
+    return config.paper.notifications.telegram.enabled
+
+
+def _telegram_experiment_allowed(config: ExperimentConfig) -> bool:
+    raw_value = os.environ.get(TELEGRAM_ALLOWED_EXPERIMENTS_ENV, "").strip()
+    if raw_value == "":
+        return True
+    allowed = {
+        item.strip()
+        for item in raw_value.split(",")
+        if item.strip() != ""
+    }
+    return config.experiment_name in allowed
+
+
 def _safe_json(text: str) -> Any:
     try:
         return json.loads(text)
@@ -269,7 +304,8 @@ def deliver_telegram_notification(
         "details": dict(details or {}),
         "requested_at": timestamp,
     }
-    if not config.paper.notifications.telegram.enabled:
+    load_env_file()
+    if not _telegram_notifications_enabled(config) or not _telegram_experiment_allowed(config):
         record["delivery_status"] = DELIVERY_SKIPPED_DISABLED
         _log_notification_delivery(
             stage=stage,
@@ -281,7 +317,6 @@ def deliver_telegram_notification(
         )
         return record
 
-    load_env_file()
     bot_token = os.environ.get(TELEGRAM_BOT_TOKEN_ENV, "").strip()
     chat_id = os.environ.get(TELEGRAM_CHAT_ID_ENV, "").strip()
     api_base_url = _telegram_api_base_url()

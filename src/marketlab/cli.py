@@ -8,6 +8,7 @@ from time import perf_counter
 
 from marketlab._version import get_version
 from marketlab.config import load_config
+from marketlab.env import load_env_file
 from marketlab.log import (
     ExecutionContext,
     bind_execution_context,
@@ -238,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         print(output_path)
         return 0
 
+    load_env_file()
     config = load_config(args.config)
 
     if args.command == "paper-decision":
