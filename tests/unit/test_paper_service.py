@@ -13,6 +13,7 @@ from tests._paper_fakes import (
 )
 
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
+from marketlab.paper.persistence import build_sqlite_paper_uow_factory
 from marketlab.paper.service import (
     PaperStateStore,
     decide_paper_proposal,
@@ -800,3 +801,93 @@ def test_get_paper_status_returns_latest_proposal_summary(tmp_path: Path) -> Non
 
     assert status["latest_proposal"] is not None
     assert status["latest_proposal"]["symbol"] == "QQQ"
+
+
+def test_service_wrappers_support_sqlite_persistence_backend(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        symbol="QQQ",
+        persistence_backend="sqlite",
+        sqlite_db_path="artifacts/paper/state/sqlite-paper.db",
+    )
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
+
+    decision = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    decide_paper_proposal(
+        config,
+        proposal_id=decision["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert config.paper_sqlite_db_path.exists()
+    assert Path(decision["proposal_path"]).exists()
+    assert Path(decision["evidence_path"]).exists()
+    assert get_paper_status(config)["latest_proposal"]["proposal_id"] == decision["proposal_id"]
+    assert submission["status"] in {"submitted", "no_trade_required"}
+
+
+def test_sqlite_reconciliation_recreates_missing_order_status_artifact(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path,
+        execution_mode="agent_approval",
+        symbol="QQQ",
+        persistence_backend="sqlite",
+        sqlite_db_path="artifacts/paper/state/sqlite-paper.db",
+    )
+    broker = FakeAlpacaBroker(symbol="QQQ", order_status="accepted")
+    proposal_result = run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=broker,
+    )
+    store = PaperStateStore(config)
+    with build_sqlite_paper_uow_factory(config)() as uow:
+        proposal = uow.trades.get_proposal(proposal_result["proposal_id"])
+        assert proposal is not None
+        proposal["decision"] = "long"
+        proposal["target_weight"] = 1.0
+        proposal["reference_price"] = 640.41
+        uow.trades.save_proposal(proposal)
+        uow.commit()
+    decide_paper_proposal(
+        config,
+        proposal_id=proposal_result["proposal_id"],
+        decision="approve",
+        actor="agent",
+        now=datetime(2026, 4, 10, 20, 20, tzinfo=UTC),
+    )
+    run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        broker=broker,
+    )
+
+    order_status_path = store.trade_order_status_path("2026-04-13")
+    order_status = json.loads(order_status_path.read_text(encoding="utf-8"))
+    order_status_path.unlink()
+    assert not order_status_path.exists()
+
+    broker.order_status = str(order_status["status"])
+    reconciliation = reconcile_latest_submission_status(
+        config,
+        now=datetime(2026, 4, 11, 14, 0, tzinfo=UTC),
+        broker=broker,
+    )
+
+    recreated_order_status = json.loads(order_status_path.read_text(encoding="utf-8"))
+    assert reconciliation is not None
+    assert recreated_order_status == order_status

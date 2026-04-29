@@ -13,6 +13,7 @@ COVARIANCE_ESTIMATORS = {"diagonal_shrinkage", "ewma", "external_csv", "sample"}
 EXPECTED_RETURN_SOURCES = {"external_csv", "historical_mean"}
 PAPER_DATA_PROVIDERS = {"alpaca"}
 PAPER_BROKERS = {"alpaca"}
+PAPER_PERSISTENCE_BACKENDS = {"filesystem", "sqlite"}
 PAPER_EXECUTION_MODES = {"autonomous", "agent_approval", "manual_approval"}
 PAPER_ORDER_TYPES = {"day_market"}
 PAPER_POSITION_SIZING = {"full_equity_fractional"}
@@ -176,6 +177,8 @@ class PaperConfig:
     enabled: bool = False
     data_provider: str = "alpaca"
     broker: str = "alpaca"
+    persistence_backend: str = "filesystem"
+    sqlite_db_path: str = "artifacts/paper/state/control.db"
     execution_mode: str = "agent_approval"
     agent_backend: str = "deterministic_consensus"
     agent_model: str = ""
@@ -238,6 +241,10 @@ class ExperimentConfig:
     @property
     def paper_state_dir(self) -> Path:
         return self.resolve_path(self.paper.state_dir)
+
+    @property
+    def paper_sqlite_db_path(self) -> Path:
+        return self.resolve_path(self.paper.sqlite_db_path)
 
     @property
     def optimized_external_covariance_path(self) -> Path | None:
@@ -382,6 +389,11 @@ def _validate_config(config: ExperimentConfig) -> None:
     if paper.broker not in PAPER_BROKERS:
         allowed = ", ".join(sorted(PAPER_BROKERS))
         raise ValueError(f"paper.broker must be one of: {allowed}")
+    if paper.persistence_backend not in PAPER_PERSISTENCE_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_PERSISTENCE_BACKENDS))
+        raise ValueError(f"paper.persistence_backend must be one of: {allowed}")
+    if paper.persistence_backend == "sqlite" and paper.sqlite_db_path.strip() == "":
+        raise ValueError("paper.sqlite_db_path must be set when paper.persistence_backend='sqlite'.")
     if paper.execution_mode not in PAPER_EXECUTION_MODES:
         allowed = ", ".join(sorted(PAPER_EXECUTION_MODES))
         raise ValueError(f"paper.execution_mode must be one of: {allowed}")
@@ -642,6 +654,14 @@ def load_config(path: str | Path) -> ExperimentConfig:
             enabled=paper_payload.get("enabled", paper_defaults.enabled),
             data_provider=paper_payload.get("data_provider", paper_defaults.data_provider),
             broker=paper_payload.get("broker", paper_defaults.broker),
+            persistence_backend=paper_payload.get(
+                "persistence_backend",
+                paper_defaults.persistence_backend,
+            ),
+            sqlite_db_path=paper_payload.get(
+                "sqlite_db_path",
+                paper_defaults.sqlite_db_path,
+            ),
             execution_mode=paper_payload.get("execution_mode", paper_defaults.execution_mode),
             agent_backend=paper_payload.get("agent_backend", paper_defaults.agent_backend),
             agent_model=paper_payload.get("agent_model", paper_defaults.agent_model),

@@ -49,6 +49,7 @@ from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_uow_factory,
+    build_sqlite_paper_uow_factory,
 )
 from marketlab.paper.state import PaperStateStore
 
@@ -61,7 +62,11 @@ _paper_symbol = _core_paper_symbol
 
 
 def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
-    return build_filesystem_paper_uow_factory(config)
+    if config.paper.persistence_backend == "filesystem":
+        return build_filesystem_paper_uow_factory(config)
+    if config.paper.persistence_backend == "sqlite":
+        return build_sqlite_paper_uow_factory(config)
+    raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
 
 
 def _paper_history_provider_factory(config: ExperimentConfig) -> PaperHistoryProviderFactory:

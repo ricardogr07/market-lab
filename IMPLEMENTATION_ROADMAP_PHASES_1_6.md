@@ -293,7 +293,7 @@ Exit criteria:
 
 ### Phase 3: DB-Agnostic Persistence Ports
 
-Status: `not started`
+Status: `done`
 
 Objective:
 
@@ -559,9 +559,9 @@ Exit criteria:
 
 ### Phase 3
 
-- [ ] PR: `refactor: add paper repositories and unit-of-work ports`
-- [ ] PR: `feat: add sqlite paper control-store adapter behind persistence ports`
-- [ ] Confirm adapter contract tests pass and parity is proven
+- [x] PR: `refactor: add paper repositories and unit-of-work ports`
+- [x] PR: `feat: add sqlite paper control-store adapter behind persistence ports`
+- [x] Confirm adapter contract tests pass and parity is proven
 
 ### Phase 4
 
@@ -584,8 +584,8 @@ Exit criteria:
 
 - [ ] typed contracts exist for paper phase boundaries
 - [ ] phase services are shared across CLI, scheduler, agent, and MCP
-- [ ] transactional persistence ports are in place
-- [ ] more than one persistence adapter shape is proven by contract tests
+- [x] transactional persistence ports are in place
+- [x] more than one persistence adapter shape is proven by contract tests
 - [ ] external IO is isolated behind ports
 - [ ] structured execution context exists
 - [ ] extraction readiness rules are explicit

@@ -66,6 +66,8 @@ def build_phase7_paper_config(
     agent_backend: str = "deterministic_consensus",
     agent_model: str = "",
     telegram_enabled: bool = False,
+    persistence_backend: str = "filesystem",
+    sqlite_db_path: str = "artifacts/paper/state/control.db",
 ) -> ExperimentConfig:
     return ExperimentConfig(
         experiment_name="phase7_paper_fixture",
@@ -119,6 +121,8 @@ def build_phase7_paper_config(
         paper=PaperConfig(
             enabled=True,
             execution_mode=execution_mode,
+            persistence_backend=persistence_backend,
+            sqlite_db_path=sqlite_db_path,
             agent_backend=agent_backend,
             agent_model=agent_model,
             poll_interval_seconds=1,
@@ -374,6 +378,8 @@ def write_phase7_paper_config(
     agent_backend: str = "deterministic_consensus",
     agent_model: str = "",
     telegram_enabled: bool = False,
+    persistence_backend: str = "filesystem",
+    sqlite_db_path: str = "artifacts/paper/state/control.db",
 ) -> Path:
     payload = {
         "experiment_name": "phase7_paper_fixture",
@@ -430,6 +436,8 @@ def write_phase7_paper_config(
             "enabled": True,
             "data_provider": "alpaca",
             "broker": "alpaca",
+            "persistence_backend": persistence_backend,
+            "sqlite_db_path": sqlite_db_path,
             "execution_mode": execution_mode,
             "agent_backend": agent_backend,
             "agent_model": agent_model,
