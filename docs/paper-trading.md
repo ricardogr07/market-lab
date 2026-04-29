@@ -168,6 +168,14 @@ Every notification attempt is also persisted under:
 
 These audit records include the stage, outcome, message body, delivery result, and any delivery error. They do not replace the proposal, approval, or submission state files.
 
+## Structured Observability
+
+The paper entrypoints now emit structured JSON logs to `stderr`. This keeps the existing CLI and loop `stdout` contracts unchanged for path outputs, JSON summaries, and MCP protocol traffic.
+
+The persisted paper artifacts remain the canonical audit and debugging surface. Proposal, approval, submission, notification, and status files are still the source of truth for paper state.
+
+For the long-running local stack, `docker logs` remains the operational tail path for scheduler, agent, and MCP execution traces because those structured records are written to container `stderr`.
+
 ## Docker Compose Loop
 
 The checked-in local stack is:

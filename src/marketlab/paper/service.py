@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.log import (
+    ExecutionContext,
+    bind_execution_context,
+    duration_ms_since,
+    emit_structured_log,
+)
 from marketlab.paper.alpaca import AlpacaMarketDataProvider, AlpacaPaperBrokerClient
 from marketlab.paper.application import (
     ApprovalService,
@@ -46,6 +54,7 @@ from marketlab.paper.core import (
     validate_paper_trading_config,
 )
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
+from marketlab.paper.observability import paper_execution_context
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_uow_factory,
@@ -59,6 +68,7 @@ _clock_value = _core_clock_value
 _local_now = _core_local_now
 _now_utc = _core_now_utc
 _paper_symbol = _core_paper_symbol
+LOGGER = logging.getLogger(__name__)
 
 
 def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
@@ -109,25 +119,82 @@ def run_paper_decision(
     provider: PaperHistoryProvider | None = None,
     broker: PaperBroker | None = None,
     notification_sink: PaperNotificationSink | None = None,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any]:
-    result = DecisionService(
-        config,
-        uow_factory=_paper_uow_factory(config),
-        history_provider_factory=_paper_history_provider_factory(config),
-        broker_factory=_paper_broker_factory(config),
-    ).run(
-        PaperDecisionRequest(
-            now=now,
-            provider=provider,
-            broker=broker,
-        )
+    decision_context = paper_execution_context(
+        execution_context,
+        phase="paper-decision",
+        provider=config.paper.data_provider,
+        refresh_execution_id=True,
+        details={"component": "paper_service"},
     )
-    sink = notification_sink or _paper_notification_sink(config)
-    sink.notify_decision(
-        outcome=_decision_notification_outcome(result.status),
-        status=result.status,
-        proposal=result.proposal,
-        now=now,
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper decision service.",
+        event="paper.decision.start",
+        execution_context=decision_context,
+    )
+    start_time = perf_counter()
+    try:
+        with bind_execution_context(decision_context):
+            result = DecisionService(
+                config,
+                uow_factory=_paper_uow_factory(config),
+                history_provider_factory=_paper_history_provider_factory(config),
+                broker_factory=_paper_broker_factory(config),
+            ).run(
+                PaperDecisionRequest(
+                    now=now,
+                    provider=provider,
+                    broker=broker,
+                )
+            )
+            sink = notification_sink or _paper_notification_sink(config)
+            notification_path = sink.notify_decision(
+                outcome=_decision_notification_outcome(result.status),
+                status=result.status,
+                proposal=result.proposal,
+                now=now,
+            )
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper decision service failed.",
+            event="paper.decision.error",
+            execution_context=paper_execution_context(
+                decision_context,
+                phase="paper-decision",
+                provider=config.paper.data_provider,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "paper_service"},
+            ),
+            exc_info=exc,
+        )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper decision service.",
+        event="paper.decision.finish",
+        execution_context=paper_execution_context(
+            decision_context,
+            phase="paper-decision",
+            status=result.status,
+            proposal=result.proposal,
+            provider=config.paper.data_provider,
+            outcome=_decision_notification_outcome(result.status),
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "paper_service",
+                "status_path": result.status_path,
+                "proposal_path": result.proposal_path,
+                "evidence_path": result.evidence_path,
+                "notification_path": str(notification_path),
+            },
+        ),
     )
     return result.as_legacy_payload()
 
@@ -180,27 +247,89 @@ def decide_paper_proposal(
     fallback_reason: str | None = None,
     now: datetime | None = None,
     notification_sink: PaperNotificationSink | None = None,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any]:
-    result = ApprovalService(config, uow_factory=_paper_uow_factory(config)).run(
-        PaperApprovalRequest(
-            proposal_id=proposal_id,
-            decision=decision,
-            actor=actor,
-            rationale=rationale,
-            provider=provider,
-            model=model,
-            fallback_used=fallback_used,
-            fallback_reason=fallback_reason,
-            now=now,
-        )
+    approval_context = paper_execution_context(
+        execution_context,
+        phase="paper-approve",
+        proposal={"proposal_id": proposal_id},
+        provider=provider,
+        refresh_execution_id=True,
+        details={"component": "paper_service", "actor": actor, "decision": decision},
     )
-    if result.proposal is not None and result.approval is not None:
-        sink = notification_sink or _paper_notification_sink(config)
-        sink.notify_approval(
-            proposal=result.proposal,
-            approval_record=result.approval,
-            now=now,
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper approval service.",
+        event="paper.approval.start",
+        execution_context=approval_context,
+    )
+    start_time = perf_counter()
+    notification_path: str | None = None
+    try:
+        with bind_execution_context(approval_context):
+            result = ApprovalService(config, uow_factory=_paper_uow_factory(config)).run(
+                PaperApprovalRequest(
+                    proposal_id=proposal_id,
+                    decision=decision,
+                    actor=actor,
+                    rationale=rationale,
+                    provider=provider,
+                    model=model,
+                    fallback_used=fallback_used,
+                    fallback_reason=fallback_reason,
+                    now=now,
+                )
+            )
+            if result.proposal is not None and result.approval is not None:
+                sink = notification_sink or _paper_notification_sink(config)
+                notification_path = str(
+                    sink.notify_approval(
+                        proposal=result.proposal,
+                        approval_record=result.approval,
+                        now=now,
+                    )
+                )
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper approval service failed.",
+            event="paper.approval.error",
+            execution_context=paper_execution_context(
+                approval_context,
+                phase="paper-approve",
+                proposal={"proposal_id": proposal_id},
+                provider=provider,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "paper_service", "actor": actor, "decision": decision},
+            ),
+            exc_info=exc,
         )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper approval service.",
+        event="paper.approval.finish",
+        execution_context=paper_execution_context(
+            approval_context,
+            phase="paper-approve",
+            status=result.status,
+            proposal=result.proposal,
+            approval=result.approval,
+            provider=provider,
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "paper_service",
+                "status_path": result.status_path,
+                "proposal_path": result.proposal_path,
+                "approval_path": result.approval_path,
+                "notification_path": notification_path,
+            },
+        ),
+    )
     return result.as_legacy_payload()
 
 
@@ -209,19 +338,87 @@ def reconcile_latest_submission_status(
     *,
     now: datetime | None = None,
     broker: PaperBroker | None = None,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any] | None:
-    result = ReconciliationService(
-        config,
-        uow_factory=_paper_uow_factory(config),
-        broker_factory=_paper_broker_factory(config),
-    ).run(
-        PaperReconciliationRequest(
-            now=now,
-            broker=broker,
-        )
+    reconciliation_context = paper_execution_context(
+        execution_context,
+        phase="paper-submit-reconcile",
+        provider=config.paper.broker,
+        refresh_execution_id=True,
+        details={"component": "paper_service"},
     )
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper submission reconciliation service.",
+        event="paper.reconcile.start",
+        execution_context=reconciliation_context,
+    )
+    start_time = perf_counter()
+    try:
+        with bind_execution_context(reconciliation_context):
+            result = ReconciliationService(
+                config,
+                uow_factory=_paper_uow_factory(config),
+                broker_factory=_paper_broker_factory(config),
+            ).run(
+                PaperReconciliationRequest(
+                    now=now,
+                    broker=broker,
+                )
+            )
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper submission reconciliation service failed.",
+            event="paper.reconcile.error",
+            execution_context=paper_execution_context(
+                reconciliation_context,
+                phase="paper-submit-reconcile",
+                provider=config.paper.broker,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "paper_service"},
+            ),
+            exc_info=exc,
+        )
+        raise
     if result is None:
+        emit_structured_log(
+            LOGGER,
+            logging.INFO,
+            "Finished paper submission reconciliation service without updates.",
+            event="paper.reconcile.finish",
+            execution_context=paper_execution_context(
+                reconciliation_context,
+                phase="paper-submit-reconcile",
+                provider=config.paper.broker,
+                outcome="no_reconciliation_update",
+                duration_ms=duration_ms_since(start_time),
+                details={"component": "paper_service"},
+            ),
+        )
         return None
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper submission reconciliation service.",
+        event="paper.reconcile.finish",
+        execution_context=paper_execution_context(
+            reconciliation_context,
+            phase="paper-submit-reconcile",
+            submission=result.submission,
+            provider=config.paper.broker,
+            outcome=result.poll_status or result.order_status,
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "paper_service",
+                "submission_path": result.submission_path,
+                "order_status_path": result.order_status_path,
+            },
+        ),
+    )
     return result.as_legacy_payload()
 
 
@@ -232,26 +429,85 @@ def run_paper_submit(
     broker: PaperBroker | None = None,
     notification_sink: PaperNotificationSink | None = None,
     retry_failed_submission: bool = False,
+    execution_context: ExecutionContext | None = None,
 ) -> dict[str, Any]:
-    result = SubmissionService(
-        config,
-        uow_factory=_paper_uow_factory(config),
-        artifact_store=_paper_artifact_store(config),
-        broker_factory=_paper_broker_factory(config),
-    ).run(
-        PaperSubmissionRequest(
-            now=now,
-            broker=broker,
-            retry_failed_submission=retry_failed_submission,
-        )
+    submission_context = paper_execution_context(
+        execution_context,
+        phase="paper-submit",
+        provider=config.paper.broker,
+        refresh_execution_id=True,
+        details={"component": "paper_service", "retry_failed_submission": retry_failed_submission},
     )
-    sink = notification_sink or _paper_notification_sink(config)
-    sink.notify_submission(
-        outcome=str(result.status.get("status", "")),
-        status=result.status,
-        proposal=result.proposal,
-        submission=result.submission,
-        now=now,
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Starting paper submission service.",
+        event="paper.submit.start",
+        execution_context=submission_context,
+    )
+    start_time = perf_counter()
+    try:
+        with bind_execution_context(submission_context):
+            result = SubmissionService(
+                config,
+                uow_factory=_paper_uow_factory(config),
+                artifact_store=_paper_artifact_store(config),
+                broker_factory=_paper_broker_factory(config),
+            ).run(
+                PaperSubmissionRequest(
+                    now=now,
+                    broker=broker,
+                    retry_failed_submission=retry_failed_submission,
+                )
+            )
+            sink = notification_sink or _paper_notification_sink(config)
+            notification_path = sink.notify_submission(
+                outcome=str(result.status.get("status", "")),
+                status=result.status,
+                proposal=result.proposal,
+                submission=result.submission,
+                now=now,
+            )
+    except Exception as exc:
+        emit_structured_log(
+            LOGGER,
+            logging.ERROR,
+            "Paper submission service failed.",
+            event="paper.submit.error",
+            execution_context=paper_execution_context(
+                submission_context,
+                phase="paper-submit",
+                provider=config.paper.broker,
+                outcome="error",
+                duration_ms=duration_ms_since(start_time),
+                details={
+                    "component": "paper_service",
+                    "retry_failed_submission": retry_failed_submission,
+                },
+            ),
+            exc_info=exc,
+        )
+        raise
+    emit_structured_log(
+        LOGGER,
+        logging.INFO,
+        "Finished paper submission service.",
+        event="paper.submit.finish",
+        execution_context=paper_execution_context(
+            submission_context,
+            phase="paper-submit",
+            status=result.status,
+            proposal=result.proposal,
+            submission=result.submission,
+            provider=config.paper.broker,
+            duration_ms=duration_ms_since(start_time),
+            details={
+                "component": "paper_service",
+                "status_path": result.status_path,
+                "submission_path": result.submission_path,
+                "notification_path": str(notification_path),
+            },
+        ),
     )
     legacy = result.as_legacy_payload()
     legacy.pop("proposal_id", None)

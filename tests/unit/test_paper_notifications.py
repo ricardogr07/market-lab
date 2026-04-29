@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tests._paper_fakes import build_phase7_paper_config
 
+from marketlab.log import configure_logging
 from marketlab.paper.notifications import (
     DELIVERY_DELIVERED,
     DELIVERY_FAILED,
@@ -14,6 +15,14 @@ from marketlab.paper.notifications import (
     deliver_telegram_notification,
 )
 from marketlab.paper.service import PaperStateStore
+
+
+def _stderr_records(stderr: str) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in stderr.splitlines()
+        if line.strip() != ""
+    ]
 
 
 def test_disabled_telegram_notification_records_skipped_disabled(
@@ -160,3 +169,40 @@ def test_failed_telegram_delivery_records_failure_without_raising(
     assert record["delivery_status"] == DELIVERY_FAILED
     assert "connection refused" in record["error"]
     assert persisted["delivery_status"] == DELIVERY_FAILED
+
+
+def test_successful_telegram_delivery_emits_structured_delivery_log(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    configure_logging()
+    config = build_phase7_paper_config(tmp_path, telegram_enabled=True)
+
+    def _transport(url: str, payload: dict[str, object], timeout_seconds: int) -> tuple[int, str]:
+        return 200, '{"ok": true, "result": {"message_id": 7}}'
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-id")
+
+    deliver_telegram_notification(
+        config,
+        stage="paper-submit",
+        outcome="submitted",
+        message="paper-submit\noutcome: submitted",
+        details={"order_id": "order-7"},
+        proposal_id="proposal-7",
+        trade_date="2026-04-13",
+        now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+        transport=_transport,
+    )
+
+    records = _stderr_records(capsys.readouterr().err)
+
+    assert len(records) == 1
+    assert records[0]["event"] == "paper.notification.delivery"
+    assert records[0]["phase"] == "paper-submit"
+    assert records[0]["provider"] == "telegram"
+    assert records[0]["proposal_id"] == "proposal-7"
+    assert records[0]["trade_date"] == "2026-04-13"
+    assert records[0]["outcome"] == DELIVERY_DELIVERED
