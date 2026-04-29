@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$DotEnvPath = Join-Path $RepoRoot ".env"
 
 function Get-GitPorcelainStatus {
     $status = & git status --porcelain=v1
@@ -14,6 +15,37 @@ function Get-GitPorcelainStatus {
     }
 
     return @($status | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Get-DotEnvValue {
+    param(
+        [string]$Path,
+        [string]$Name
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) {
+            continue
+        }
+
+        $parts = $trimmed -split "=", 2
+        if ($parts.Count -ne 2) {
+            continue
+        }
+
+        if ($parts[0].Trim() -ne $Name) {
+            continue
+        }
+
+        return $parts[1].Trim().Trim('"').Trim("'")
+    }
+
+    return $null
 }
 
 Push-Location $RepoRoot
@@ -37,9 +69,23 @@ try {
         }
     }
 
-    Write-Host "Running real Telegram smoke test..."
-    $env:MARKETLAB_RUN_REAL_TELEGRAM = "1"
-    .tox\py312\Scripts\python.exe -m pytest -q tests/integration/test_real_telegram_smoke.py --basetemp $PytestBaseTemp
+    $runRealTelegram = $env:MARKETLAB_RUN_REAL_TELEGRAM
+    if ([string]::IsNullOrWhiteSpace($runRealTelegram)) {
+        $runRealTelegram = Get-DotEnvValue -Path $DotEnvPath -Name "MARKETLAB_RUN_REAL_TELEGRAM"
+    }
+    if ([string]::IsNullOrWhiteSpace($runRealTelegram)) {
+        $runRealTelegram = "0"
+    }
+
+    if ($runRealTelegram -eq "1") {
+        Write-Host "Running real Telegram smoke test..."
+        $env:MARKETLAB_RUN_REAL_TELEGRAM = "1"
+        .tox\py312\Scripts\python.exe -m pytest -q tests/integration/test_real_telegram_smoke.py --basetemp $PytestBaseTemp
+    }
+    else {
+        Write-Host "Skipping real Telegram smoke test because MARKETLAB_RUN_REAL_TELEGRAM is not '1'."
+        Remove-Item Env:MARKETLAB_RUN_REAL_TELEGRAM -ErrorAction SilentlyContinue
+    }
 
     Write-Host "Restarting paper Docker services..."
     docker compose --env-file .env -f docker/compose.paper.yml up -d --build

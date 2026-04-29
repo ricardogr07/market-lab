@@ -149,7 +149,7 @@ Do not parallelize:
 | 2 | Extract phase-oriented paper services | typed contracts, current paper modules, artifact semantics | shared application service layer, thin adapters | 2 | Mostly no | all adapters call the same services and artifacts are unchanged |
 | 3 | Add DB-agnostic persistence ports | extracted services, current `PaperStateStore`, current paper artifacts | repositories, `UnitOfWork`, filesystem adapter, optional SQLite adapter, contract tests | 2 | Yes, after port contracts are fixed | default local behavior still works and adapter contract tests pass |
 | 4 | Isolate external IO behind ports | services, persistence ports, Alpaca/Telegram/provider/artifact modules | `BrokerClient`, `NotificationSink`, `ApprovalClient`, `ArtifactStore` | 2 | Yes, after outbound interfaces are fixed | application services stop importing concrete IO adapters |
-| 5 | Add structured observability | `log.py`, paper services, entry adapters | structured log envelope, execution context propagation | 1 | Usually no | structured logs exist and behavior remains unchanged |
+| 5 | Add structured observability | `log.py`, paper services, entry adapters | structured log envelope, execution context propagation | 2 | Usually no | structured logs exist and behavior remains unchanged |
 | 6 | Define extraction readiness and add boundary guardrails | completed seams from phases 1-5, architecture docs | readiness criteria, boundary tests, explicit keep-package-first rules | 2 | Yes, after criteria are fixed | boundary rules are automated and the repo is still a modular monolith |
 
 ## Detailed Phase Plans
@@ -440,16 +440,21 @@ Expected outputs:
 
 PR sequence:
 
-1. Branch: `refactor/structured-paper-logging`
-   PR title: `refactor: add structured execution logging for paper control plane`
-   Goal: add transport-agnostic structured execution logging
+1. Branch: `refactor/structured-paper-logging-foundation`
+   PR title: `refactor: add structured execution logging foundation for paper workflows`
+   Goal: add the shared structured log envelope and root execution-context wiring
+
+2. Branch: `refactor/structured-paper-logging-rollout`
+   PR title: `refactor: instrument paper control plane with structured execution context`
+   Goal: propagate shared execution context through paper services and loop adapters
 
 Worker packet plan:
 
-- recommended single-owner change because logging touches shared execution paths
+- recommended single-owner implementation per PR because logging touches shared execution paths
 - `/qa`:
   - verify logs do not replace artifact-based debugging
   - verify current debugging surfaces remain usable
+  - verify scheduler and agent stdout summaries do not drift
 - `/critic`:
   - block logging changes that become hidden control flow
   - block cloud-vendor assumptions in the log shape
@@ -571,7 +576,8 @@ Exit criteria:
 
 ### Phase 5
 
-- [ ] PR: `refactor: add structured execution logging for paper control plane`
+- [ ] PR: `refactor: add structured execution logging foundation for paper workflows`
+- [ ] PR: `refactor: instrument paper control plane with structured execution context`
 - [ ] Confirm current local debugging still works
 
 ### Phase 6
