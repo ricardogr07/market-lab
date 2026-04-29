@@ -9,6 +9,8 @@ It is intentionally critical. The goal is not to defend the current implementati
 This audit complements:
 
 - [Architecture](architecture.md) for the current system map
+- [Service-Extraction Readiness Rules](service-extraction-readiness.md) for the
+  decision checklist used before adding service, port, or adapter boundaries
 - [Phase 7 Paper Trading](paper-trading.md) for the local paper runtime
 - `CLOUD_MIGRATION_PLAN.md` at the repo root for the later hosted deployment path
 
@@ -333,6 +335,8 @@ Artifact snapshots remain separate from transactional state:
 - extraction criteria are explicit
 - the paper control plane can be split later without reopening core contracts
 - research/runtime modules still remain package-first unless a later decision changes that
+- the canonical checklist in [Service-Extraction Readiness Rules](service-extraction-readiness.md)
+  is linked from the docs site and protected by a unit test
 
 ## Module Review Sequence
 
