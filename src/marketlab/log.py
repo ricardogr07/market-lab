@@ -72,9 +72,25 @@ class StructuredLogFormatter(logging.Formatter):
             "provider": getattr(record, "provider", None),
             "outcome": getattr(record, "outcome", None),
             "duration_ms": getattr(record, "duration_ms", None),
-            "details": _json_mapping(getattr(record, "details", None)),
+            "details": self._details(record),
         }
         return json.dumps(payload, default=_json_default)
+
+    def _details(self, record: logging.LogRecord) -> dict[str, Any] | None:
+        details = _json_mapping(getattr(record, "details", None))
+        if (
+            record.exc_info
+            and record.exc_info[0] is not None
+            and record.exc_info[1] is not None
+        ):
+            if details is None:
+                details = {}
+            details["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            if details is None:
+                details = {}
+            details["stack"] = self.formatStack(record.stack_info)
+        return details
 
 
 class DynamicStderrStreamHandler(logging.Handler):

@@ -79,3 +79,29 @@ def test_bound_execution_context_is_used_when_no_explicit_context_is_passed(
     assert records[0]["correlation_id"] == context.correlation_id
     assert records[0]["proposal_id"] == "proposal-123"
     assert records[0]["phase"] == "paper-bound"
+
+
+def test_error_logs_preserve_exception_details_in_payload(
+    capsys,
+) -> None:
+    configure_logging()
+    logger = logging.getLogger("marketlab.tests.error")
+
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError as exc:
+        emit_structured_log(
+            logger,
+            logging.ERROR,
+            "error log",
+            event="test.error.event",
+            execution_context=create_execution_context(details={"alpha": 1}),
+            exc_info=exc,
+        )
+
+    records = _stderr_records(capsys.readouterr().err)
+
+    assert len(records) == 1
+    assert records[0]["event"] == "test.error.event"
+    assert records[0]["details"]["alpha"] == 1
+    assert "RuntimeError: boom" in str(records[0]["details"]["exception"])
