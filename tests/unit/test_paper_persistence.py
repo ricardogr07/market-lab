@@ -25,8 +25,9 @@ from marketlab.paper.contracts import (
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_uow_factory,
+    build_sqlite_paper_uow_factory,
 )
-from marketlab.paper.state import PaperStateStore
+from marketlab.paper.state import PaperStateStore, _json_load
 
 
 @dataclass
@@ -334,14 +335,20 @@ def _build_factory(
 ) -> PaperUnitOfWorkFactory:
     if adapter_kind == "filesystem":
         return build_filesystem_paper_uow_factory(config)
+    if adapter_kind == "sqlite":
+        return build_sqlite_paper_uow_factory(config)
     if adapter_kind == "memory":
         return InMemoryPaperUnitOfWorkFactory(tmp_path / "memory-root")
     raise ValueError(f"Unknown adapter kind: {adapter_kind}")
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "memory"])
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
 def test_paper_repository_contract_stages_until_commit(adapter_kind: str, tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path / adapter_kind, symbol="QQQ")
+    config = build_phase7_paper_config(
+        tmp_path / adapter_kind,
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
     factory = _build_factory(adapter_kind=adapter_kind, tmp_path=tmp_path, config=config)
     proposal = _proposal_payload(
         proposal_id="proposal-1",
@@ -372,9 +379,13 @@ def test_paper_repository_contract_stages_until_commit(adapter_kind: str, tmp_pa
         assert uow.status.read_status() is None
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "memory"])
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
 def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str, tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path / f"{adapter_kind}-persist", symbol="QQQ")
+    config = build_phase7_paper_config(
+        tmp_path / f"{adapter_kind}-persist",
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
     factory = _build_factory(adapter_kind=adapter_kind, tmp_path=tmp_path, config=config)
     older = _proposal_payload(
         proposal_id="proposal-older",
@@ -391,6 +402,19 @@ def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str
         "trade_date": "2026-04-14",
         "status": "submitted",
         "order_status": "accepted",
+    }
+    approval = {
+        "proposal_id": newer["proposal_id"],
+        "trade_date": "2026-04-14",
+        "decision": "approve",
+        "approval_status": "approved",
+        "actor": "agent",
+        "timestamp": "2026-04-11T20:15:00+00:00",
+        "provider": None,
+        "model": None,
+        "fallback_used": False,
+        "fallback_reason": None,
+        "rationale": None,
     }
     order_status = {
         "id": "order-1",
@@ -410,11 +434,13 @@ def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str
     with factory() as uow:
         uow.trades.save_proposal(newer)
         uow.trades.save_evidence(_evidence_payload(proposal_id=newer["proposal_id"], trade_date="2026-04-14"))
+        uow.trades.save_approval(trade_date="2026-04-14", approval=approval)
         uow.trades.save_submission(trade_date="2026-04-14", submission=submission)
         uow.trades.save_order_status(trade_date="2026-04-14", order_status=order_status)
         uow.status.write_status(status)
         uow.commit()
 
+    store = PaperStateStore(config)
     with factory() as uow:
         proposals = uow.trades.list_proposals()
         assert [proposal["proposal_id"] for proposal in proposals] == [
@@ -424,11 +450,29 @@ def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str
         assert uow.trades.get_latest_proposal()["proposal_id"] == newer["proposal_id"]
         assert uow.trades.get_submission("2026-04-14") == submission
         assert uow.status.read_status() == status
+    assert _json_load(store.trade_proposal_path("2026-04-14")) == newer
+    assert _json_load(store.inbox_proposal_path(newer["proposal_id"])) == newer
+    assert _json_load(store.trade_evidence_path("2026-04-14")) == _evidence_payload(
+        proposal_id=newer["proposal_id"],
+        trade_date="2026-04-14",
+    )
+    assert _json_load(store.trade_approval_path("2026-04-14")) == approval
+    assert _json_load(store.trade_submission_path("2026-04-14")) == submission
+    assert _json_load(store.trade_order_status_path("2026-04-14")) == order_status
+    assert _json_load(store.status_path) == status
 
 
-def test_filesystem_trade_repository_retry_backup_preserves_attempt_artifacts(tmp_path: Path) -> None:
-    config = build_phase7_paper_config(tmp_path, symbol="QQQ")
-    factory = build_filesystem_paper_uow_factory(config)
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+def test_trade_repository_retry_backup_preserves_attempt_artifacts(
+    adapter_kind: str,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / f"{adapter_kind}-retry",
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
+    factory = _build_factory(adapter_kind=adapter_kind, tmp_path=tmp_path, config=config)
     artifact_store = build_filesystem_paper_artifact_store(config)
     trade_date = "2026-04-13"
     store = PaperStateStore(config)
@@ -457,6 +501,7 @@ def test_filesystem_trade_repository_retry_backup_preserves_attempt_artifacts(tm
             trade_date=trade_date,
             now=datetime(2026, 4, 10, 23, 10, tzinfo=UTC),
         )
+        assert uow.trades.get_submission(trade_date) is None
 
     trade_dir = store.trade_dir(trade_date)
     backup_files = sorted(path.name for path in trade_dir.glob("*.retry-backup.*.bak"))

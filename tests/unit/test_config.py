@@ -573,6 +573,8 @@ def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
         "enabled": True,
         "data_provider": "alpaca",
         "broker": "alpaca",
+        "persistence_backend": "sqlite",
+        "sqlite_db_path": "artifacts/paper/state/paper-control.db",
         "execution_mode": "agent_approval",
         "agent_backend": "openai",
         "agent_model": "gpt-4o-mini",
@@ -603,9 +605,13 @@ def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
     assert config.paper.agent_model == "gpt-4o-mini"
     assert config.paper.agent_timeout_seconds == 45
     assert config.paper.consensus_min_long_votes == 4
+    assert config.paper.persistence_backend == "sqlite"
     assert config.paper.notifications.telegram.enabled is True
     assert config.paper_approval_inbox_dir == (tmp_path / "artifacts" / "paper" / "inbox").resolve()
     assert config.paper_state_dir == (tmp_path / "artifacts" / "paper" / "state").resolve()
+    assert config.paper_sqlite_db_path == (
+        tmp_path / "artifacts" / "paper" / "state" / "paper-control.db"
+    ).resolve()
 
 
 def test_load_config_defaults_paper_telegram_notifications_to_disabled(tmp_path: Path) -> None:
@@ -655,6 +661,39 @@ def test_load_config_rejects_unknown_paper_agent_backend(tmp_path: Path) -> None
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError, match="paper.agent_backend must be one of"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_unknown_paper_persistence_backend(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "persistence_backend": "unknown",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="paper.persistence_backend must be one of"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_sqlite_backend_without_db_path(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "persistence_backend": "sqlite",
+        "sqlite_db_path": "",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="paper.sqlite_db_path must be set"):
         load_config(config_path)
 
 
