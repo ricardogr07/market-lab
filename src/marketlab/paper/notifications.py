@@ -245,13 +245,13 @@ def _parse_optional_bool_env(name: str) -> bool | None:
     if raw_value is None:
         return None
     value = raw_value.strip().lower()
+    if value == "":
+        return None
     if value in {"1", "true", "yes", "on"}:
         return True
-    if value in {"0", "false", "no", "off", ""}:
+    if value in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(
-        f"{name} must be one of true/false, 1/0, yes/no, or on/off; got {raw_value!r}."
-    )
+    return False
 
 
 def _telegram_notifications_enabled(config: ExperimentConfig) -> bool:
