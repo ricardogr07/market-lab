@@ -27,6 +27,9 @@ from marketlab.paper.persistence import (
     build_filesystem_paper_uow_factory,
     build_sqlite_paper_uow_factory,
 )
+from marketlab.paper.persistence import (
+    sqlite as sqlite_module,
+)
 from marketlab.paper.state import PaperStateStore, _json_load
 
 
@@ -510,6 +513,44 @@ def test_trade_repository_retry_backup_preserves_attempt_artifacts(
     assert not store.trade_order_status_path(trade_date).exists()
     assert not store.trade_order_preview_path(trade_date).exists()
     assert not store.trade_account_snapshot_path(trade_date).exists()
+
+
+def test_sqlite_commit_rolls_back_when_artifact_mirror_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / "sqlite-failure",
+        symbol="QQQ",
+        persistence_backend="sqlite",
+    )
+    factory = build_sqlite_paper_uow_factory(config)
+    proposal = _proposal_payload(
+        proposal_id="proposal-rollback",
+        trade_date="2026-04-13",
+        created_at="2026-04-10T20:10:00+00:00",
+    )
+
+    original_json_dump = sqlite_module._json_dump
+
+    def _failing_json_dump(path: Path, payload: dict[str, Any]) -> Path:
+        if path.name == "proposal.json":
+            raise PermissionError("simulated artifact write failure")
+        return original_json_dump(path, payload)
+
+    monkeypatch.setattr(sqlite_module, "_json_dump", _failing_json_dump)
+
+    with pytest.raises(PermissionError, match="simulated artifact write failure"):
+        with factory() as uow:
+            uow.trades.save_proposal(proposal)
+            uow.commit()
+
+    with factory() as uow:
+        assert uow.trades.get_proposal(proposal["proposal_id"]) is None
+
+    store = PaperStateStore(config)
+    assert not store.trade_proposal_path("2026-04-13").exists()
+    assert not store.inbox_proposal_path(proposal["proposal_id"]).exists()
 
 
 def test_read_helpers_use_repository_boundary(monkeypatch, tmp_path: Path) -> None:

@@ -76,6 +76,23 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _snapshot_artifacts(paths: list[Path]) -> dict[Path, bytes | None]:
+    snapshots: dict[Path, bytes | None] = {}
+    for path in paths:
+        snapshots[path] = path.read_bytes() if path.exists() else None
+    return snapshots
+
+
+def _restore_artifacts(snapshots: dict[Path, bytes | None]) -> None:
+    for path, payload in snapshots.items():
+        if payload is None:
+            if path.exists():
+                path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+
 class SQLitePaperTradeRepository(PaperTradeRepository):
     def __init__(
         self,
@@ -236,6 +253,7 @@ class SQLitePaperTradeRepository(PaperTradeRepository):
         now: datetime | None = None,
     ) -> None:
         timestamp = _now_utc(now).strftime("%Y%m%dT%H%M%S%fZ")
+        renamed_paths: list[tuple[Path, Path]] = []
         for path in (
             self._store.trade_submission_path(trade_date),
             self._store.trade_order_status_path(trade_date),
@@ -246,16 +264,25 @@ class SQLitePaperTradeRepository(PaperTradeRepository):
                 continue
             backup_path = path.with_name(f"{path.stem}.retry-backup.{timestamp}.bak")
             path.rename(backup_path)
-        self._connection.execute(
-            "DELETE FROM paper_submissions WHERE trade_date = ?",
-            (trade_date,),
-        )
-        self._connection.execute(
-            "DELETE FROM paper_order_statuses WHERE trade_date = ?",
-            (trade_date,),
-        )
-        if self._connection.in_transaction:
-            self._connection.commit()
+            renamed_paths.append((path, backup_path))
+        try:
+            self._connection.execute(
+                "DELETE FROM paper_submissions WHERE trade_date = ?",
+                (trade_date,),
+            )
+            self._connection.execute(
+                "DELETE FROM paper_order_statuses WHERE trade_date = ?",
+                (trade_date,),
+            )
+            if self._connection.in_transaction:
+                self._connection.commit()
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            for path, backup_path in reversed(renamed_paths):
+                if backup_path.exists():
+                    backup_path.rename(path)
+            raise
 
 
 class SQLitePaperStatusRepository(PaperStatusRepository):
@@ -323,12 +350,18 @@ class SQLitePaperUnitOfWork(PaperUnitOfWork):
         return self._status
 
     def commit(self) -> None:
-        if self._connection.in_transaction:
-            self._connection.commit()
-        self._committed = True
+        snapshots = _snapshot_artifacts(list(self._artifact_writes))
         try:
             for path, payload in self._artifact_writes.items():
                 _json_dump(path, payload)
+            if self._connection.in_transaction:
+                self._connection.commit()
+            self._committed = True
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            _restore_artifacts(snapshots)
+            raise
         finally:
             self._artifact_writes.clear()
 
