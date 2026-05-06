@@ -255,6 +255,14 @@ def _repriced_performance(working: pd.DataFrame, bps_per_trade: float) -> pd.Dat
 
 
 def _compute_repriced_strategy_metrics(repriced: pd.DataFrame) -> pd.DataFrame:
+    return _compute_repriced_strategy_metrics_for_periods(repriced, periods_per_year=252.0)
+
+
+def _compute_repriced_strategy_metrics_for_periods(
+    repriced: pd.DataFrame,
+    *,
+    periods_per_year: float,
+) -> pd.DataFrame:
     rows: list[dict[str, float | str]] = []
     for strategy, frame in repriced.groupby("strategy", sort=False):
         ordered = frame.sort_values("date").reset_index(drop=True)
@@ -265,9 +273,9 @@ def _compute_repriced_strategy_metrics(repriced: pd.DataFrame) -> pd.DataFrame:
 
         annualized_return = float("nan")
         if periods and final_equity > 0.0:
-            annualized_return = float((final_equity ** (252.0 / periods)) - 1.0)
+            annualized_return = float((final_equity ** (periods_per_year / periods)) - 1.0)
 
-        annualized_volatility = float(returns.std(ddof=0) * math.sqrt(252.0))
+        annualized_volatility = float(returns.std(ddof=0) * math.sqrt(periods_per_year))
         if annualized_volatility > 0.0 and math.isfinite(annualized_return):
             sharpe_like = annualized_return / annualized_volatility
         elif math.isfinite(annualized_return):
@@ -298,6 +306,8 @@ def build_cost_sensitivity(
     performance: pd.DataFrame,
     base_cost_bps: float,
     sensitivity_bps: list[float] | None = None,
+    *,
+    periods_per_year: float = 252.0,
 ) -> pd.DataFrame:
     working = _normalized_performance(performance)
     if working.empty:
@@ -321,7 +331,10 @@ def build_cost_sensitivity(
     scenario_frames: list[pd.DataFrame] = []
     for bps_per_trade in _cost_sensitivity_grid(base_cost_bps, sensitivity_bps):
         repriced = _repriced_performance(working, bps_per_trade)
-        metrics = _compute_repriced_strategy_metrics(repriced)
+        metrics = _compute_repriced_strategy_metrics_for_periods(
+            repriced,
+            periods_per_year=periods_per_year,
+        )
         final_equity = (
             repriced.groupby("strategy", as_index=False)
             .agg(final_equity=("equity", "last"))
@@ -530,12 +543,13 @@ def build_strategy_summary(
     group_exposure: pd.DataFrame | None = None,
     benchmark_relative: pd.DataFrame | None = None,
     benchmark_strategy: str = "",
+    periods_per_year: float = 252.0,
 ) -> pd.DataFrame:
     working = _normalized_performance(performance)
     if working.empty:
         return pd.DataFrame(columns=STRATEGY_SUMMARY_COLUMNS)
 
-    metrics = compute_strategy_metrics(working)
+    metrics = compute_strategy_metrics(working, periods_per_year=periods_per_year)
     cost_frame = build_turnover_costs(working)
 
     date_summary = (
@@ -653,17 +667,21 @@ def build_strategy_summary(
             frame = frame.sort_values("date").reset_index(drop=True)
             trading_days = len(frame)
             relative_equity = float(frame["relative_equity"].iloc[-1]) if trading_days else float("nan")
-            tracking_error = float(frame["excess_return"].std(ddof=0) * math.sqrt(252.0))
+            tracking_error = float(
+                frame["excess_return"].std(ddof=0) * math.sqrt(periods_per_year)
+            )
             information_ratio = float("nan")
             if tracking_error > WEIGHT_EPSILON:
-                information_ratio = float(frame["excess_return"].mean() * 252.0 / tracking_error)
+                information_ratio = float(
+                    frame["excess_return"].mean() * periods_per_year / tracking_error
+                )
 
             return pd.Series(
                 {
                     "benchmark_strategy": str(frame["benchmark_strategy"].iat[0]),
                     "excess_cumulative_return": relative_equity - 1.0,
                     "annualized_excess_return": (
-                        float((relative_equity ** (252.0 / trading_days)) - 1.0)
+                        float((relative_equity ** (periods_per_year / trading_days)) - 1.0)
                         if trading_days and relative_equity > 0.0
                         else float("nan")
                     ),
