@@ -1,0 +1,71 @@
+experiment_name: crypto_15m_patterns_day
+
+data:
+  symbols: [BTC-USD]
+  start_date: "2026-04-20"
+  end_date: "2026-04-27"
+  interval: "15m"
+  cache_dir: "artifacts/data-crypto-15m-fullweek"
+  prepared_panel_filename: "btc_usd_15m_2026-04-20_2026-04-27.csv"
+
+features:
+  return_windows: [4, 8, 16, 32]
+  ma_windows: [8, 16, 48]
+  vol_windows: [8, 16]
+  momentum_window: 16
+
+target:
+  horizon_days: 1
+  type: "direction"
+
+portfolio:
+  ranking:
+    long_n: 1
+    short_n: 1
+    rebalance_frequency: "bar"
+    weighting: "equal"
+    mode: "long_only"
+    min_score_threshold: 0.0
+    cash_when_underfilled: true
+  costs:
+    bps_per_trade: 10
+
+baselines:
+  buy_hold: true
+  sma:
+    enabled: false
+  indicator_stack:
+    enabled: false
+  chart_patterns:
+    enabled: true
+    lookback_bars: 96
+    triangle_slope_min: 0.0
+    level_tolerance_pct: 0.01
+    breakout_pct: 0.001
+    rectangle_max_range_pct: 0.05
+    flag_pole_bars: 16
+    flag_consolidation_bars: 12
+    flag_min_pole_return: 0.015
+    flag_max_retrace_pct: 0.012
+    volume_window: 20
+    volume_multiplier: 1.0
+    min_bullish_patterns: 1
+
+models: []
+
+evaluation:
+  benchmark_strategy: "buy_hold"
+  cost_sensitivity_bps: [7.5, 10.0, 20.0, 40.0, 75.0]
+  focus_start: "2026-04-22 00:00:00"
+  focus_end: "2026-04-22 23:59:59"
+  visualize_signals: true
+
+paper:
+  enabled: false
+
+artifacts:
+  output_dir: "artifacts/runs"
+  save_predictions: false
+  save_metrics_csv: true
+  save_report_md: true
+  save_plots: true
