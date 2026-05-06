@@ -37,12 +37,20 @@ def normalize_ohlcv_frame(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
 
     rename_map = {
         "Date": "timestamp",
+        "Datetime": "timestamp",
+        "datetime": "timestamp",
         "Adj Close": "adj_close",
+        "adj_close": "adj_close",
         "Open": "open",
+        "open": "open",
         "High": "high",
+        "high": "high",
         "Low": "low",
+        "low": "low",
         "Close": "close",
+        "close": "close",
         "Volume": "volume",
+        "volume": "volume",
     }
     working = working.rename(columns=rename_map)
 
@@ -52,7 +60,8 @@ def normalize_ohlcv_frame(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
         joined = ", ".join(sorted(missing))
         raise ValueError(f"OHLCV frame for {symbol} is missing required columns: {joined}")
 
-    working["timestamp"] = pd.to_datetime(working["timestamp"], errors="coerce")
+    timestamps = pd.to_datetime(working["timestamp"], errors="coerce", utc=True)
+    working["timestamp"] = timestamps.dt.tz_convert(None)
     for column in ("open", "high", "low", "close", "volume", "adj_close"):
         if column in working.columns:
             working[column] = pd.to_numeric(working[column], errors="coerce")

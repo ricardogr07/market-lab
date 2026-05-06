@@ -5,7 +5,11 @@ import math
 import pandas as pd
 
 
-def compute_strategy_metrics(performance: pd.DataFrame) -> pd.DataFrame:
+def compute_strategy_metrics(
+    performance: pd.DataFrame,
+    *,
+    periods_per_year: float = 252.0,
+) -> pd.DataFrame:
     rows: list[dict[str, float | str]] = []
     for strategy, frame in performance.groupby("strategy", sort=False):
         ordered = frame.sort_values("date").reset_index(drop=True)
@@ -15,9 +19,11 @@ def compute_strategy_metrics(performance: pd.DataFrame) -> pd.DataFrame:
 
         cumulative_return = float(equity.iloc[-1] - 1.0) if periods else 0.0
         annualized_return = (
-            float((equity.iloc[-1] ** (252.0 / periods)) - 1.0) if periods else 0.0
+            float((equity.iloc[-1] ** (periods_per_year / periods)) - 1.0)
+            if periods
+            else 0.0
         )
-        annualized_volatility = float(returns.std(ddof=0) * math.sqrt(252.0))
+        annualized_volatility = float(returns.std(ddof=0) * math.sqrt(periods_per_year))
         sharpe_like = (
             annualized_return / annualized_volatility if annualized_volatility else 0.0
         )
