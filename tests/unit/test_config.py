@@ -5,13 +5,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from marketlab.config import load_config
+from marketlab.config import default_periods_per_year, load_config
 
 
 def _write_config(
     path: Path,
     *,
     data: dict[str, object] | None = None,
+    features: dict[str, object] | None = None,
     portfolio: dict[str, object] | None = None,
     baselines: dict[str, object] | None = None,
     evaluation: dict[str, object] | None = None,
@@ -28,6 +29,8 @@ def _write_config(
     }
     if data is not None:
         payload["data"].update(data)
+    if features is not None:
+        payload["features"] = features
     if portfolio is not None:
         payload["portfolio"] = portfolio
     if baselines is not None:
@@ -72,6 +75,333 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.evaluation.cost_sensitivity_bps == []
     assert config.evaluation.factor_model_path == ""
     assert config.factor_model_path is None
+    assert config.evaluation.periods_per_year == pytest.approx(252.0)
+    assert config.evaluation.focus_start == ""
+    assert config.evaluation.focus_end == ""
+    assert config.evaluation.visualize_signals is False
+    assert config.evaluation.ml_strategy_threshold_sweep.enabled is False
+    assert config.evaluation.ml_strategy_threshold_sweep.thresholds == [
+        0.50,
+        0.52,
+        0.55,
+        0.58,
+        0.60,
+    ]
+    assert config.evaluation.ml_strategy_tuning.enabled is False
+    assert config.evaluation.ml_strategy_tuning.thresholds == [
+        0.50,
+        0.52,
+        0.55,
+        0.58,
+        0.60,
+        0.62,
+        0.65,
+    ]
+    assert config.baselines.pattern_exit_overlay.enabled is False
+    assert config.baselines.pattern_meta_label.enabled is False
+
+
+def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        features={
+            "return_windows": [12, 24],
+            "ma_windows": [24],
+            "vol_windows": [24],
+            "momentum_window": 24,
+            "indicator_stack_ml_features_enabled": True,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 12, 24],
+            "crypto_vol_windows": [12, 24],
+            "crypto_ma_windows": [24],
+            "crypto_rsi_window": 14,
+            "crypto_macd_fast_window": 12,
+            "crypto_macd_slow_window": 26,
+            "crypto_macd_signal_window": 9,
+            "crypto_bollinger_window": 20,
+            "crypto_bollinger_std": 2.0,
+            "crypto_volume_window": 24,
+            "crypto_time_features": True,
+        },
+        evaluation={
+            "ml_strategy_threshold_sweep": {
+                "enabled": True,
+                "thresholds": [0.5, 0.55],
+                "min_exposure_changes": 5,
+                "max_average_exposure_for_active": 0.995,
+            },
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "thresholds": [0.5, 0.55, 0.6],
+                "validation_months": 2,
+                "min_validation_rows": 50,
+                "min_exposure_changes": 3,
+                "max_average_exposure_for_active": 0.99,
+                "objective": "net_return_and_risk_vs_buy_hold",
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.features.indicator_stack_ml_features_enabled is True
+    assert config.features.crypto_time_series_enabled is True
+    assert config.features.crypto_return_windows == [1, 12, 24]
+    assert config.features.crypto_ma_windows == [24]
+    assert config.evaluation.ml_strategy_threshold_sweep.enabled is True
+    assert config.evaluation.ml_strategy_threshold_sweep.thresholds == [0.5, 0.55]
+    assert config.evaluation.ml_strategy_threshold_sweep.min_exposure_changes == 5
+    assert config.evaluation.ml_strategy_threshold_sweep.max_average_exposure_for_active == pytest.approx(
+        0.995
+    )
+    assert config.evaluation.ml_strategy_tuning.enabled is True
+    assert config.evaluation.ml_strategy_tuning.thresholds == [0.5, 0.55, 0.6]
+    assert config.evaluation.ml_strategy_tuning.validation_months == 2
+    assert config.evaluation.ml_strategy_tuning.min_validation_rows == 50
+    assert config.evaluation.ml_strategy_tuning.min_exposure_changes == 3
+    assert config.evaluation.ml_strategy_tuning.max_average_exposure_for_active == pytest.approx(
+        0.99
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"thresholds": [0.5, 1.2]}, "ml_strategy_tuning.thresholds"),
+        ({"validation_months": 0}, "validation_months"),
+        ({"min_validation_rows": 0}, "min_validation_rows"),
+        ({"min_exposure_changes": -1}, "min_exposure_changes"),
+        ({"max_average_exposure_for_active": 1.5}, "max_average_exposure_for_active"),
+        ({"objective": "auc"}, "ml_strategy_tuning.objective"),
+    ],
+)
+def test_load_config_rejects_invalid_ml_strategy_tuning_values(
+    tmp_path: Path,
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={"ml_strategy_tuning": {"enabled": True, **payload}},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+        ("interval", "expected_periods"),
+    [
+        ("1d", 252.0),
+        ("12h", 730.0),
+        ("8h", 1095.0),
+        ("6h", 1460.0),
+        ("4h", 2190.0),
+        ("2h", 4380.0),
+        ("1h", 8760.0),
+        ("45m", 11680.0),
+        ("30m", 17520.0),
+        ("15m", 35040.0),
+        ("5m", 105120.0),
+        ("1m", 525600.0),
+    ],
+)
+def test_default_periods_per_year_supports_intraday_intervals(
+    interval: str,
+    expected_periods: float,
+) -> None:
+    assert default_periods_per_year(interval) == pytest.approx(expected_periods)
+
+
+def test_load_config_infers_periods_per_year_from_interval(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path / "config.yaml", data={"interval": "15m"})
+
+    config = load_config(config_path)
+
+    assert config.evaluation.periods_per_year == pytest.approx(35040.0)
+
+
+def test_load_config_accepts_focus_window_and_visual_signal_flag(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"interval": "15m"},
+        evaluation={
+            "focus_start": "2024-01-01 00:00:00",
+            "focus_end": "2024-01-07 23:59:59",
+            "visualize_signals": True,
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.evaluation.focus_start == "2024-01-01 00:00:00"
+    assert config.evaluation.focus_end == "2024-01-07 23:59:59"
+    assert config.evaluation.visualize_signals is True
+
+
+def test_load_config_rejects_unknown_interval(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path / "config.yaml", data={"interval": "2m"})
+
+    with pytest.raises(ValueError, match="data.interval must be one of"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_inverted_focus_window(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "focus_start": "2024-01-08 00:00:00",
+            "focus_end": "2024-01-07 23:59:59",
+        },
+    )
+
+    with pytest.raises(ValueError, match="evaluation.focus_start must be before"):
+        load_config(config_path)
+
+
+def test_load_config_accepts_pattern_exit_overlay_and_meta_label(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_exit_overlay": {
+                "enabled": True,
+                "min_bearish_patterns": 2,
+                "min_bullish_reentry_patterns": 1,
+                "trend_ema_window": 20,
+                "reentry_clear_bars": 2,
+                "require_price_below_trend_for_exit": True,
+                "bearish_confirmation_window_bars": 3,
+                "min_cash_bars": 2,
+                "exit_cooldown_bars": 4,
+                "reentry_requires_price_above_trend": True,
+            },
+            "pattern_meta_label": {
+                "enabled": True,
+                "label_horizon_bars": 6,
+                "exit_probability_threshold": 0.6,
+                "exit_probability_threshold_grid": [0.5, 0.6, 0.7],
+                "tuning_mode": "nested_walk_forward",
+                "min_oos_exit_count": 2,
+                "max_average_exposure_for_active": 0.995,
+                "models": ["logistic_l1"],
+            },
+            "pattern_partial_exposure_overlay": {
+                "enabled": True,
+                "partial_weight": 0.5,
+                "partial_exit_probability_threshold_grid": [0.55, 0.6],
+                "full_exit_probability_threshold_grid": [0.75, 0.8],
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.baselines.pattern_exit_overlay.enabled is True
+    assert config.baselines.pattern_exit_overlay.min_bearish_patterns == 2
+    assert config.baselines.pattern_exit_overlay.require_price_below_trend_for_exit is True
+    assert config.baselines.pattern_exit_overlay.bearish_confirmation_window_bars == 3
+    assert config.baselines.pattern_exit_overlay.min_cash_bars == 2
+    assert config.baselines.pattern_exit_overlay.exit_cooldown_bars == 4
+    assert config.baselines.pattern_exit_overlay.reentry_requires_price_above_trend is True
+    assert config.baselines.pattern_meta_label.enabled is True
+    assert config.baselines.pattern_meta_label.label_horizon_bars == 6
+    assert config.baselines.pattern_meta_label.exit_probability_threshold_grid == [0.5, 0.6, 0.7]
+    assert config.baselines.pattern_meta_label.tuning_mode == "nested_walk_forward"
+    assert config.baselines.pattern_meta_label.min_oos_exit_count == 2
+    assert config.baselines.pattern_meta_label.max_average_exposure_for_active == pytest.approx(
+        0.995
+    )
+    assert config.baselines.pattern_meta_label.models == ["logistic_l1"]
+    assert config.baselines.pattern_partial_exposure_overlay.enabled is True
+    assert config.baselines.pattern_partial_exposure_overlay.partial_weight == pytest.approx(0.5)
+    assert config.baselines.pattern_partial_exposure_overlay.partial_exit_probability_threshold_grid == [
+        0.55,
+        0.6,
+    ]
+
+
+def test_load_config_rejects_pattern_meta_label_without_exit_overlay(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_meta_label": {"enabled": True},
+        },
+    )
+
+    with pytest.raises(ValueError, match="pattern_exit_overlay.enabled must be true"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_unsupported_pattern_meta_model(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_exit_overlay": {"enabled": True},
+            "pattern_meta_label": {
+                "enabled": True,
+                "models": ["not_a_model"],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="unsupported models"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_pattern_exit_tuning_values(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_exit_overlay": {
+                "enabled": True,
+                "bearish_confirmation_window_bars": 0,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="bearish_confirmation_window_bars"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_pattern_meta_threshold_grid(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_exit_overlay": {"enabled": True},
+            "pattern_meta_label": {
+                "enabled": True,
+                "exit_probability_threshold_grid": [0.4, 1.2],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="exit_probability_threshold_grid"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_partial_exposure_overlay(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        baselines={
+            "chart_patterns": {"enabled": True},
+            "pattern_exit_overlay": {"enabled": True},
+            "pattern_meta_label": {"enabled": True},
+            "pattern_partial_exposure_overlay": {
+                "enabled": True,
+                "partial_weight": 1.0,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="partial_weight"):
+        load_config(config_path)
 
 
 def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
@@ -314,6 +644,81 @@ def test_load_config_accepts_cost_sensitivity_bps(tmp_path: Path) -> None:
     config = load_config(config_path)
 
     assert config.evaluation.cost_sensitivity_bps == [25.0, 5.0]
+
+
+def test_load_config_accepts_crypto_hourly_trend_settings(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["BTC-USD"], "interval": "1h"},
+        portfolio={
+            "ranking": {
+                "long_n": 1,
+                "short_n": 1,
+                "rebalance_frequency": "bar",
+                "mode": "long_only",
+                "cash_when_underfilled": True,
+            },
+            "costs": {"bps_per_trade": 20},
+        },
+        baselines={
+            "buy_hold": True,
+            "sma": {"enabled": False},
+            "indicator_stack": {
+                "enabled": True,
+                "ema_fast_window": 3,
+                "ema_slow_window": 8,
+                "min_confirmations": 3,
+                "use_vwap": True,
+            },
+        },
+        evaluation={"benchmark_strategy": "buy_hold", "periods_per_year": 8760},
+    )
+
+    config = load_config(config_path)
+
+    assert config.data.interval == "1h"
+    assert config.portfolio.ranking.rebalance_frequency == "bar"
+    assert config.baselines.indicator_stack.enabled is True
+    assert config.baselines.indicator_stack.ema_fast_window == 3
+    assert config.baselines.indicator_stack.ema_slow_window == 8
+    assert config.baselines.indicator_stack.use_vwap is True
+    assert config.evaluation.periods_per_year == pytest.approx(8760.0)
+
+
+def test_load_config_accepts_chart_pattern_settings(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["BTC-USD"], "interval": "15m"},
+        portfolio={
+            "ranking": {
+                "long_n": 1,
+                "short_n": 1,
+                "rebalance_frequency": "bar",
+                "mode": "long_only",
+                "cash_when_underfilled": True,
+            },
+        },
+        baselines={
+            "buy_hold": True,
+            "sma": {"enabled": False},
+            "chart_patterns": {
+                "enabled": True,
+                "lookback_bars": 16,
+                "level_tolerance_pct": 0.02,
+                "breakout_pct": 0.001,
+                "min_bullish_patterns": 1,
+            },
+        },
+        evaluation={"benchmark_strategy": "buy_hold", "visualize_signals": True},
+    )
+
+    config = load_config(config_path)
+
+    assert config.baselines.chart_patterns.enabled is True
+    assert config.baselines.chart_patterns.lookback_bars == 16
+    assert config.baselines.chart_patterns.level_tolerance_pct == pytest.approx(0.02)
+    assert config.baselines.chart_patterns.breakout_pct == pytest.approx(0.001)
+    assert config.evaluation.periods_per_year == pytest.approx(35040.0)
 
 
 @pytest.mark.parametrize("values", [[-1.0], [float("inf")], [float("nan")]])
