@@ -7,7 +7,10 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+
+from marketlab.strategies.chart_patterns import PATTERN_COLUMNS
 
 
 def _subplot_axes(model_names: list[str], *, height: float = 4.0) -> tuple[plt.Figure, list[plt.Axes]]:
@@ -18,6 +21,21 @@ def _subplot_axes(model_names: list[str], *, height: float = 4.0) -> tuple[plt.F
         squeeze=False,
     )
     return figure, list(axes.flatten())
+
+
+def _set_time_ticks(axis: plt.Axes, timestamps: pd.Series, *, max_ticks: int = 12) -> None:
+    if timestamps.empty:
+        return
+    step = max(1, len(timestamps) // max_ticks)
+    tick_positions = list(range(0, len(timestamps), step))
+    if tick_positions[-1] != len(timestamps) - 1:
+        tick_positions.append(len(timestamps) - 1)
+    axis.set_xticks(tick_positions)
+    axis.set_xticklabels(
+        [pd.Timestamp(timestamps.iloc[position]).strftime("%m-%d %H:%M") for position in tick_positions],
+        rotation=45,
+        ha="right",
+    )
 
 
 def plot_cumulative_returns(performance: pd.DataFrame, path: str | Path) -> Path:
@@ -73,6 +91,313 @@ def plot_turnover(performance: pd.DataFrame, path: str | Path) -> Path:
     axis.legend()
     axis.grid(alpha=0.3)
     figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def plot_signal_price_overlay(diagnostics: pd.DataFrame, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    symbols = diagnostics["symbol"].drop_duplicates().tolist()
+    figure, axes = plt.subplots(
+        len(symbols),
+        1,
+        figsize=(10, max(4.5 * len(symbols), 4.5)),
+        squeeze=False,
+    )
+
+    for axis, symbol in zip(axes.flatten(), symbols):
+        frame = diagnostics.loc[diagnostics["symbol"] == symbol].sort_values("timestamp")
+        axis.plot(frame["timestamp"], frame["close"], label="close", color="black", linewidth=1.5)
+        axis.plot(frame["timestamp"], frame["ema_fast"], label="EMA fast", color="tab:blue")
+        axis.plot(frame["timestamp"], frame["ema_slow"], label="EMA slow", color="tab:orange")
+        axis.plot(
+            frame["timestamp"],
+            frame["bollinger_upper"],
+            label="Bollinger upper",
+            color="tab:purple",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        axis.plot(
+            frame["timestamp"],
+            frame["bollinger_lower"],
+            label="Bollinger lower",
+            color="tab:purple",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        if frame["vwap"].notna().any():
+            axis.plot(frame["timestamp"], frame["vwap"], label="VWAP", color="tab:green")
+
+        long_rows = frame.loc[frame["target_weight"] > 0.0]
+        cash_rows = frame.loc[frame["target_weight"] <= 0.0]
+        axis.scatter(
+            long_rows["timestamp"],
+            long_rows["close"],
+            marker="^",
+            color="tab:green",
+            label="long next bar",
+            zorder=3,
+        )
+        axis.scatter(
+            cash_rows["timestamp"],
+            cash_rows["close"],
+            marker="v",
+            color="tab:red",
+            label="cash next bar",
+            zorder=3,
+        )
+        axis.set_title(f"Signal Price Overlay: {symbol}")
+        axis.set_xlabel("Signal timestamp")
+        axis.set_ylabel("Price")
+        axis.grid(alpha=0.3)
+        axis.legend(loc="best")
+
+    figure.autofmt_xdate()
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def plot_signal_confirmations(diagnostics: pd.DataFrame, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    symbols = diagnostics["symbol"].drop_duplicates().tolist()
+    confirmation_columns = [
+        "ema_confirmed",
+        "rsi_confirmed",
+        "macd_confirmed",
+        "bollinger_confirmed",
+        "volume_confirmed",
+        "vwap_confirmed",
+        "target_weight",
+    ]
+    figure, axes = plt.subplots(
+        len(symbols),
+        1,
+        figsize=(10, max(3.5 * len(symbols), 3.5)),
+        squeeze=False,
+    )
+
+    for axis, symbol in zip(axes.flatten(), symbols):
+        frame = diagnostics.loc[diagnostics["symbol"] == symbol].sort_values("timestamp")
+        matrix = frame.loc[:, confirmation_columns].copy()
+        matrix["target_weight"] = matrix["target_weight"].gt(0.0)
+        values = matrix.astype(bool).T.astype(int)
+        axis.imshow(values, aspect="auto", interpolation="nearest", cmap="Greens", vmin=0, vmax=1)
+        axis.set_title(f"Signal Confirmations: {symbol}")
+        axis.set_yticks(range(len(confirmation_columns)))
+        axis.set_yticklabels(confirmation_columns)
+        _set_time_ticks(axis, frame["timestamp"])
+
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def plot_signal_performance_focus(
+    performance: pd.DataFrame,
+    path: str | Path,
+    *,
+    strategy_names: set[str] | None = None,
+) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    figure, axis = plt.subplots(figsize=(9, 5))
+    selected_strategies = strategy_names or {"indicator_stack", "buy_hold"}
+    for strategy, frame in performance.groupby("strategy", sort=False):
+        if strategy not in selected_strategies:
+            continue
+        ordered = frame.sort_values("date").copy()
+        ordered["focus_equity"] = (1.0 + ordered["net_return"]).cumprod()
+        axis.plot(ordered["date"], ordered["focus_equity"], label=strategy)
+
+    axis.set_title("Focused Window Equity")
+    axis.set_xlabel("Date")
+    axis.set_ylabel("Rebased equity")
+    axis.grid(alpha=0.3)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def plot_pattern_price_overlay(diagnostics: pd.DataFrame, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    symbols = diagnostics["symbol"].drop_duplicates().tolist()
+    figure, axes = plt.subplots(
+        len(symbols),
+        1,
+        figsize=(10, max(4.5 * len(symbols), 4.5)),
+        squeeze=False,
+    )
+
+    for axis, symbol in zip(axes.flatten(), symbols):
+        frame = diagnostics.loc[diagnostics["symbol"] == symbol].sort_values("timestamp")
+        axis.plot(frame["timestamp"], frame["close"], label="close", color="black", linewidth=1.3)
+        axis.plot(
+            frame["timestamp"],
+            pd.to_numeric(frame["resistance_level"], errors="coerce"),
+            label="resistance",
+            color="tab:orange",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        axis.plot(
+            frame["timestamp"],
+            pd.to_numeric(frame["support_level"], errors="coerce"),
+            label="support",
+            color="tab:blue",
+            linestyle="--",
+            linewidth=0.9,
+        )
+        long_rows = frame.loc[frame["target_weight"] > 0.0]
+        cash_rows = frame.loc[frame["target_weight"] <= 0.0]
+        axis.scatter(
+            long_rows["timestamp"],
+            long_rows["close"],
+            marker="^",
+            color="tab:green",
+            label="pattern long next bar",
+            zorder=3,
+        )
+        axis.scatter(
+            cash_rows["timestamp"],
+            cash_rows["close"],
+            marker="v",
+            color="tab:red",
+            label="pattern cash next bar",
+            zorder=3,
+        )
+        axis.set_title(f"Chart Pattern Overlay: {symbol}")
+        axis.set_xlabel("Signal timestamp")
+        axis.set_ylabel("Price")
+        axis.grid(alpha=0.3)
+        axis.legend(loc="best")
+
+    figure.autofmt_xdate()
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def plot_pattern_detections(diagnostics: pd.DataFrame, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    symbols = diagnostics["symbol"].drop_duplicates().tolist()
+    pattern_columns = [*PATTERN_COLUMNS, "target_weight"]
+    figure, axes = plt.subplots(
+        len(symbols),
+        1,
+        figsize=(11, max(7.0 * len(symbols), 7.0)),
+        squeeze=False,
+    )
+
+    for axis, symbol in zip(axes.flatten(), symbols):
+        frame = diagnostics.loc[diagnostics["symbol"] == symbol].sort_values("timestamp")
+        matrix = frame.loc[:, pattern_columns].copy()
+        matrix["target_weight"] = matrix["target_weight"].gt(0.0)
+        values = matrix.astype(bool).T.astype(int)
+        axis.imshow(values, aspect="auto", interpolation="nearest", cmap="Greens", vmin=0, vmax=1)
+        axis.set_title(f"Chart Pattern Detections: {symbol}")
+        axis.set_yticks(range(len(pattern_columns)))
+        axis.set_yticklabels(pattern_columns)
+        _set_time_ticks(axis, frame["timestamp"])
+
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
+    return output_path
+
+
+def _active_pattern_label(row: pd.Series) -> str:
+    active = [column for column in PATTERN_COLUMNS if bool(row[column])]
+    if not active:
+        return "no pattern"
+    return ", ".join(active)
+
+
+def plot_pattern_detection_windows(
+    diagnostics: pd.DataFrame,
+    path: str | Path,
+    *,
+    bars_before: int = 8,
+    bars_after: int = 2,
+    max_windows: int = 12,
+) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = diagnostics.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+    detection_mask = ordered.loc[:, PATTERN_COLUMNS].astype(bool).any(axis=1)
+    hits = ordered.loc[detection_mask].head(max_windows)
+
+    window_count = max(len(hits), 1)
+    column_count = min(3, window_count)
+    row_count = int(np.ceil(window_count / column_count))
+    figure, axes = plt.subplots(
+        row_count,
+        column_count,
+        figsize=(5.2 * column_count, 3.4 * row_count),
+        squeeze=False,
+    )
+    flat_axes = list(axes.flatten())
+
+    if hits.empty:
+        axis = flat_axes[0]
+        axis.text(0.5, 0.5, "No pattern detections in focus window", ha="center", va="center")
+        axis.axis("off")
+    else:
+        for axis, (hit_index, hit) in zip(flat_axes, hits.iterrows()):
+            start = max(0, hit_index - bars_before)
+            end = min(len(ordered), hit_index + bars_after + 1)
+            frame = ordered.iloc[start:end].copy()
+            x_values = range(len(frame))
+            signal_position = int(hit_index - start)
+            is_buy = float(hit["target_weight"]) > 0.0
+            decision_color = "tab:green" if is_buy else "tab:red"
+            decision_label = "BUY next bar" if is_buy else "SELL/CASH next bar"
+            axis.plot(
+                x_values,
+                frame["close"],
+                marker="o",
+                color=decision_color,
+                linewidth=1.5,
+            )
+            axis.axvline(signal_position, color=decision_color, linestyle="--", linewidth=1.0)
+            axis.scatter(
+                [signal_position],
+                [float(hit["close"])],
+                marker="^" if is_buy else "v",
+                color=decision_color,
+                zorder=3,
+            )
+            axis.set_title(
+                f"{pd.Timestamp(hit['timestamp']).strftime('%H:%M')} {decision_label} - "
+                f"{_active_pattern_label(hit)}",
+                fontsize=9,
+            )
+            axis.set_xticks(list(x_values))
+            axis.set_xticklabels(
+                [pd.Timestamp(value).strftime("%H:%M") for value in frame["timestamp"]],
+                rotation=45,
+                ha="right",
+                fontsize=8,
+            )
+            axis.grid(alpha=0.3)
+
+    for axis in flat_axes[window_count:]:
+        axis.axis("off")
+
+    figure.suptitle("Pattern Detection Windows", fontsize=14)
+    figure.tight_layout(rect=(0, 0, 1, 0.96))
     figure.savefig(output_path)
     plt.close(figure)
     return output_path
