@@ -69,6 +69,25 @@ def test_normalize_ohlcv_frame_drops_cached_ticker_header_row() -> None:
     assert panel.loc[0, "volume"] == pytest.approx(1000.0)
 
 
+def test_normalize_ohlcv_frame_accepts_hourly_datetime_column_and_normalizes_timezone() -> None:
+    raw = pd.DataFrame(
+        {
+            "Datetime": ["2024-01-01T01:00:00Z"],
+            "Open": [100.0],
+            "High": [102.0],
+            "Low": [99.0],
+            "Close": [101.0],
+            "Volume": [2500],
+        }
+    )
+
+    panel = normalize_ohlcv_frame("BTC-USD", raw)
+
+    assert panel.loc[0, "timestamp"] == pd.Timestamp("2024-01-01 01:00:00")
+    assert panel.loc[0, "timestamp"].tzinfo is None
+    assert panel.loc[0, "adj_close"] == pytest.approx(101.0)
+
+
 def test_build_market_panel_rejects_duplicate_symbol_timestamp() -> None:
     raw = pd.DataFrame(
         {

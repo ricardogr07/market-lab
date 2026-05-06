@@ -10,6 +10,7 @@ def generate_weights(
     fast_window: int,
     slow_window: int,
     strategy_name: str = "sma",
+    frequency: str = "W-FRI",
 ) -> pd.DataFrame:
     if fast_window >= slow_window:
         raise ValueError("SMA strategy requires fast_window < slow_window.")
@@ -26,7 +27,7 @@ def generate_weights(
     symbols = sorted(working["symbol"].unique())
     rows: list[dict[str, object]] = []
 
-    effective_dates = next_effective_dates(working, weekly_signal_dates(working))
+    effective_dates = next_effective_dates(working, weekly_signal_dates(working, frequency))
     for signal_date, effective_date in effective_dates.items():
         signal_slice = (
             working.loc[working["timestamp"] == signal_date, ["symbol", "fast_ma", "slow_ma"]]

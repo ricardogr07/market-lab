@@ -8,6 +8,8 @@ def rebalance_signal_dates(
     frequency: str = "W-FRI",
 ) -> list[pd.Timestamp]:
     calendar = pd.DataFrame({"timestamp": sorted(panel["timestamp"].drop_duplicates())})
+    if frequency.lower() in {"bar", "1h"}:
+        return calendar["timestamp"].sort_values().tolist()
     calendar["rebalance_period"] = calendar["timestamp"].dt.to_period(frequency)
     return calendar.groupby("rebalance_period")["timestamp"].max().sort_values().tolist()
 
@@ -24,20 +26,18 @@ def next_effective_dates(
     signal_dates: list[pd.Timestamp],
 ) -> pd.Series:
     unique_dates = pd.Index(sorted(panel["timestamp"].drop_duplicates()))
-    rows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    if unique_dates.empty or not signal_dates:
+        return pd.Series(dtype="datetime64[ns]", name="effective_date")
 
-    for signal_date in signal_dates:
-        next_dates = unique_dates[unique_dates > signal_date]
-        if next_dates.empty:
-            continue
-        rows.append((signal_date, next_dates.min()))
-
-    if not rows:
+    signal_index = pd.Index(pd.to_datetime(signal_dates), name="signal_date")
+    positions = unique_dates.searchsorted(signal_index, side="right")
+    valid = positions < len(unique_dates)
+    if not bool(valid.any()):
         return pd.Series(dtype="datetime64[ns]", name="effective_date")
 
     return pd.Series(
-        data=[effective_date for _, effective_date in rows],
-        index=pd.Index([signal_date for signal_date, _ in rows], name="signal_date"),
+        data=unique_dates.take(positions[valid]),
+        index=signal_index[valid],
         name="effective_date",
     )
 
