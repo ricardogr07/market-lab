@@ -1,0 +1,71 @@
+experiment_name: crypto_hourly_trend
+
+data:
+  symbols: [BTC-USD]
+  start_date: "2024-01-01"
+  end_date: "2024-03-31"
+  interval: "1h"
+  cache_dir: "artifacts/data-crypto-hourly"
+  prepared_panel_filename: "btc_usd_hourly_panel.csv"
+
+features:
+  return_windows: [3, 6, 12, 24]
+  ma_windows: [12, 24, 72]
+  vol_windows: [12, 24]
+  momentum_window: 24
+
+target:
+  horizon_days: 1
+  type: "direction"
+
+portfolio:
+  ranking:
+    long_n: 1
+    short_n: 1
+    rebalance_frequency: "bar"
+    weighting: "equal"
+    mode: "long_only"
+    min_score_threshold: 0.0
+    cash_when_underfilled: true
+  costs:
+    bps_per_trade: 10
+
+baselines:
+  buy_hold: true
+  sma:
+    enabled: false
+  indicator_stack:
+    enabled: true
+    ema_fast_window: 12
+    ema_slow_window: 26
+    rsi_window: 14
+    rsi_min: 45.0
+    rsi_max: 70.0
+    macd_fast_window: 12
+    macd_slow_window: 26
+    macd_signal_window: 9
+    bollinger_window: 20
+    bollinger_std: 2.0
+    bollinger_mode: "breakout"
+    volume_window: 20
+    volume_multiplier: 1.0
+    vwap_window: 24
+    use_vwap: true
+    min_confirmations: 3
+
+models: []
+
+evaluation:
+  benchmark_strategy: "buy_hold"
+  periods_per_year: 8760
+  cost_sensitivity_bps: [7.5, 10.0, 20.0, 40.0, 75.0]
+
+paper:
+  enabled: false
+
+artifacts:
+  output_dir: "artifacts/runs"
+  save_predictions: false
+  save_metrics_csv: true
+  save_report_md: true
+  save_plots: true
