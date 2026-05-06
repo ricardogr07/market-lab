@@ -169,6 +169,26 @@ def test_build_cost_sensitivity_reprices_metrics_monotonically(
     )
 
 
+def test_build_cost_sensitivity_uses_configured_annualization_periods(
+    performance: pd.DataFrame,
+) -> None:
+    cost_sensitivity = build_cost_sensitivity(
+        performance,
+        base_cost_bps=10.0,
+        periods_per_year=8760.0,
+    )
+
+    alpha_base = cost_sensitivity.loc[
+        (cost_sensitivity["strategy"] == "alpha")
+        & (cost_sensitivity["bps_per_trade"] == 10.0)
+    ].iloc[0]
+    expected_final_equity = 1.009 * 1.018 * 0.9885
+
+    assert alpha_base["annualized_return"] == pytest.approx(
+        (expected_final_equity ** (8760.0 / 3.0)) - 1.0
+    )
+
+
 def test_build_cost_sensitivity_handles_non_positive_equity() -> None:
     stressed_performance = pd.DataFrame(
         {
@@ -405,6 +425,34 @@ def test_build_strategy_summary_appends_benchmark_relative_metrics(
     assert beta_row["correlation_to_benchmark"] == pytest.approx(1.0)
     assert beta_row["up_capture"] == pytest.approx(1.0)
     assert pd.isna(beta_row["down_capture"])
+
+
+def test_build_strategy_summary_uses_configured_benchmark_annualization(
+    performance: pd.DataFrame,
+    daily_holdings: pd.DataFrame,
+    daily_cash: pd.DataFrame,
+) -> None:
+    daily_exposure = build_daily_exposure(daily_holdings, daily_cash)
+    benchmark_relative = build_benchmark_relative(performance, "beta")
+    summary = build_strategy_summary(
+        performance,
+        daily_exposure=daily_exposure,
+        benchmark_relative=benchmark_relative,
+        benchmark_strategy="beta",
+        periods_per_year=8760.0,
+    )
+
+    alpha_rows = performance.loc[performance["strategy"] == "alpha"].sort_values("date")
+    beta_rows = performance.loc[performance["strategy"] == "beta"].sort_values("date")
+    alpha_excess = alpha_rows["net_return"].reset_index(drop=True) - beta_rows["net_return"].reset_index(drop=True)
+    alpha_row = summary.loc[summary["strategy"] == "alpha"].iloc[0]
+
+    assert alpha_row["annualized_return"] == pytest.approx(
+        (alpha_rows["equity"].iloc[-1] ** (8760.0 / 3.0)) - 1.0
+    )
+    assert alpha_row["tracking_error"] == pytest.approx(
+        alpha_excess.std(ddof=0) * (8760.0 ** 0.5)
+    )
 
 
 
