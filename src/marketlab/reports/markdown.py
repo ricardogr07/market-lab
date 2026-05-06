@@ -79,6 +79,54 @@ def _scope_lines(performance: pd.DataFrame) -> list[str]:
     return ["- Baseline-only experiment"]
 
 
+def _trend_signal_gate_lines(strategy_summary: pd.DataFrame) -> list[str]:
+    strategy_names = set(strategy_summary["strategy"].astype(str))
+    gated_strategies = [
+        strategy
+        for strategy in (
+            "indicator_stack",
+            "chart_patterns",
+            "pattern_exit_overlay",
+            "pattern_meta_label_exit_overlay",
+        )
+        if strategy in strategy_names
+    ]
+    if not gated_strategies:
+        return []
+    if "buy_hold" not in strategy_names:
+        return ["- Research gate: unavailable because `buy_hold` is missing."]
+
+    buy_hold_row = strategy_summary.loc[
+        strategy_summary["strategy"].astype(str) == "buy_hold"
+    ].iloc[0]
+    lines: list[str] = []
+    for strategy in gated_strategies:
+        strategy_row = strategy_summary.loc[
+            strategy_summary["strategy"].astype(str) == strategy
+        ].iloc[0]
+        net_return_delta = float(strategy_row["cumulative_return"]) - float(
+            buy_hold_row["cumulative_return"]
+        )
+        sharpe_delta = float(strategy_row["sharpe_like"]) - float(buy_hold_row["sharpe_like"])
+        max_drawdown_delta = float(strategy_row["max_drawdown"]) - float(
+            buy_hold_row["max_drawdown"]
+        )
+        passed = net_return_delta > 0.0 and (sharpe_delta > 0.0 or max_drawdown_delta > 0.0)
+        verdict = "pass" if passed else "fail"
+        lines.extend(
+            [
+                f"- `{strategy}` gate: `{verdict}` versus `buy_hold`.",
+                f"- `{strategy}` net cumulative return delta: {net_return_delta:.6f}",
+                f"- `{strategy}` Sharpe-like delta: {sharpe_delta:.6f}",
+                f"- `{strategy}` max drawdown delta: {max_drawdown_delta:.6f}",
+            ]
+        )
+    lines.append(
+        "- Paper-shadow work remains blocked until a research strategy passes on reviewed runs."
+    )
+    return lines
+
+
 def _headline_lines(
     metrics: pd.DataFrame,
     model_summary: pd.DataFrame | None,
@@ -257,6 +305,11 @@ def _relative_image_line(report_path: Path, image_path: Path, alt_text: str) -> 
     return f"![{alt_text}]({relative_path})"
 
 
+def _relative_artifact_line(report_path: Path, artifact_path: Path, label: str) -> str:
+    relative_path = os.path.relpath(artifact_path, start=report_path.parent)
+    return f"- {label}: [{artifact_path.name}]({relative_path})"
+
+
 def _display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     display = frame.copy()
     numeric_columns = display.select_dtypes(include="number").columns
@@ -411,6 +464,373 @@ def _cost_sensitivity_lines(cost_sensitivity: pd.DataFrame) -> list[str]:
     return lines
 
 
+def _pattern_meta_threshold_sweep_lines(
+    threshold_sweep: pd.DataFrame | None,
+    report_path: Path,
+    threshold_sweep_path: Path | None,
+) -> list[str]:
+    if threshold_sweep is None or threshold_sweep.empty:
+        return []
+
+    display_columns = [
+        "threshold",
+        "cumulative_return",
+        "annualized_return",
+        "max_drawdown",
+        "sharpe_like",
+        "total_turnover",
+        "cost_drag",
+        "exit_count",
+        "cash_bar_count",
+        "average_exposure",
+        "excess_cumulative_return",
+    ]
+    lines = [_markdown_table(_display_frame(threshold_sweep.loc[:, display_columns]))]
+    lines.extend(
+        [
+            "",
+            "- Threshold sweeps are research diagnostics and must not be treated as an automatically selected production setting.",
+            "- Better net return can reflect threshold overfit; compare turnover and drawdown before changing configs.",
+            "- High-threshold rows with very low exit counts are close to buy-and-hold abstention, not stronger pattern evidence.",
+        ]
+    )
+    if threshold_sweep_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                threshold_sweep_path,
+                "Pattern meta threshold sweep",
+            )
+        )
+    return lines
+
+
+def _pattern_meta_tuning_lines(
+    tuning_candidates: pd.DataFrame | None,
+    tuning_selections: pd.DataFrame | None,
+    partial_sweep: pd.DataFrame | None,
+    report_path: Path,
+    tuning_candidates_path: Path | None,
+    tuning_selections_path: Path | None,
+    partial_sweep_path: Path | None,
+) -> list[str]:
+    lines: list[str] = []
+    if tuning_selections is not None and not tuning_selections.empty:
+        display_columns = [
+            "fold_id",
+            "selected_threshold",
+            "passed_gate",
+            "excess_cumulative_return",
+            "drawdown_delta",
+            "exit_count",
+            "average_exposure",
+        ]
+        lines.extend(
+            [
+                "Nested tuning selections:",
+                "",
+                _markdown_table(_display_frame(tuning_selections.loc[:, display_columns])),
+            ]
+        )
+    if partial_sweep is not None and not partial_sweep.empty:
+        display_columns = [
+            "partial_threshold",
+            "full_threshold",
+            "cumulative_return",
+            "max_drawdown",
+            "total_turnover",
+            "exit_count",
+            "partial_bar_count",
+            "average_exposure",
+            "excess_cumulative_return",
+        ]
+        if lines:
+            lines.append("")
+        lines.extend(
+            [
+                "Partial-exposure threshold sweep:",
+                "",
+                _markdown_table(_display_frame(partial_sweep.loc[:, display_columns])),
+            ]
+        )
+    if not lines:
+        return []
+    lines.extend(
+        [
+            "",
+            "- Tuning rows are research diagnostics; a pass requires out-of-sample excess return and no worse drawdown after costs.",
+            "- Near-1.0 average exposure with few exits is treated as abstention, not active edge.",
+        ]
+    )
+    for artifact_path, label in [
+        (tuning_candidates_path, "Pattern meta tuning candidates"),
+        (tuning_selections_path, "Pattern meta tuning selections"),
+        (partial_sweep_path, "Pattern partial threshold sweep"),
+    ]:
+        if artifact_path is not None:
+            lines.append(_relative_artifact_line(report_path, artifact_path, label))
+    return lines
+
+
+def _ml_strategy_threshold_sweep_lines(
+    threshold_sweep: pd.DataFrame | None,
+    report_path: Path,
+    threshold_sweep_path: Path | None,
+) -> list[str]:
+    if threshold_sweep is None or threshold_sweep.empty:
+        return []
+
+    display_columns = [
+        "model_name",
+        "threshold",
+        "cumulative_return",
+        "max_drawdown",
+        "sharpe_like",
+        "total_turnover",
+        "exposure_changes",
+        "average_exposure",
+        "buy_hold_cumulative_return",
+        "excess_cumulative_return",
+        "best_comparison_strategy",
+        "passed_gate",
+    ]
+    lines = [_markdown_table(_display_frame(threshold_sweep.loc[:, display_columns]))]
+    lines.extend(
+        [
+            "",
+            "- The pass gate requires positive net excess return versus `buy_hold` after costs.",
+            "- The activity guardrail rejects near-buy-and-hold abstention by requiring enough exposure changes and average exposure below the configured maximum.",
+            "- Pattern and rule baselines remain in the strategy summary so ML thresholds can be compared against the full Phase 8 research set.",
+        ]
+    )
+    if threshold_sweep_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                threshold_sweep_path,
+                "ML strategy threshold sweep",
+            )
+        )
+    return lines
+
+
+def _ml_strategy_tuning_lines(
+    tuning_candidates: pd.DataFrame | None,
+    tuning_selections: pd.DataFrame | None,
+    report_path: Path,
+    tuning_candidates_path: Path | None,
+    tuning_selections_path: Path | None,
+) -> list[str]:
+    if (
+        tuning_candidates is None
+        and tuning_selections is None
+        and tuning_candidates_path is None
+        and tuning_selections_path is None
+    ):
+        return []
+
+    lines: list[str] = []
+    if tuning_selections is not None and not tuning_selections.empty:
+        selection_columns = [
+            "fold_id",
+            "selection_status",
+            "selected_model_name",
+            "selected_threshold",
+            "passed_gate",
+            "excess_cumulative_return",
+            "sharpe_like_delta",
+            "drawdown_delta",
+            "exposure_changes",
+            "average_exposure",
+        ]
+        lines.append(_markdown_table(_display_frame(tuning_selections.loc[:, selection_columns])))
+
+    if tuning_candidates is not None and not tuning_candidates.empty:
+        candidate_columns = [
+            "fold_id",
+            "model_name",
+            "threshold",
+            "cumulative_return",
+            "max_drawdown",
+            "sharpe_like",
+            "excess_cumulative_return",
+            "sharpe_like_delta",
+            "drawdown_delta",
+            "active_candidate",
+            "passed_gate",
+        ]
+        lines.extend(
+            [
+                "",
+                "Top validation candidates:",
+                _markdown_table(
+                    _display_frame(tuning_candidates.loc[:, candidate_columns].head(20))
+                ),
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "- Candidate selection uses only the validation tail inside each outer training fold.",
+            "- Selected models are refit on the full outer training fold before scoring the outer test fold.",
+            "- The pass gate requires net excess return and either Sharpe-like or drawdown improvement versus `buy_hold` after costs.",
+        ]
+    )
+    for artifact_path, label in [
+        (tuning_candidates_path, "ML strategy tuning candidates"),
+        (tuning_selections_path, "ML strategy tuning selections"),
+    ]:
+        if artifact_path is not None:
+            lines.append(_relative_artifact_line(report_path, artifact_path, label))
+    return lines
+
+
+def _signal_inspection_lines(
+    config: ExperimentConfig,
+    report_path: Path,
+    indicator_diagnostics_path: Path | None,
+    signal_price_overlay_plot_path: Path | None,
+    signal_confirmations_plot_path: Path | None,
+    signal_performance_focus_plot_path: Path | None,
+    pattern_diagnostics_path: Path | None,
+    pattern_exit_overlay_diagnostics_path: Path | None,
+    pattern_meta_labels_path: Path | None,
+    pattern_meta_predictions_path: Path | None,
+    pattern_meta_fold_diagnostics_path: Path | None,
+    pattern_meta_threshold_sweep_path: Path | None,
+    pattern_meta_tuning_candidates_path: Path | None,
+    pattern_meta_tuning_selections_path: Path | None,
+    pattern_partial_exposure_diagnostics_path: Path | None,
+    pattern_partial_threshold_sweep_path: Path | None,
+    pattern_price_overlay_plot_path: Path | None,
+    pattern_detections_plot_path: Path | None,
+    pattern_detection_windows_plot_path: Path | None,
+    pattern_performance_focus_plot_path: Path | None,
+) -> list[str]:
+    paths = [
+        signal_price_overlay_plot_path,
+        signal_confirmations_plot_path,
+        signal_performance_focus_plot_path,
+        pattern_price_overlay_plot_path,
+        pattern_detections_plot_path,
+        pattern_detection_windows_plot_path,
+        pattern_performance_focus_plot_path,
+    ]
+    if (
+        indicator_diagnostics_path is None
+        and pattern_diagnostics_path is None
+        and pattern_exit_overlay_diagnostics_path is None
+        and pattern_meta_labels_path is None
+        and pattern_meta_predictions_path is None
+        and pattern_meta_fold_diagnostics_path is None
+        and pattern_meta_threshold_sweep_path is None
+        and pattern_meta_tuning_candidates_path is None
+        and pattern_meta_tuning_selections_path is None
+        and pattern_partial_exposure_diagnostics_path is None
+        and pattern_partial_threshold_sweep_path is None
+        and not any(path is not None for path in paths)
+    ):
+        return []
+
+    focus_start = config.evaluation.focus_start or "run start"
+    focus_end = config.evaluation.focus_end or "run end"
+    lines = [
+        f"- Focus window: `{focus_start}` to `{focus_end}`",
+        "- Signals are evaluated at completed bar close and become target weights on the next available bar.",
+    ]
+    if indicator_diagnostics_path is not None:
+        lines.append(
+            _relative_artifact_line(report_path, indicator_diagnostics_path, "Indicator diagnostics")
+        )
+    if pattern_diagnostics_path is not None:
+        lines.append(
+            _relative_artifact_line(report_path, pattern_diagnostics_path, "Chart-pattern diagnostics")
+        )
+    if pattern_exit_overlay_diagnostics_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_exit_overlay_diagnostics_path,
+                "Pattern exit overlay diagnostics",
+            )
+        )
+    if pattern_meta_labels_path is not None:
+        lines.append(
+            _relative_artifact_line(report_path, pattern_meta_labels_path, "Pattern meta labels")
+        )
+    if pattern_meta_predictions_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_meta_predictions_path,
+                "Pattern meta predictions",
+            )
+        )
+    if pattern_meta_fold_diagnostics_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_meta_fold_diagnostics_path,
+                "Pattern meta fold diagnostics",
+            )
+        )
+    if pattern_meta_threshold_sweep_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_meta_threshold_sweep_path,
+                "Pattern meta threshold sweep",
+            )
+        )
+    if pattern_meta_tuning_candidates_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_meta_tuning_candidates_path,
+                "Pattern meta tuning candidates",
+            )
+        )
+    if pattern_meta_tuning_selections_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_meta_tuning_selections_path,
+                "Pattern meta tuning selections",
+            )
+        )
+    if pattern_partial_exposure_diagnostics_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_partial_exposure_diagnostics_path,
+                "Pattern partial exposure diagnostics",
+            )
+        )
+    if pattern_partial_threshold_sweep_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                pattern_partial_threshold_sweep_path,
+                "Pattern partial threshold sweep",
+            )
+        )
+
+    image_specs = [
+        ("Signal Price Overlay", signal_price_overlay_plot_path),
+        ("Signal Confirmations", signal_confirmations_plot_path),
+        ("Focused Signal Performance", signal_performance_focus_plot_path),
+        ("Chart Pattern Price Overlay", pattern_price_overlay_plot_path),
+        ("Chart Pattern Detections", pattern_detections_plot_path),
+        ("Chart Pattern Detection Windows", pattern_detection_windows_plot_path),
+        ("Focused Pattern Performance", pattern_performance_focus_plot_path),
+    ]
+    for alt_text, plot_path in image_specs:
+        if plot_path is not None and plot_path.exists():
+            lines.extend(["", _relative_image_line(report_path, plot_path, alt_text)])
+    return lines
+
+
 def _section(title: str, body_lines: list[str]) -> list[str]:
     return [f"## {title}", "", *body_lines, ""]
 
@@ -426,6 +846,13 @@ def write_markdown_report(
     monthly_returns: pd.DataFrame | None = None,
     turnover_costs: pd.DataFrame | None = None,
     cost_sensitivity: pd.DataFrame | None = None,
+    pattern_meta_threshold_sweep: pd.DataFrame | None = None,
+    pattern_meta_tuning_candidates: pd.DataFrame | None = None,
+    pattern_meta_tuning_selections: pd.DataFrame | None = None,
+    pattern_partial_threshold_sweep: pd.DataFrame | None = None,
+    ml_strategy_threshold_sweep: pd.DataFrame | None = None,
+    ml_strategy_tuning_candidates: pd.DataFrame | None = None,
+    ml_strategy_tuning_selections: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     calibration_curves_plot_path: Path | None = None,
@@ -436,6 +863,27 @@ def write_markdown_report(
     covariance_diagnostics: pd.DataFrame | None = None,
     covariance_diagnostics_path: Path | None = None,
     black_litterman_assumptions_path: Path | None = None,
+    indicator_diagnostics_path: Path | None = None,
+    signal_price_overlay_plot_path: Path | None = None,
+    signal_confirmations_plot_path: Path | None = None,
+    signal_performance_focus_plot_path: Path | None = None,
+    pattern_diagnostics_path: Path | None = None,
+    pattern_exit_overlay_diagnostics_path: Path | None = None,
+    pattern_meta_labels_path: Path | None = None,
+    pattern_meta_predictions_path: Path | None = None,
+    pattern_meta_fold_diagnostics_path: Path | None = None,
+    pattern_meta_threshold_sweep_path: Path | None = None,
+    pattern_meta_tuning_candidates_path: Path | None = None,
+    pattern_meta_tuning_selections_path: Path | None = None,
+    pattern_partial_exposure_diagnostics_path: Path | None = None,
+    pattern_partial_threshold_sweep_path: Path | None = None,
+    ml_strategy_threshold_sweep_path: Path | None = None,
+    ml_strategy_tuning_candidates_path: Path | None = None,
+    ml_strategy_tuning_selections_path: Path | None = None,
+    pattern_price_overlay_plot_path: Path | None = None,
+    pattern_detections_plot_path: Path | None = None,
+    pattern_detection_windows_plot_path: Path | None = None,
+    pattern_performance_focus_plot_path: Path | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -472,6 +920,11 @@ def write_markdown_report(
         content_lines.extend(
             _section("Strategy Summary", [_markdown_table(_display_frame(strategy_summary))])
         )
+        trend_signal_gate_lines = _trend_signal_gate_lines(strategy_summary)
+        if trend_signal_gate_lines:
+            content_lines.extend(
+                _section("Trend-Signal Acceptance Gate", trend_signal_gate_lines)
+            )
         exposure_lines = _exposure_summary_lines(strategy_summary)
         if exposure_lines:
             content_lines.extend(_section("Exposure Summary", exposure_lines))
@@ -517,6 +970,71 @@ def write_markdown_report(
         content_lines.extend(
             _section("Cost Sensitivity", _cost_sensitivity_lines(cost_sensitivity))
         )
+
+    threshold_sweep_lines = _pattern_meta_threshold_sweep_lines(
+        pattern_meta_threshold_sweep,
+        output_path,
+        pattern_meta_threshold_sweep_path,
+    )
+    if threshold_sweep_lines:
+        content_lines.extend(
+            _section("Pattern Meta Threshold Sweep", threshold_sweep_lines)
+        )
+
+    tuning_lines = _pattern_meta_tuning_lines(
+        pattern_meta_tuning_candidates,
+        pattern_meta_tuning_selections,
+        pattern_partial_threshold_sweep,
+        output_path,
+        pattern_meta_tuning_candidates_path,
+        pattern_meta_tuning_selections_path,
+        pattern_partial_threshold_sweep_path,
+    )
+    if tuning_lines:
+        content_lines.extend(_section("Pattern Meta Tuning", tuning_lines))
+
+    ml_sweep_lines = _ml_strategy_threshold_sweep_lines(
+        ml_strategy_threshold_sweep,
+        output_path,
+        ml_strategy_threshold_sweep_path,
+    )
+    if ml_sweep_lines:
+        content_lines.extend(_section("ML Strategy Threshold Sweep", ml_sweep_lines))
+
+    ml_tuning_lines = _ml_strategy_tuning_lines(
+        ml_strategy_tuning_candidates,
+        ml_strategy_tuning_selections,
+        output_path,
+        ml_strategy_tuning_candidates_path,
+        ml_strategy_tuning_selections_path,
+    )
+    if ml_tuning_lines:
+        content_lines.extend(_section("ML Strategy Tuning", ml_tuning_lines))
+
+    signal_inspection_lines = _signal_inspection_lines(
+        config,
+        output_path,
+        indicator_diagnostics_path,
+        signal_price_overlay_plot_path,
+        signal_confirmations_plot_path,
+        signal_performance_focus_plot_path,
+        pattern_diagnostics_path,
+        pattern_exit_overlay_diagnostics_path,
+        pattern_meta_labels_path,
+        pattern_meta_predictions_path,
+        pattern_meta_fold_diagnostics_path,
+        pattern_meta_threshold_sweep_path,
+        pattern_meta_tuning_candidates_path,
+        pattern_meta_tuning_selections_path,
+        pattern_partial_exposure_diagnostics_path,
+        pattern_partial_threshold_sweep_path,
+        pattern_price_overlay_plot_path,
+        pattern_detections_plot_path,
+        pattern_detection_windows_plot_path,
+        pattern_performance_focus_plot_path,
+    )
+    if signal_inspection_lines:
+        content_lines.extend(_section("Signal Inspection", signal_inspection_lines))
 
     if fold_diagnostics is not None and not fold_diagnostics.empty:
         content_lines.extend(

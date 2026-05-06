@@ -82,8 +82,11 @@ def _write_run_experiment_config(
     symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
+    indicator_stack: dict[str, object] | None = None,
     optimized: dict[str, object] | None = None,
     models: list[dict[str, str]] | None = None,
+    features: dict[str, object] | None = None,
+    target: dict[str, object] | None = None,
     evaluation: dict[str, object] | None = None,
 ) -> Path:
     cache_dir = tmp_path / "cache"
@@ -137,6 +140,8 @@ def _write_run_experiment_config(
     }
     if allocation is not None:
         baselines_payload["allocation"] = allocation
+    if indicator_stack is not None:
+        baselines_payload["indicator_stack"] = indicator_stack
     if optimized is not None:
         baselines_payload["optimized"] = optimized
 
@@ -153,13 +158,13 @@ def _write_run_experiment_config(
                 "prepared_panel_filename": "panel.csv",
                 "symbol_groups": resolved_symbol_groups,
             },
-            "features": {
+            "features": features or {
                 "return_windows": [5, 10],
                 "ma_windows": [5, 10],
                 "vol_windows": [5],
                 "momentum_window": 10,
             },
-            "target": {
+            "target": target or {
                 "horizon_days": 5,
                 "type": "direction",
             },
@@ -843,6 +848,193 @@ def test_run_experiment_supports_daily_one_day_single_symbol_timing_runs(
     assert "ml_logistic_regression__long_only__thr0p55__cash" in report_text
 
 
+
+
+def test_run_experiment_writes_ml_strategy_threshold_sweep(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 0.45),),
+        features={
+            "return_windows": [3, 6],
+            "ma_windows": [3, 6],
+            "vol_windows": [3],
+            "momentum_window": 3,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3],
+            "crypto_vol_windows": [3],
+            "crypto_ma_windows": [3],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+        },
+        target={"horizon_days": 1, "type": "direction"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "ml_strategy_threshold_sweep": {
+                "enabled": True,
+                "thresholds": [0.50, 0.55],
+                "min_exposure_changes": 1,
+                "max_average_exposure_for_active": 1.0,
+            },
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    sweep = pd.read_csv(run_dir / "ml_strategy_threshold_sweep.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert not sweep.empty
+    assert set(sweep["threshold"]) == {0.50, 0.55}
+    assert {
+        "model_name",
+        "threshold",
+        "buy_hold_cumulative_return",
+        "excess_cumulative_return",
+        "exposure_changes",
+        "average_exposure",
+        "passed_gate",
+    }.issubset(sweep.columns)
+    assert sweep["model_name"].eq("logistic_regression").all()
+    assert "## ML Strategy Threshold Sweep" in report_text
+    assert "ML strategy threshold sweep" in report_text
+
+
+def test_run_experiment_writes_indicator_ml_strategy_tuning(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 0.45),),
+        features={
+            "return_windows": [3, 6],
+            "ma_windows": [3, 6],
+            "vol_windows": [3],
+            "momentum_window": 3,
+            "indicator_stack_ml_features_enabled": True,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3],
+            "crypto_vol_windows": [3],
+            "crypto_ma_windows": [3],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+        },
+        target={"horizon_days": 1, "type": "direction"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        indicator_stack={
+            "enabled": True,
+            "ema_fast_window": 3,
+            "ema_slow_window": 6,
+            "rsi_window": 3,
+            "macd_fast_window": 3,
+            "macd_slow_window": 6,
+            "macd_signal_window": 3,
+            "bollinger_window": 3,
+            "volume_window": 3,
+            "min_confirmations": 2,
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "thresholds": [0.50, 0.55],
+                "validation_months": 2,
+                "min_validation_rows": 10,
+                "min_exposure_changes": 1,
+                "max_average_exposure_for_active": 1.0,
+            },
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
+    selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
+    folds = pd.read_csv(run_dir / "fold_diagnostics.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "ml_indicator_tuned__long_only__cash" in set(strategy_summary["strategy"])
+    assert not candidates.empty
+    assert not selections.empty
+    assert {
+        "fold_id",
+        "model_name",
+        "threshold",
+        "excess_cumulative_return",
+        "sharpe_like_delta",
+        "drawdown_delta",
+        "active_candidate",
+        "passed_gate",
+    }.issubset(candidates.columns)
+    assert selections["selected_strategy"].eq("ml_indicator_tuned__long_only__cash").all()
+    selected_rows = selections.loc[selections["selection_status"] == "selected"]
+    assert selected_rows["passed_gate"].astype(bool).all()
+
+    used_folds = folds.loc[folds["status"] == "used", ["fold_id", "test_start"]].copy()
+    joined = selections.merge(used_folds, on="fold_id", how="inner")
+    assert pd.to_datetime(joined["validation_end"]).lt(pd.to_datetime(joined["test_start"])).all()
+
+    passed = candidates.loc[candidates["passed_gate"].astype(bool)]
+    if not passed.empty:
+        assert passed["excess_cumulative_return"].gt(0.0).all()
+        assert (
+            passed["sharpe_like_delta"].gt(0.0) | passed["drawdown_delta"].ge(0.0)
+        ).all()
+    assert "## ML Strategy Tuning" in report_text
+    assert "ML strategy tuning candidates" in report_text
 
 
 def test_run_experiment_supports_capped_long_short_strategy_variants(tmp_path: Path) -> None:
