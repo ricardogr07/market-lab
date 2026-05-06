@@ -50,6 +50,7 @@ def _random_forest() -> ClassifierMixin:
     return RandomForestClassifier(
         n_estimators=200,
         min_samples_leaf=3,
+        n_jobs=-1,
         random_state=7,
     )
 
@@ -58,6 +59,7 @@ def _extra_trees() -> ClassifierMixin:
     return ExtraTreesClassifier(
         n_estimators=200,
         min_samples_leaf=3,
+        n_jobs=-1,
         random_state=7,
     )
 
