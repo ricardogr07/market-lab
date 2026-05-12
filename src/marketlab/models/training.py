@@ -30,7 +30,14 @@ MODELING_METADATA_COLUMNS = {
     "effective_date",
     "target_end_date",
     "forward_return",
+    "forward_drawdown",
+    "forward_realized_volatility",
     "target",
+    "target_weight",
+    "allocation_utility_0",
+    "allocation_utility_25",
+    "allocation_utility_50",
+    "allocation_utility_100",
 }
 
 

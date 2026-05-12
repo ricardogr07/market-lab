@@ -30,6 +30,7 @@ from marketlab.paper.observability import (
     root_execution_context,
 )
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
+from marketlab.reports.phase8_summary import write_phase8_run_summary
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
 
 LOGGER = logging.getLogger(__name__)
@@ -78,6 +79,10 @@ def build_parser() -> argparse.ArgumentParser:
     write_config.add_argument("--name", required=True, choices=CONFIG_TEMPLATE_NAMES)
     write_config.add_argument("--output", required=True)
     write_config.add_argument("--force", action="store_true")
+
+    phase8_summary = subparsers.add_parser("phase8-summary")
+    phase8_summary.add_argument("--run-dir", required=True)
+    phase8_summary.add_argument("--output")
 
     return parser
 
@@ -237,6 +242,10 @@ def main(argv: list[str] | None = None) -> int:
         except (FileExistsError, KeyError) as exc:
             parser.error(str(exc))
         print(output_path)
+        return 0
+
+    if args.command == "phase8-summary":
+        print(write_phase8_run_summary(args.run_dir, output_path=args.output))
         return 0
 
     load_env_file()

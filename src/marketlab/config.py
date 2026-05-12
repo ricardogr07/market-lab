@@ -16,9 +16,22 @@ PAPER_DATA_PROVIDERS = {"alpaca"}
 PAPER_BROKERS = {"alpaca"}
 PAPER_PERSISTENCE_BACKENDS = {"filesystem", "sqlite"}
 PAPER_EXECUTION_MODES = {"autonomous", "agent_approval", "manual_approval"}
-PAPER_ORDER_TYPES = {"day_market"}
-PAPER_POSITION_SIZING = {"full_equity_fractional"}
+PAPER_ORDER_TYPES = {"crypto_market_gtc", "crypto_market_ioc", "day_market"}
+PAPER_POSITION_SIZING = {"full_equity_fractional", "target_weight_fractional"}
 PAPER_AGENT_BACKENDS = {"claude", "deterministic_consensus", "openai"}
+TARGET_TYPES = {"allocation_utility", "direction", "regime_state", "return"}
+ML_STRATEGY_ALLOCATION_MODES = {"binary", "direct_tiered", "tiered"}
+ML_STRATEGY_TUNING_OBJECTIVES = {
+    "net_return_and_risk_vs_buy_hold",
+    "net_return_and_risk_vs_required_benchmarks",
+}
+ALLOCATION_CLASS_WEIGHTING_MODES = {
+    "balanced",
+    "balanced_partial_boost",
+    "none",
+}
+ALLOCATION_PROBABILITY_CALIBRATION_MODES = {"none", "sigmoid"}
+REGIME_PARTICIPATION_POLICY_TIERS = {0.0, 0.25, 0.50, 1.0}
 WEIGHT_TOLERANCE = 1e-6
 INTERVAL_PERIODS_PER_YEAR = {
     "1d": 252.0,
@@ -69,12 +82,21 @@ class FeaturesConfig:
     crypto_bollinger_std: float = 2.0
     crypto_volume_window: int = 24
     crypto_time_features: bool = True
+    crypto_regime_features_enabled: bool = False
+    crypto_regime_trend_windows: list[int] = field(default_factory=lambda: [42, 126, 252])
+    crypto_regime_volatility_window: int = 42
+    crypto_regime_percentile_window: int = 252
+    crypto_regime_drawdown_window: int = 252
+    crypto_regime_volume_window: int = 42
 
 
 @dataclass(slots=True)
 class TargetConfig:
     horizon_days: int = 5
     type: str = "direction"
+    allocation_utility_drawdown_penalty: float = 0.50
+    allocation_utility_volatility_penalty: float = 0.25
+    allocation_utility_risk_penalty_power: float = 2.0
 
 
 @dataclass(slots=True)
@@ -197,6 +219,12 @@ class AllocationConfig:
 
 
 @dataclass(slots=True)
+class PartialAllocationBenchmarksConfig:
+    enabled: bool = False
+    weights: list[float] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class BlackLittermanViewConfig:
     name: str = ""
     weights: dict[str, float] = field(default_factory=dict)
@@ -234,6 +262,12 @@ class BaselinesConfig:
     pattern_partial_exposure_overlay: PatternPartialExposureOverlayConfig = field(
         default_factory=PatternPartialExposureOverlayConfig
     )
+    partial_allocation_benchmarks: PartialAllocationBenchmarksConfig = field(
+        default_factory=PartialAllocationBenchmarksConfig
+    )
+    rebalanced_partial_allocation_benchmarks: PartialAllocationBenchmarksConfig = field(
+        default_factory=PartialAllocationBenchmarksConfig
+    )
     allocation: AllocationConfig = field(default_factory=AllocationConfig)
     optimized: OptimizedConfig = field(default_factory=OptimizedConfig)
 
@@ -264,6 +298,23 @@ class MLStrategyThresholdSweepConfig:
 
 
 @dataclass(slots=True)
+class AllocationUtilityProfileConfig:
+    name: str = "default"
+    drawdown_penalty: float = 0.50
+    volatility_penalty: float = 0.25
+    risk_penalty_power: float = 2.0
+
+
+@dataclass(slots=True)
+class RegimeParticipationPolicyConfig:
+    name: str = "model_only"
+    bull_floor: float = 0.0
+    sideways_floor: float = 0.0
+    bear_floor: float = 0.0
+    risk_off_cap: float | None = 0.25
+
+
+@dataclass(slots=True)
 class MLStrategyTuningConfig:
     enabled: bool = False
     thresholds: list[float] = field(
@@ -272,8 +323,48 @@ class MLStrategyTuningConfig:
     validation_months: int = 3
     min_validation_rows: int = 200
     min_exposure_changes: int = 5
+    min_average_exposure_for_active: float = 0.0
     max_average_exposure_for_active: float = 0.995
     objective: str = "net_return_and_risk_vs_buy_hold"
+    selection_benchmark_strategies: list[str] = field(default_factory=list)
+    allocation_mode: str = "binary"
+    tier_thresholds: list[float] = field(default_factory=lambda: [0.50, 0.55, 0.62])
+    tier_threshold_sets: list[list[float]] = field(default_factory=list)
+    rolling_train_bars_grid: list[int] = field(default_factory=list)
+    min_holding_period_bars_grid: list[int] = field(default_factory=lambda: [0])
+    hysteresis_margin_grid: list[float] = field(default_factory=lambda: [0.0])
+    max_annualized_turnover: float | None = None
+    allocation_utility_profiles: list[AllocationUtilityProfileConfig] = field(default_factory=list)
+    regime_participation_policies: list[RegimeParticipationPolicyConfig] = field(
+        default_factory=lambda: [RegimeParticipationPolicyConfig()]
+    )
+    allocation_class_weighting: str = "none"
+    allocation_partial_class_weight_multiplier: float = 1.0
+    allocation_probability_calibration: str = "none"
+    allocation_calibration_cv: int = 3
+
+
+@dataclass(slots=True)
+class StrictResearchGateConfig:
+    enabled: bool = False
+    strategy_name: str = "ml_indicator_tuned__long_only__cash"
+    benchmark_strategy: str = "buy_hold"
+    required_benchmark_strategies: list[str] = field(default_factory=list)
+    cost_gate_bps: float = 35.0
+    acceptable_cost_bps: float = 50.0
+    min_positive_regime_slices: int = 3
+    min_average_exposure: float = 0.20
+    max_average_exposure: float = 0.85
+    min_selected_fold_fraction: float = 0.75
+    recent_window_months: int = 6
+    required_partial_target_weights: list[float] = field(default_factory=list)
+    min_partial_target_fraction: float = 0.05
+    min_partial_target_fold_fraction: float = 0.60
+    required_predicted_target_weights: list[float] = field(
+        default_factory=lambda: [0.25, 0.50]
+    )
+    min_predicted_target_fraction: float = 0.03
+    min_predicted_target_fold_fraction: float = 0.50
 
 
 @dataclass(slots=True)
@@ -283,6 +374,9 @@ class EvaluationConfig:
         default_factory=MLStrategyThresholdSweepConfig
     )
     ml_strategy_tuning: MLStrategyTuningConfig = field(default_factory=MLStrategyTuningConfig)
+    strict_research_gate: StrictResearchGateConfig = field(
+        default_factory=StrictResearchGateConfig
+    )
     benchmark_strategy: str = ""
     cost_sensitivity_bps: list[float] = field(default_factory=list)
     factor_model_path: str = ""
@@ -432,6 +526,10 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
 
     if config.baselines.allocation.group_weights is None:
         config.baselines.allocation.group_weights = {}
+    if config.baselines.partial_allocation_benchmarks.weights is None:
+        config.baselines.partial_allocation_benchmarks.weights = []
+    if config.baselines.rebalanced_partial_allocation_benchmarks.weights is None:
+        config.baselines.rebalanced_partial_allocation_benchmarks.weights = []
 
     if config.evaluation.cost_sensitivity_bps is None:
         config.evaluation.cost_sensitivity_bps = []
@@ -439,6 +537,44 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
         config.evaluation.ml_strategy_threshold_sweep.thresholds = []
     if config.evaluation.ml_strategy_tuning.thresholds is None:
         config.evaluation.ml_strategy_tuning.thresholds = []
+    if config.evaluation.ml_strategy_tuning.tier_thresholds is None:
+        config.evaluation.ml_strategy_tuning.tier_thresholds = []
+    if config.evaluation.ml_strategy_tuning.tier_threshold_sets is None:
+        config.evaluation.ml_strategy_tuning.tier_threshold_sets = []
+    if config.evaluation.ml_strategy_tuning.selection_benchmark_strategies is None:
+        config.evaluation.ml_strategy_tuning.selection_benchmark_strategies = []
+    if config.evaluation.ml_strategy_tuning.rolling_train_bars_grid is None:
+        config.evaluation.ml_strategy_tuning.rolling_train_bars_grid = []
+    if config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid is None:
+        config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid = [0]
+    if config.evaluation.ml_strategy_tuning.hysteresis_margin_grid is None:
+        config.evaluation.ml_strategy_tuning.hysteresis_margin_grid = [0.0]
+    if config.evaluation.ml_strategy_tuning.allocation_utility_profiles is None:
+        config.evaluation.ml_strategy_tuning.allocation_utility_profiles = []
+    else:
+        config.evaluation.ml_strategy_tuning.allocation_utility_profiles = [
+            profile
+            if isinstance(profile, AllocationUtilityProfileConfig)
+            else _section(AllocationUtilityProfileConfig, profile)
+            for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+        ]
+    if config.evaluation.ml_strategy_tuning.regime_participation_policies is None:
+        config.evaluation.ml_strategy_tuning.regime_participation_policies = [
+            RegimeParticipationPolicyConfig()
+        ]
+    else:
+        config.evaluation.ml_strategy_tuning.regime_participation_policies = [
+            policy
+            if isinstance(policy, RegimeParticipationPolicyConfig)
+            else _section(RegimeParticipationPolicyConfig, policy)
+            for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+        ] or [RegimeParticipationPolicyConfig()]
+    if config.evaluation.strict_research_gate.required_benchmark_strategies is None:
+        config.evaluation.strict_research_gate.required_benchmark_strategies = []
+    if config.evaluation.strict_research_gate.required_partial_target_weights is None:
+        config.evaluation.strict_research_gate.required_partial_target_weights = []
+    if config.evaluation.strict_research_gate.required_predicted_target_weights is None:
+        config.evaluation.strict_research_gate.required_predicted_target_weights = []
     if config.evaluation.factor_model_path is None:
         config.evaluation.factor_model_path = ""
     if config.evaluation.focus_start is None:
@@ -501,6 +637,42 @@ def _validate_positive_int_list(label: str, values: list[int]) -> None:
             raise ValueError(f"{label} must contain only positive integers.")
 
 
+def _validate_non_negative_int_list(label: str, values: list[int]) -> None:
+    for value in values:
+        if int(value) < 0:
+            raise ValueError(f"{label} must contain only non-negative integers.")
+
+
+def _validate_tier_thresholds(label: str, values: list[float]) -> None:
+    if len(values) != 3:
+        raise ValueError(f"{label} must contain exactly three thresholds.")
+    previous = -math.inf
+    for value in values:
+        if not math.isfinite(value) or value < 0.0 or value > 1.0:
+            raise ValueError(f"{label} must contain values between 0.0 and 1.0.")
+        if value < previous:
+            raise ValueError(f"{label} must be sorted in ascending order.")
+        previous = value
+
+
+def _validate_regime_policy_tier(label: str, value: float) -> float:
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label} must be one of: 0.0, 0.25, 0.5, 1.0."
+        ) from exc
+    if not math.isfinite(numeric_value) or not any(
+        abs(numeric_value - allowed) <= WEIGHT_TOLERANCE
+        for allowed in REGIME_PARTICIPATION_POLICY_TIERS
+    ):
+        raise ValueError(f"{label} must be one of: 0.0, 0.25, 0.5, 1.0.")
+    return min(
+        REGIME_PARTICIPATION_POLICY_TIERS,
+        key=lambda allowed: abs(numeric_value - allowed),
+    )
+
+
 def default_periods_per_year(interval: str) -> float:
     normalized = interval.lower()
     if normalized not in INTERVAL_PERIODS_PER_YEAR:
@@ -530,6 +702,38 @@ def _validate_clock_string(label: str, value: str) -> None:
 def _validate_config(config: ExperimentConfig) -> None:
     default_periods_per_year(config.data.interval)
 
+    if config.target.horizon_days < 1:
+        raise ValueError("target.horizon_days must be at least 1.")
+    if config.target.type not in TARGET_TYPES:
+        allowed = ", ".join(sorted(TARGET_TYPES))
+        raise ValueError(f"target.type must be one of: {allowed}.")
+    _validate_positive_float(
+        "target.allocation_utility_drawdown_penalty",
+        config.target.allocation_utility_drawdown_penalty,
+    )
+    _validate_positive_float(
+        "target.allocation_utility_volatility_penalty",
+        config.target.allocation_utility_volatility_penalty,
+    )
+    try:
+        allocation_utility_risk_penalty_power = float(
+            config.target.allocation_utility_risk_penalty_power
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "target.allocation_utility_risk_penalty_power must be a finite value greater than or equal to 1.0."
+        ) from exc
+    if (
+        not math.isfinite(allocation_utility_risk_penalty_power)
+        or allocation_utility_risk_penalty_power < 1.0
+    ):
+        raise ValueError(
+            "target.allocation_utility_risk_penalty_power must be a finite value greater than or equal to 1.0."
+        )
+    config.target.allocation_utility_risk_penalty_power = (
+        allocation_utility_risk_penalty_power
+    )
+
     features = config.features
     if features.crypto_time_series_enabled:
         _validate_positive_int_list("features.crypto_return_windows", features.crypto_return_windows)
@@ -554,6 +758,19 @@ def _validate_config(config: ExperimentConfig) -> None:
         )
         if features.crypto_volume_window < 1:
             raise ValueError("features.crypto_volume_window must be at least 1.")
+    if features.crypto_regime_features_enabled:
+        _validate_positive_int_list(
+            "features.crypto_regime_trend_windows",
+            features.crypto_regime_trend_windows,
+        )
+        if features.crypto_regime_volatility_window < 2:
+            raise ValueError("features.crypto_regime_volatility_window must be at least 2.")
+        if features.crypto_regime_percentile_window < 2:
+            raise ValueError("features.crypto_regime_percentile_window must be at least 2.")
+        if features.crypto_regime_drawdown_window < 2:
+            raise ValueError("features.crypto_regime_drawdown_window must be at least 2.")
+        if features.crypto_regime_volume_window < 2:
+            raise ValueError("features.crypto_regime_volume_window must be at least 2.")
 
     symbols = list(config.data.symbols)
     symbol_set = set(symbols)
@@ -609,6 +826,18 @@ def _validate_config(config: ExperimentConfig) -> None:
             raise ValueError(
                 "evaluation.ml_strategy_tuning.thresholds must contain values between 0.0 and 1.0."
             )
+    if ml_tuning.allocation_mode not in ML_STRATEGY_ALLOCATION_MODES:
+        allowed = ", ".join(sorted(ML_STRATEGY_ALLOCATION_MODES))
+        raise ValueError(f"evaluation.ml_strategy_tuning.allocation_mode must be one of: {allowed}")
+    _validate_tier_thresholds(
+        "evaluation.ml_strategy_tuning.tier_thresholds",
+        ml_tuning.tier_thresholds,
+    )
+    for index, threshold_set in enumerate(ml_tuning.tier_threshold_sets):
+        _validate_tier_thresholds(
+            f"evaluation.ml_strategy_tuning.tier_threshold_sets[{index}]",
+            threshold_set,
+        )
     if ml_tuning.validation_months < 1:
         raise ValueError("evaluation.ml_strategy_tuning.validation_months must be at least 1.")
     if ml_tuning.min_validation_rows < 1:
@@ -617,16 +846,227 @@ def _validate_config(config: ExperimentConfig) -> None:
         raise ValueError(
             "evaluation.ml_strategy_tuning.min_exposure_changes must be non-negative."
         )
+    min_exposure = ml_tuning.min_average_exposure_for_active
+    if not math.isfinite(min_exposure) or min_exposure < 0.0 or min_exposure > 1.0:
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.min_average_exposure_for_active must be between 0.0 and 1.0."
+        )
     max_exposure = ml_tuning.max_average_exposure_for_active
     if not math.isfinite(max_exposure) or max_exposure < 0.0 or max_exposure > 1.0:
         raise ValueError(
             "evaluation.ml_strategy_tuning.max_average_exposure_for_active must be between 0.0 and 1.0."
         )
-    if ml_tuning.objective != "net_return_and_risk_vs_buy_hold":
+    if min_exposure > max_exposure:
         raise ValueError(
-            "evaluation.ml_strategy_tuning.objective must be net_return_and_risk_vs_buy_hold."
+            "evaluation.ml_strategy_tuning.min_average_exposure_for_active must be less than or equal to max_average_exposure_for_active."
         )
+    _validate_positive_int_list(
+        "evaluation.ml_strategy_tuning.rolling_train_bars_grid",
+        ml_tuning.rolling_train_bars_grid,
+    )
+    _validate_non_negative_int_list(
+        "evaluation.ml_strategy_tuning.min_holding_period_bars_grid",
+        ml_tuning.min_holding_period_bars_grid,
+    )
+    for margin in ml_tuning.hysteresis_margin_grid:
+        if not math.isfinite(margin) or margin < 0.0 or margin > 0.25:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.hysteresis_margin_grid must contain values between 0.0 and 0.25."
+            )
+    if ml_tuning.max_annualized_turnover is not None and (
+        not math.isfinite(ml_tuning.max_annualized_turnover)
+        or ml_tuning.max_annualized_turnover <= 0.0
+    ):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.max_annualized_turnover must be a finite positive value."
+        )
+    if ml_tuning.objective not in ML_STRATEGY_TUNING_OBJECTIVES:
+        allowed = ", ".join(sorted(ML_STRATEGY_TUNING_OBJECTIVES))
+        raise ValueError(
+            f"evaluation.ml_strategy_tuning.objective must be one of: {allowed}."
+        )
+    seen_selection_benchmarks: set[str] = set()
+    for benchmark_strategy in ml_tuning.selection_benchmark_strategies:
+        benchmark_name = str(benchmark_strategy).strip()
+        if benchmark_name == "":
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_benchmark_strategies must not contain empty values."
+            )
+        if benchmark_name in seen_selection_benchmarks:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_benchmark_strategies must not contain duplicate values."
+            )
+        seen_selection_benchmarks.add(benchmark_name)
+    if (
+        ml_tuning.objective == "net_return_and_risk_vs_required_benchmarks"
+        and not ml_tuning.selection_benchmark_strategies
+    ):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.selection_benchmark_strategies must contain at least one strategy when objective is net_return_and_risk_vs_required_benchmarks."
+        )
+    seen_profile_names: set[str] = set()
+    for profile in ml_tuning.allocation_utility_profiles:
+        profile.name = str(profile.name).strip()
+        if profile.name == "":
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_utility_profiles names must be non-empty."
+            )
+        if profile.name in seen_profile_names:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_utility_profiles must not contain duplicate names."
+            )
+        seen_profile_names.add(profile.name)
+        _validate_positive_float(
+            f"evaluation.ml_strategy_tuning.allocation_utility_profiles[{profile.name}].drawdown_penalty",
+            profile.drawdown_penalty,
+        )
+        _validate_positive_float(
+            f"evaluation.ml_strategy_tuning.allocation_utility_profiles[{profile.name}].volatility_penalty",
+            profile.volatility_penalty,
+        )
+        try:
+            risk_penalty_power = float(profile.risk_penalty_power)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_utility_profiles risk_penalty_power must be a finite value greater than or equal to 1.0."
+            ) from exc
+        if not math.isfinite(risk_penalty_power) or risk_penalty_power < 1.0:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_utility_profiles risk_penalty_power must be a finite value greater than or equal to 1.0."
+            )
+        profile.risk_penalty_power = risk_penalty_power
+    seen_policy_names: set[str] = set()
+    for policy in ml_tuning.regime_participation_policies:
+        policy.name = str(policy.name).strip()
+        if policy.name == "":
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.regime_participation_policies names must be non-empty."
+            )
+        if policy.name in seen_policy_names:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.regime_participation_policies must not contain duplicate names."
+            )
+        seen_policy_names.add(policy.name)
+        policy.bull_floor = _validate_regime_policy_tier(
+            f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].bull_floor",
+            policy.bull_floor,
+        )
+        policy.sideways_floor = _validate_regime_policy_tier(
+            f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].sideways_floor",
+            policy.sideways_floor,
+        )
+        policy.bear_floor = _validate_regime_policy_tier(
+            f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].bear_floor",
+            policy.bear_floor,
+        )
+        if policy.risk_off_cap is not None:
+            policy.risk_off_cap = _validate_regime_policy_tier(
+                f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].risk_off_cap",
+                policy.risk_off_cap,
+            )
+    if ml_tuning.allocation_class_weighting not in ALLOCATION_CLASS_WEIGHTING_MODES:
+        allowed = ", ".join(sorted(ALLOCATION_CLASS_WEIGHTING_MODES))
+        raise ValueError(
+            f"evaluation.ml_strategy_tuning.allocation_class_weighting must be one of: {allowed}."
+        )
+    _validate_positive_float(
+        "evaluation.ml_strategy_tuning.allocation_partial_class_weight_multiplier",
+        ml_tuning.allocation_partial_class_weight_multiplier,
+    )
+    if ml_tuning.allocation_probability_calibration not in ALLOCATION_PROBABILITY_CALIBRATION_MODES:
+        allowed = ", ".join(sorted(ALLOCATION_PROBABILITY_CALIBRATION_MODES))
+        raise ValueError(
+            f"evaluation.ml_strategy_tuning.allocation_probability_calibration must be one of: {allowed}."
+        )
+    if int(ml_tuning.allocation_calibration_cv) < 2:
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.allocation_calibration_cv must be at least 2."
+        )
+    ml_tuning.allocation_calibration_cv = int(ml_tuning.allocation_calibration_cv)
     _validate_positive_float("evaluation.periods_per_year", config.evaluation.periods_per_year)
+    gate = config.evaluation.strict_research_gate
+    if gate.enabled:
+        if gate.strategy_name.strip() == "":
+            raise ValueError("evaluation.strict_research_gate.strategy_name must be non-empty.")
+        if gate.benchmark_strategy.strip() == "":
+            raise ValueError("evaluation.strict_research_gate.benchmark_strategy must be non-empty.")
+        for benchmark_strategy in gate.required_benchmark_strategies:
+            if str(benchmark_strategy).strip() == "":
+                raise ValueError(
+                    "evaluation.strict_research_gate.required_benchmark_strategies must not contain empty values."
+                )
+        if not math.isfinite(gate.cost_gate_bps) or gate.cost_gate_bps < 0.0:
+            raise ValueError("evaluation.strict_research_gate.cost_gate_bps must be non-negative.")
+        if not math.isfinite(gate.acceptable_cost_bps) or gate.acceptable_cost_bps < 0.0:
+            raise ValueError(
+                "evaluation.strict_research_gate.acceptable_cost_bps must be non-negative."
+            )
+        if gate.min_positive_regime_slices < 1:
+            raise ValueError(
+                "evaluation.strict_research_gate.min_positive_regime_slices must be at least 1."
+            )
+        _validate_cap(
+            "evaluation.strict_research_gate.min_average_exposure",
+            gate.min_average_exposure,
+        )
+        _validate_cap(
+            "evaluation.strict_research_gate.max_average_exposure",
+            gate.max_average_exposure,
+        )
+        if gate.min_average_exposure > gate.max_average_exposure:
+            raise ValueError(
+                "evaluation.strict_research_gate.min_average_exposure must be less than or equal to max_average_exposure."
+            )
+        if (
+            not math.isfinite(gate.min_selected_fold_fraction)
+            or gate.min_selected_fold_fraction < 0.0
+            or gate.min_selected_fold_fraction > 1.0
+        ):
+            raise ValueError(
+                "evaluation.strict_research_gate.min_selected_fold_fraction must be between 0.0 and 1.0."
+            )
+        if gate.recent_window_months < 1:
+            raise ValueError("evaluation.strict_research_gate.recent_window_months must be at least 1.")
+        seen_partial_target_weights: set[float] = set()
+        for target_weight in gate.required_partial_target_weights:
+            numeric_weight = float(target_weight)
+            if (
+                not math.isfinite(numeric_weight)
+                or numeric_weight <= 0.0
+                or numeric_weight >= 1.0
+            ):
+                raise ValueError(
+                    "evaluation.strict_research_gate.required_partial_target_weights must contain values greater than 0.0 and less than 1.0."
+                )
+            if numeric_weight in seen_partial_target_weights:
+                raise ValueError(
+                    "evaluation.strict_research_gate.required_partial_target_weights must not contain duplicate values."
+                )
+            seen_partial_target_weights.add(numeric_weight)
+        seen_predicted_target_weights: set[float] = set()
+        for target_weight in gate.required_predicted_target_weights:
+            numeric_weight = float(target_weight)
+            if (
+                not math.isfinite(numeric_weight)
+                or numeric_weight <= 0.0
+                or numeric_weight >= 1.0
+            ):
+                raise ValueError(
+                    "evaluation.strict_research_gate.required_predicted_target_weights must contain values greater than 0.0 and less than 1.0."
+                )
+            if numeric_weight in seen_predicted_target_weights:
+                raise ValueError(
+                    "evaluation.strict_research_gate.required_predicted_target_weights must not contain duplicate values."
+                )
+            seen_predicted_target_weights.add(numeric_weight)
+        for label, value in {
+            "evaluation.strict_research_gate.min_partial_target_fraction": gate.min_partial_target_fraction,
+            "evaluation.strict_research_gate.min_partial_target_fold_fraction": gate.min_partial_target_fold_fraction,
+            "evaluation.strict_research_gate.min_predicted_target_fraction": gate.min_predicted_target_fraction,
+            "evaluation.strict_research_gate.min_predicted_target_fold_fraction": gate.min_predicted_target_fold_fraction,
+        }.items():
+            if not math.isfinite(value) or value < 0.0 or value > 1.0:
+                raise ValueError(f"{label} must be between 0.0 and 1.0.")
     focus_start = _validate_optional_datetime(
         "evaluation.focus_start",
         config.evaluation.focus_start,
@@ -1020,6 +1460,36 @@ def _validate_config(config: ExperimentConfig) -> None:
                         f"baselines.pattern_partial_exposure_overlay.{grid_name} must contain values between 0.0 and 1.0."
                     )
 
+    for section_name, partial_benchmarks in {
+        "partial_allocation_benchmarks": config.baselines.partial_allocation_benchmarks,
+        "rebalanced_partial_allocation_benchmarks": config.baselines.rebalanced_partial_allocation_benchmarks,
+    }.items():
+        seen_partial_weights: set[float] = set()
+        for weight in partial_benchmarks.weights:
+            numeric_weight = float(weight)
+            if (
+                not math.isfinite(numeric_weight)
+                or numeric_weight <= 0.0
+                or numeric_weight >= 1.0
+            ):
+                raise ValueError(
+                    f"baselines.{section_name}.weights must contain values greater than 0.0 and less than 1.0."
+                )
+            if numeric_weight in seen_partial_weights:
+                raise ValueError(
+                    f"baselines.{section_name}.weights must not contain duplicate values."
+                )
+            seen_partial_weights.add(numeric_weight)
+        if partial_benchmarks.enabled:
+            if len(symbols) != 1:
+                raise ValueError(
+                    f"baselines.{section_name} requires exactly one data symbol."
+                )
+            if not partial_benchmarks.weights:
+                raise ValueError(
+                    f"baselines.{section_name}.weights must contain at least one value when enabled."
+                )
+
     if not allocation.enabled:
         return
 
@@ -1109,6 +1579,14 @@ def load_config(path: str | Path) -> ExperimentConfig:
                 PatternPartialExposureOverlayConfig,
                 baselines_payload.get("pattern_partial_exposure_overlay"),
             ),
+            partial_allocation_benchmarks=_section(
+                PartialAllocationBenchmarksConfig,
+                baselines_payload.get("partial_allocation_benchmarks"),
+            ),
+            rebalanced_partial_allocation_benchmarks=_section(
+                PartialAllocationBenchmarksConfig,
+                baselines_payload.get("rebalanced_partial_allocation_benchmarks"),
+            ),
             allocation=_section(
                 AllocationConfig,
                 baselines_payload.get("allocation"),
@@ -1131,6 +1609,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
             ml_strategy_tuning=_section(
                 MLStrategyTuningConfig,
                 evaluation_payload.get("ml_strategy_tuning"),
+            ),
+            strict_research_gate=_section(
+                StrictResearchGateConfig,
+                evaluation_payload.get("strict_research_gate"),
             ),
             benchmark_strategy=evaluation_payload.get("benchmark_strategy", ""),
             cost_sensitivity_bps=evaluation_payload.get("cost_sensitivity_bps", []),

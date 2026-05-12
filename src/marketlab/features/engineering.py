@@ -105,6 +105,89 @@ def _add_crypto_time_series_features(
     return featured
 
 
+def _rolling_last_percentile(values: pd.Series) -> float:
+    ranked = values.rank(pct=True)
+    if ranked.empty:
+        return float("nan")
+    return float(ranked.iloc[-1])
+
+
+def _add_crypto_regime_features(
+    featured: pd.DataFrame,
+    *,
+    trend_windows: list[int],
+    volatility_window: int,
+    percentile_window: int,
+    drawdown_window: int,
+    volume_window: int,
+) -> pd.DataFrame:
+    grouped = featured.groupby("symbol", group_keys=False)
+    grouped_close = grouped["adj_close"]
+    grouped_volume = grouped["volume"]
+    returns_1 = grouped_close.pct_change()
+
+    for window in sorted(set(trend_windows)):
+        moving_average = grouped_close.transform(
+            lambda series, window=window: series.rolling(window, min_periods=window).mean()
+        )
+        featured[f"crypto_regime_return_{window}"] = grouped_close.transform(
+            lambda series, window=window: series.pct_change(window)
+        )
+        featured[f"crypto_regime_price_to_ma_{window}"] = (
+            featured["adj_close"] / moving_average.replace(0.0, pd.NA)
+        )
+
+    realized_vol = returns_1.groupby(featured["symbol"]).transform(
+        lambda series: series.rolling(
+            volatility_window,
+            min_periods=volatility_window,
+        ).std(ddof=0)
+    )
+    featured[f"crypto_regime_realized_vol_{volatility_window}"] = realized_vol
+    featured[
+        f"crypto_regime_vol_percentile_{volatility_window}_{percentile_window}"
+    ] = realized_vol.groupby(featured["symbol"]).transform(
+        lambda series: series.rolling(
+            percentile_window,
+            min_periods=min(volatility_window, percentile_window),
+        ).apply(_rolling_last_percentile, raw=False)
+    )
+
+    rolling_high = grouped_close.transform(
+        lambda series: series.rolling(
+            drawdown_window,
+            min_periods=drawdown_window,
+        ).max()
+    )
+    featured[f"crypto_regime_drawdown_{drawdown_window}"] = (
+        featured["adj_close"] / rolling_high.replace(0.0, pd.NA)
+    ) - 1.0
+
+    volume_mean = grouped_volume.transform(
+        lambda series: series.rolling(volume_window, min_periods=volume_window).mean()
+    )
+    volume_std = grouped_volume.transform(
+        lambda series: series.rolling(volume_window, min_periods=volume_window).std(ddof=0)
+    )
+    featured[f"crypto_regime_volume_shock_{volume_window}"] = (
+        (featured["volume"] - volume_mean) / volume_std.replace(0.0, pd.NA)
+    )
+
+    max_trend_window = max(trend_windows) if trend_windows else 0
+    if max_trend_window:
+        trend_column = f"crypto_regime_price_to_ma_{max_trend_window}"
+        drawdown_column = f"crypto_regime_drawdown_{drawdown_window}"
+        vol_column = f"crypto_regime_vol_percentile_{volatility_window}_{percentile_window}"
+        featured["crypto_regime_trend_state"] = 0
+        featured.loc[featured[trend_column].ge(1.0), "crypto_regime_trend_state"] = 1
+        featured.loc[featured[trend_column].lt(1.0), "crypto_regime_trend_state"] = -1
+        featured["crypto_regime_risk_off"] = (
+            featured[drawdown_column].le(-0.20) | featured[vol_column].ge(0.90)
+        ).astype(int)
+
+    return featured
+
+
 def add_feature_set(
     panel: pd.DataFrame,
     return_windows: list[int],
@@ -124,6 +207,12 @@ def add_feature_set(
     crypto_bollinger_std: float = 2.0,
     crypto_volume_window: int = 24,
     crypto_time_features: bool = True,
+    crypto_regime_features_enabled: bool = False,
+    crypto_regime_trend_windows: list[int] | None = None,
+    crypto_regime_volatility_window: int = 42,
+    crypto_regime_percentile_window: int = 252,
+    crypto_regime_drawdown_window: int = 252,
+    crypto_regime_volume_window: int = 42,
 ) -> pd.DataFrame:
     featured = panel.sort_values(["symbol", "timestamp"]).copy()
     grouped_close = featured.groupby("symbol")["adj_close"]
@@ -168,5 +257,14 @@ def add_feature_set(
             bollinger_std=crypto_bollinger_std,
             volume_window=crypto_volume_window,
             time_features=crypto_time_features,
+        )
+    if crypto_regime_features_enabled:
+        featured = _add_crypto_regime_features(
+            featured,
+            trend_windows=crypto_regime_trend_windows or [],
+            volatility_window=crypto_regime_volatility_window,
+            percentile_window=crypto_regime_percentile_window,
+            drawdown_window=crypto_regime_drawdown_window,
+            volume_window=crypto_regime_volume_window,
         )
     return featured

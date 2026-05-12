@@ -634,29 +634,63 @@ def _ml_strategy_tuning_lines(
         selection_columns = [
             "fold_id",
             "selection_status",
+            "allocation_mode",
             "selected_model_name",
+            "selected_rolling_train_bars",
+            "selected_min_holding_period_bars",
+            "selected_hysteresis_margin",
+            "selected_regime_policy",
+            "selected_regime_bull_floor",
+            "selected_regime_sideways_floor",
+            "selected_regime_bear_floor",
+            "selected_regime_risk_off_cap",
             "selected_threshold",
+            "selected_tier_min_threshold",
+            "selected_tier_half_threshold",
+            "selected_tier_full_threshold",
             "passed_gate",
             "excess_cumulative_return",
+            "min_benchmark_excess_cumulative_return",
             "sharpe_like_delta",
             "drawdown_delta",
+            "annualized_turnover",
             "exposure_changes",
             "average_exposure",
         ]
-        lines.append(_markdown_table(_display_frame(tuning_selections.loc[:, selection_columns])))
+        available_selection_columns = [
+            column for column in selection_columns if column in tuning_selections.columns
+        ]
+        lines.append(
+            _markdown_table(_display_frame(tuning_selections.loc[:, available_selection_columns]))
+        )
 
     if tuning_candidates is not None and not tuning_candidates.empty:
         candidate_columns = [
             "fold_id",
             "model_name",
+            "allocation_mode",
+            "rolling_train_bars",
+            "min_holding_period_bars",
+            "hysteresis_margin",
+            "regime_policy",
+            "regime_bull_floor",
+            "regime_sideways_floor",
+            "regime_bear_floor",
+            "regime_risk_off_cap",
             "threshold",
+            "tier_min_threshold",
+            "tier_half_threshold",
+            "tier_full_threshold",
             "cumulative_return",
             "max_drawdown",
             "sharpe_like",
+            "annualized_turnover",
             "excess_cumulative_return",
+            "min_benchmark_excess_cumulative_return",
             "sharpe_like_delta",
             "drawdown_delta",
             "active_candidate",
+            "failure_reasons",
             "passed_gate",
         ]
         lines.extend(
@@ -664,7 +698,12 @@ def _ml_strategy_tuning_lines(
                 "",
                 "Top validation candidates:",
                 _markdown_table(
-                    _display_frame(tuning_candidates.loc[:, candidate_columns].head(20))
+                    _display_frame(
+                        tuning_candidates.loc[
+                            :,
+                            [column for column in candidate_columns if column in tuning_candidates.columns],
+                        ].head(20)
+                    )
                 ),
             ]
         )
@@ -673,8 +712,9 @@ def _ml_strategy_tuning_lines(
         [
             "",
             "- Candidate selection uses only the validation tail inside each outer training fold.",
-            "- Selected models are refit on the full outer training fold before scoring the outer test fold.",
-            "- The pass gate requires net excess return and either Sharpe-like or drawdown improvement versus `buy_hold` after costs.",
+            "- Rolling train candidates use only the latest configured bars inside the label-safe training slice.",
+            "- Selected models are refit on the selected rolling training window before scoring the outer test fold.",
+            "- The pass gate requires net excess return versus the configured selection benchmarks, activity guardrails, risk improvement, and any configured turnover budget after costs.",
         ]
     )
     for artifact_path, label in [
@@ -683,6 +723,261 @@ def _ml_strategy_tuning_lines(
     ]:
         if artifact_path is not None:
             lines.append(_relative_artifact_line(report_path, artifact_path, label))
+    return lines
+
+
+def _allocation_utility_lines(
+    *,
+    config: ExperimentConfig,
+    allocation_target_diagnostics: pd.DataFrame | None,
+    allocation_probability_diagnostics: pd.DataFrame | None,
+    feature_importance: pd.DataFrame | None,
+    report_path: Path,
+    allocation_target_diagnostics_path: Path | None,
+    allocation_probability_diagnostics_path: Path | None,
+    feature_importance_path: Path | None,
+) -> list[str]:
+    if (
+        allocation_target_diagnostics is None
+        and allocation_probability_diagnostics is None
+        and feature_importance is None
+        and allocation_target_diagnostics_path is None
+        and allocation_probability_diagnostics_path is None
+        and feature_importance_path is None
+    ):
+        return []
+
+    lines: list[str] = []
+    if allocation_target_diagnostics is not None and not allocation_target_diagnostics.empty:
+        target_columns = [
+            "fold_id",
+            "scope",
+            "regime",
+            "target",
+            "target_weight",
+            "row_count",
+            "row_fraction",
+            "avg_forward_return",
+            "avg_forward_drawdown",
+            "avg_forward_realized_volatility",
+        ]
+        lines.extend(
+            [
+                "Allocation-utility target distribution:",
+                "",
+                _markdown_table(
+                    _display_frame(
+                        allocation_target_diagnostics.loc[
+                            :,
+                            [
+                                column
+                                for column in target_columns
+                                if column in allocation_target_diagnostics.columns
+                            ],
+                        ].head(30)
+                    )
+                ),
+            ]
+        )
+
+    if (
+        allocation_probability_diagnostics is not None
+        and not allocation_probability_diagnostics.empty
+    ):
+        probability_aggregations = {
+            "avg_expected_allocation": ("score", "mean"),
+            "avg_predicted_weight": ("predicted_weight", "mean"),
+            "avg_target_weight": ("target_weight", "mean"),
+            "avg_realized_utility": ("realized_utility", "mean"),
+            "avg_forward_return": ("forward_return", "mean"),
+        }
+        if "predicted_tier_weight" in allocation_probability_diagnostics.columns:
+            probability_aggregations["avg_predicted_tier_weight"] = (
+                "predicted_tier_weight",
+                "mean",
+            )
+        for column in ["fold_predicted_25_fraction", "fold_predicted_50_fraction"]:
+            if column in allocation_probability_diagnostics.columns:
+                probability_aggregations[column] = (column, "max")
+        if "utility_profile" in allocation_probability_diagnostics.columns:
+            probability_aggregations["selected_utility_profile"] = (
+                "utility_profile",
+                "first",
+            )
+        if "calibration_status" in allocation_probability_diagnostics.columns:
+            probability_aggregations["calibration_status"] = (
+                "calibration_status",
+                "first",
+            )
+        probability_summary = (
+            allocation_probability_diagnostics.groupby("fold_id", as_index=False)
+            .agg(**probability_aggregations)
+            .sort_values("fold_id")
+            .reset_index(drop=True)
+        )
+        if lines:
+            lines.append("")
+        lines.extend(
+            [
+                "Selected-fold allocation probability summary:",
+                "",
+                _markdown_table(_display_frame(probability_summary)),
+            ]
+        )
+
+    if feature_importance is not None and not feature_importance.empty:
+        display_columns = [
+            "fold_id",
+            "model_name",
+            "feature",
+            "importance_type",
+            "importance",
+            "signed_coefficient",
+        ]
+        if lines:
+            lines.append("")
+        lines.extend(
+            [
+                "Top selected-model features:",
+                "",
+                _markdown_table(
+                    _display_frame(
+                        feature_importance.loc[
+                            :,
+                            [
+                                column
+                                for column in display_columns
+                                if column in feature_importance.columns
+                            ],
+                        ].head(30)
+                    )
+                ),
+            ]
+        )
+
+    if not lines:
+        lines.append("Allocation-utility diagnostics were written as empty artifacts.")
+    lines.extend(
+        [
+            "",
+            f"- `{config.target.type}` models predict an allocation-oriented label, then produce an expected BTC allocation score.",
+            f"- Utility risk penalties use `weight^{config.target.allocation_utility_risk_penalty_power:g}` so partial tiers can win when risk-adjusted utility is highest.",
+            f"- Target-support gate requires {', '.join(str(value) for value in config.evaluation.strict_research_gate.required_partial_target_weights) or 'no configured partial tiers'} at global fraction >= {config.evaluation.strict_research_gate.min_partial_target_fraction:g} and train/validation fold fraction >= {config.evaluation.strict_research_gate.min_partial_target_fold_fraction:g}.",
+            f"- Predicted-support gate requires {', '.join(str(value) for value in config.evaluation.strict_research_gate.required_predicted_target_weights) or 'no configured partial tiers'} at OOS fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fraction:g} and selected-fold fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fold_fraction:g}.",
+            f"- Candidate training uses `{config.evaluation.ml_strategy_tuning.allocation_class_weighting}` class weighting and `{config.evaluation.ml_strategy_tuning.allocation_probability_calibration}` probability calibration when training-slice support allows it.",
+            "- The trading score is expected allocation: `sum(prob_tier * tier_weight)`.",
+            "- Direct-tier allocation still applies risk-off caps, minimum holding periods, hysteresis, costs, and the strict gate.",
+            "- `regime_state` maps utility tiers into `risk_off`, `reduced`, and `risk_on` states before converting state probabilities back into expected allocation.",
+        ]
+    )
+    for artifact_path, label in [
+        (allocation_target_diagnostics_path, "Allocation target diagnostics"),
+        (allocation_probability_diagnostics_path, "Allocation probability diagnostics"),
+        (feature_importance_path, "Feature importance"),
+    ]:
+        if artifact_path is not None:
+            lines.append(_relative_artifact_line(report_path, artifact_path, label))
+    return lines
+
+
+def _strict_research_gate_lines(
+    strict_research_gate: pd.DataFrame | None,
+    regime_slice_diagnostics: pd.DataFrame | None,
+    report_path: Path,
+    strict_research_gate_path: Path | None,
+    regime_slice_diagnostics_path: Path | None,
+) -> list[str]:
+    if (
+        (strict_research_gate is None or strict_research_gate.empty)
+        and (regime_slice_diagnostics is None or regime_slice_diagnostics.empty)
+        and strict_research_gate_path is None
+        and regime_slice_diagnostics_path is None
+    ):
+        return []
+
+    lines: list[str] = []
+    if strict_research_gate is not None and not strict_research_gate.empty:
+        lines.append(_markdown_table(_display_frame(strict_research_gate)))
+    if regime_slice_diagnostics is not None and not regime_slice_diagnostics.empty:
+        display_columns = [
+            "slice_name",
+            "periods",
+            "cumulative_return",
+            "benchmark_cumulative_return",
+            "active_return",
+            "sharpe_like",
+            "benchmark_sharpe_like",
+            "max_drawdown",
+            "benchmark_max_drawdown",
+        ]
+        lines.extend(
+            [
+                "",
+                "Regime slices:",
+                _markdown_table(
+                    _display_frame(
+                        regime_slice_diagnostics.loc[
+                            :,
+                            [
+                                column
+                                for column in display_columns
+                                if column in regime_slice_diagnostics.columns
+                            ],
+                        ]
+                    )
+                ),
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "- Phase 9 remains blocked unless the overall strict research gate passes.",
+            "- The gate is evaluated after configured costs and includes regime-slice active return checks.",
+        ]
+    )
+    for artifact_path, label in [
+        (strict_research_gate_path, "Strict research gate"),
+        (regime_slice_diagnostics_path, "Regime slice diagnostics"),
+    ]:
+        if artifact_path is not None:
+            lines.append(_relative_artifact_line(report_path, artifact_path, label))
+    return lines
+
+
+def _phase8_run_summary_lines(
+    phase8_run_summary: pd.DataFrame | None,
+    report_path: Path,
+    phase8_run_summary_path: Path | None,
+) -> list[str]:
+    if phase8_run_summary is None or phase8_run_summary.empty:
+        return []
+
+    display_columns = ["section", "metric", "value", "detail"]
+    lines = [
+        _markdown_table(
+            _display_frame(
+                phase8_run_summary.loc[
+                    :,
+                    [
+                        column
+                        for column in display_columns
+                        if column in phase8_run_summary.columns
+                    ],
+                ].head(80)
+            )
+        ),
+        "",
+        "- This section is rebuilt from persisted run CSVs and is deterministic for a given run directory.",
+        "- Candidate rejection reasons are counted from validation candidates only; outer OOS folds remain evaluation-only.",
+    ]
+    if phase8_run_summary_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                phase8_run_summary_path,
+                "Phase 8 run summary",
+            )
+        )
     return lines
 
 
@@ -853,6 +1148,12 @@ def write_markdown_report(
     ml_strategy_threshold_sweep: pd.DataFrame | None = None,
     ml_strategy_tuning_candidates: pd.DataFrame | None = None,
     ml_strategy_tuning_selections: pd.DataFrame | None = None,
+    allocation_target_diagnostics: pd.DataFrame | None = None,
+    allocation_probability_diagnostics: pd.DataFrame | None = None,
+    feature_importance: pd.DataFrame | None = None,
+    regime_slice_diagnostics: pd.DataFrame | None = None,
+    strict_research_gate: pd.DataFrame | None = None,
+    phase8_run_summary: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     calibration_curves_plot_path: Path | None = None,
@@ -880,6 +1181,12 @@ def write_markdown_report(
     ml_strategy_threshold_sweep_path: Path | None = None,
     ml_strategy_tuning_candidates_path: Path | None = None,
     ml_strategy_tuning_selections_path: Path | None = None,
+    allocation_target_diagnostics_path: Path | None = None,
+    allocation_probability_diagnostics_path: Path | None = None,
+    feature_importance_path: Path | None = None,
+    regime_slice_diagnostics_path: Path | None = None,
+    strict_research_gate_path: Path | None = None,
+    phase8_run_summary_path: Path | None = None,
     pattern_price_overlay_plot_path: Path | None = None,
     pattern_detections_plot_path: Path | None = None,
     pattern_detection_windows_plot_path: Path | None = None,
@@ -1010,6 +1317,39 @@ def write_markdown_report(
     )
     if ml_tuning_lines:
         content_lines.extend(_section("ML Strategy Tuning", ml_tuning_lines))
+
+    allocation_utility_lines = _allocation_utility_lines(
+        config=config,
+        allocation_target_diagnostics=allocation_target_diagnostics,
+        allocation_probability_diagnostics=allocation_probability_diagnostics,
+        feature_importance=feature_importance,
+        report_path=output_path,
+        allocation_target_diagnostics_path=allocation_target_diagnostics_path,
+        allocation_probability_diagnostics_path=allocation_probability_diagnostics_path,
+        feature_importance_path=feature_importance_path,
+    )
+    if allocation_utility_lines:
+        content_lines.extend(
+            _section("Allocation Utility Diagnostics", allocation_utility_lines)
+        )
+
+    strict_gate_lines = _strict_research_gate_lines(
+        strict_research_gate,
+        regime_slice_diagnostics,
+        output_path,
+        strict_research_gate_path,
+        regime_slice_diagnostics_path,
+    )
+    if strict_gate_lines:
+        content_lines.extend(_section("BTC Strict Research Gate", strict_gate_lines))
+
+    phase8_run_summary_lines = _phase8_run_summary_lines(
+        phase8_run_summary,
+        output_path,
+        phase8_run_summary_path,
+    )
+    if phase8_run_summary_lines:
+        content_lines.extend(_section("Phase 8 Run Summary", phase8_run_summary_lines))
 
     signal_inspection_lines = _signal_inspection_lines(
         config,

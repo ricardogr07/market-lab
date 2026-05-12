@@ -15,6 +15,18 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+ALLOCATION_UTILITY_CLASS_WEIGHTS = {
+    0: 0.0,
+    1: 0.25,
+    2: 0.50,
+    3: 1.0,
+}
+REGIME_STATE_CLASS_WEIGHTS = {
+    0: 0.0,
+    1: 0.50,
+    2: 1.0,
+}
+
 
 @dataclass(slots=True, frozen=True)
 class ModelDefinition:
@@ -41,6 +53,18 @@ def _logistic_l1() -> ClassifierMixin:
             penalty="l1",
             solver="liblinear",
             max_iter=1000,
+            random_state=7,
+        ),
+    )
+
+
+def _logistic_l1_multiclass() -> ClassifierMixin:
+    return make_pipeline(
+        StandardScaler(),
+        LogisticRegression(
+            penalty="l1",
+            solver="saga",
+            max_iter=2000,
             random_state=7,
         ),
     )
@@ -114,9 +138,10 @@ def build_model_estimator(
     model_name: str,
     target_type: str,
 ) -> tuple[ModelDefinition, ClassifierMixin]:
-    if target_type != "direction":
+    if target_type not in {"allocation_utility", "direction", "regime_state"}:
         raise ValueError(
-            "train-models currently supports target.type='direction' only."
+            "train-models currently supports target.type='direction', "
+            "'allocation_utility', or 'regime_state' only."
         )
 
     try:
@@ -127,6 +152,8 @@ def build_model_estimator(
             f"Unsupported model '{model_name}'. Supported models: {supported}"
         ) from exc
 
+    if target_type in {"allocation_utility", "regime_state"} and model_name == "logistic_l1":
+        return definition, _logistic_l1_multiclass()
     return definition, definition.builder()
 
 
@@ -142,3 +169,53 @@ def predict_direction_scores(
         raise ValueError("Direction model predict_proba() must include two classes.")
 
     return pd.Series(probabilities[:, 1], index=features.index, dtype=float, name="score")
+
+
+def predict_allocation_utility_scores(
+    estimator: ClassifierMixin,
+    features: pd.DataFrame,
+    *,
+    class_weight_map: dict[int, float] | None = None,
+) -> tuple[pd.Series, pd.DataFrame]:
+    if not hasattr(estimator, "predict_proba"):
+        raise TypeError("Allocation utility models must expose predict_proba().")
+    if not hasattr(estimator, "classes_"):
+        raise TypeError("Allocation utility models must expose fitted classes_.")
+
+    probabilities = estimator.predict_proba(features)
+    classes = [int(value) for value in estimator.classes_]
+    weights = class_weight_map or ALLOCATION_UTILITY_CLASS_WEIGHTS
+    probability_frame = pd.DataFrame(index=features.index)
+    expected_allocation = pd.Series(0.0, index=features.index, dtype=float)
+    for class_index, class_label in enumerate(classes):
+        tier_weight = weights.get(class_label, 0.0)
+        class_probabilities = pd.Series(
+            probabilities[:, class_index],
+            index=features.index,
+            dtype=float,
+        )
+        expected_allocation = expected_allocation.add(class_probabilities * tier_weight)
+        suffix = str(int(tier_weight * 100))
+        probability_frame[f"prob_tier_{suffix}"] = class_probabilities
+
+    for tier_weight in ALLOCATION_UTILITY_CLASS_WEIGHTS.values():
+        suffix = str(int(tier_weight * 100))
+        column = f"prob_tier_{suffix}"
+        if column not in probability_frame.columns:
+            probability_frame[column] = 0.0
+
+    probability_frame = probability_frame[
+        ["prob_tier_0", "prob_tier_25", "prob_tier_50", "prob_tier_100"]
+    ]
+    return expected_allocation.rename("score"), probability_frame
+
+
+def predict_regime_state_scores(
+    estimator: ClassifierMixin,
+    features: pd.DataFrame,
+) -> tuple[pd.Series, pd.DataFrame]:
+    return predict_allocation_utility_scores(
+        estimator,
+        features,
+        class_weight_map=REGIME_STATE_CLASS_WEIGHTS,
+    )
