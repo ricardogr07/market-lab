@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 
 from marketlab.backtest.engine import (
     BacktestResult,
@@ -13,7 +16,11 @@ from marketlab.backtest.engine import (
     run_backtest_detailed,
 )
 from marketlab.backtest.metrics import compute_strategy_metrics
-from marketlab.config import ExperimentConfig
+from marketlab.config import (
+    AllocationUtilityProfileConfig,
+    ExperimentConfig,
+    RegimeParticipationPolicyConfig,
+)
 from marketlab.data.market import load_symbol_frames
 from marketlab.data.panel import build_market_panel, load_panel_csv, save_panel_csv
 from marketlab.evaluation import (
@@ -24,7 +31,12 @@ from marketlab.evaluation import (
 from marketlab.evaluation.walk_forward import build_walk_forward_diagnostics
 from marketlab.features.engineering import add_feature_set
 from marketlab.models import train_direction_models_on_folds
-from marketlab.models.registry import build_model_estimator, predict_direction_scores
+from marketlab.models.registry import (
+    build_model_estimator,
+    predict_allocation_utility_scores,
+    predict_direction_scores,
+    predict_regime_state_scores,
+)
 from marketlab.models.training import modeling_feature_columns
 from marketlab.rebalance import next_rebalance_effective_date
 from marketlab.reports.analytics import (
@@ -37,6 +49,7 @@ from marketlab.reports.analytics import (
     build_turnover_costs,
 )
 from marketlab.reports.markdown import write_markdown_report
+from marketlab.reports.phase8_summary import build_phase8_run_summary
 from marketlab.reports.plots import (
     plot_calibration_curves,
     plot_cumulative_returns,
@@ -101,8 +114,27 @@ from marketlab.strategies.pattern_partial_exposure import (
     generate_weights as pattern_partial_exposure_weights,
 )
 from marketlab.strategies.ranking import generate_weights as ranking_weights
+from marketlab.strategies.rebalanced_partial import (
+    generate_weights as rebalanced_partial_weights,
+)
+from marketlab.strategies.rebalanced_partial import (
+    strategy_name_for_weight as rebalanced_partial_strategy_name_for_weight,
+)
 from marketlab.strategies.sma import generate_weights as sma_weights
-from marketlab.targets import build_modeling_dataset
+from marketlab.strategies.static_partial import (
+    generate_weights as static_partial_weights,
+)
+from marketlab.strategies.static_partial import (
+    strategy_name_for_weight as static_partial_strategy_name_for_weight,
+)
+from marketlab.strategies.tiered_allocation import (
+    RegimeParticipationPolicy,
+    nearest_tier,
+)
+from marketlab.strategies.tiered_allocation import (
+    generate_weights as tiered_allocation_weights,
+)
+from marketlab.targets import apply_allocation_utility_profile, build_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
 ML_TUNED_STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
@@ -155,6 +187,12 @@ class ExperimentArtifacts:
     ml_strategy_threshold_sweep_path: Path | None = None
     ml_strategy_tuning_candidates_path: Path | None = None
     ml_strategy_tuning_selections_path: Path | None = None
+    allocation_target_diagnostics_path: Path | None = None
+    allocation_probability_diagnostics_path: Path | None = None
+    feature_importance_path: Path | None = None
+    regime_slice_diagnostics_path: Path | None = None
+    strict_research_gate_path: Path | None = None
+    phase8_run_summary_path: Path | None = None
     pattern_price_overlay_plot_path: Path | None = None
     pattern_detections_plot_path: Path | None = None
     pattern_detection_windows_plot_path: Path | None = None
@@ -179,6 +217,13 @@ class TrainModelsArtifacts:
     threshold_sweeps_plot_path: Path | None
     fold_summary_path: Path
     model_summary_path: Path
+
+
+@dataclass(slots=True)
+class ModelScoreOutput:
+    predictions: pd.DataFrame
+    feature_importance: pd.DataFrame
+    calibration_status: str = "not_applicable"
 
 
 def _concat_backtest_results(results: list[BacktestResult]) -> BacktestResult:
@@ -344,6 +389,551 @@ def _filter_focus_frame(
     return frame.loc[mask].copy()
 
 
+def _last_percentile(values: pd.Series) -> float:
+    if values.empty:
+        return float("nan")
+    return float(values.rank(pct=True).iloc[-1])
+
+
+def _btc_regime_masks(panel: pd.DataFrame, config: ExperimentConfig) -> dict[str, pd.Index]:
+    if panel.empty:
+        return {}
+    working = (
+        panel.sort_values(["symbol", "timestamp"])
+        .drop_duplicates(["timestamp"])
+        .assign(timestamp=lambda frame: pd.to_datetime(frame["timestamp"]))
+        .reset_index(drop=True)
+    )
+    close = working["adj_close"].astype(float)
+    returns = close.pct_change()
+    trend_window = max(config.features.crypto_regime_trend_windows or [180])
+    vol_window = config.features.crypto_regime_volatility_window
+    pct_window = config.features.crypto_regime_percentile_window
+    drawdown_window = config.features.crypto_regime_drawdown_window
+
+    moving_average = close.rolling(trend_window, min_periods=trend_window).mean()
+    trend_return = close.pct_change(trend_window)
+    rolling_high = close.rolling(drawdown_window, min_periods=drawdown_window).max()
+    drawdown = (close / rolling_high.replace(0.0, pd.NA)) - 1.0
+    realized_vol = returns.rolling(vol_window, min_periods=vol_window).std(ddof=0)
+    vol_percentile = realized_vol.rolling(
+        pct_window,
+        min_periods=min(vol_window, pct_window),
+    ).apply(_last_percentile, raw=False)
+
+    dates = pd.Index(working["timestamp"])
+    bull = close.ge(moving_average) & trend_return.gt(0.0)
+    bear = close.lt(moving_average) & (trend_return.lt(0.0) | drawdown.le(-0.20))
+    high_volatility = vol_percentile.ge(0.80)
+    sideways = ~(bull.fillna(False) | bear.fillna(False))
+    last_date = pd.Timestamp(dates.max())
+    recent_start = last_date - pd.DateOffset(
+        months=config.evaluation.strict_research_gate.recent_window_months
+    )
+
+    return {
+        "bull": dates[bull.fillna(False).to_numpy()],
+        "bear": dates[bear.fillna(False).to_numpy()],
+        "sideways": dates[sideways.fillna(False).to_numpy()],
+        "high_volatility": dates[high_volatility.fillna(False).to_numpy()],
+        "recent": dates[dates >= recent_start],
+    }
+
+
+def _regime_slice_diagnostics(
+    *,
+    config: ExperimentConfig,
+    panel: pd.DataFrame,
+    performance: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "slice_name",
+        "strategy",
+        "benchmark_strategy",
+        "start_date",
+        "end_date",
+        "periods",
+        "cumulative_return",
+        "benchmark_cumulative_return",
+        "active_return",
+        "sharpe_like",
+        "benchmark_sharpe_like",
+        "max_drawdown",
+        "benchmark_max_drawdown",
+    ]
+    gate = config.evaluation.strict_research_gate
+    if not gate.enabled:
+        return pd.DataFrame(columns=columns)
+    strategies = set(performance["strategy"].astype(str).unique())
+    if gate.strategy_name not in strategies or gate.benchmark_strategy not in strategies:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for slice_name, dates in _btc_regime_masks(panel, config).items():
+        if len(dates) == 0:
+            continue
+        slice_performance = performance.loc[
+            performance["strategy"].astype(str).isin(
+                {gate.strategy_name, gate.benchmark_strategy}
+            )
+            & pd.to_datetime(performance["date"]).isin(dates)
+        ].copy()
+        if slice_performance.empty:
+            continue
+        metrics = compute_strategy_metrics(
+            _slice_and_rebase_performance(slice_performance, pd.Index(dates)),
+            periods_per_year=config.evaluation.periods_per_year,
+        )
+        strategy_rows = metrics.loc[metrics["strategy"].astype(str) == gate.strategy_name]
+        benchmark_rows = metrics.loc[
+            metrics["strategy"].astype(str) == gate.benchmark_strategy
+        ]
+        if strategy_rows.empty or benchmark_rows.empty:
+            continue
+        strategy_row = strategy_rows.iloc[0]
+        benchmark_row = benchmark_rows.iloc[0]
+        slice_dates = pd.to_datetime(slice_performance["date"])
+        rows.append(
+            {
+                "slice_name": slice_name,
+                "strategy": gate.strategy_name,
+                "benchmark_strategy": gate.benchmark_strategy,
+                "start_date": slice_dates.min(),
+                "end_date": slice_dates.max(),
+                "periods": int(slice_dates.nunique()),
+                "cumulative_return": strategy_row["cumulative_return"],
+                "benchmark_cumulative_return": benchmark_row["cumulative_return"],
+                "active_return": float(strategy_row["cumulative_return"])
+                - float(benchmark_row["cumulative_return"]),
+                "sharpe_like": strategy_row["sharpe_like"],
+                "benchmark_sharpe_like": benchmark_row["sharpe_like"],
+                "max_drawdown": strategy_row["max_drawdown"],
+                "benchmark_max_drawdown": benchmark_row["max_drawdown"],
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _gate_benchmark_strategies(config: ExperimentConfig) -> list[str]:
+    gate = config.evaluation.strict_research_gate
+    benchmark_names = [
+        gate.benchmark_strategy,
+        *[str(value) for value in gate.required_benchmark_strategies],
+    ]
+    return list(dict.fromkeys(name for name in benchmark_names if name.strip()))
+
+
+def _selection_benchmark_strategies(config: ExperimentConfig) -> list[str]:
+    tuning = config.evaluation.ml_strategy_tuning
+    if tuning.objective == "net_return_and_risk_vs_required_benchmarks":
+        benchmark_names = [str(value) for value in tuning.selection_benchmark_strategies]
+    else:
+        benchmark_names = ["buy_hold"]
+    return list(dict.fromkeys(name for name in benchmark_names if name.strip()))
+
+
+def _condition_suffix(strategy_name: str) -> str:
+    return (
+        str(strategy_name)
+        .strip()
+        .lower()
+        .replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+def _strict_research_gate(
+    *,
+    config: ExperimentConfig,
+    strategy_summary: pd.DataFrame,
+    cost_sensitivity: pd.DataFrame,
+    regime_slices: pd.DataFrame,
+    ml_strategy_tuning_selections: pd.DataFrame | None,
+    allocation_target_diagnostics: pd.DataFrame | None = None,
+    allocation_probability_diagnostics: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    columns = ["condition", "passed", "observed", "required"]
+    gate = config.evaluation.strict_research_gate
+    if not gate.enabled:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+
+    def _add(condition: str, passed: bool, observed: object, required: object) -> None:
+        rows.append(
+            {
+                "condition": condition,
+                "passed": bool(passed),
+                "observed": observed,
+                "required": required,
+            }
+        )
+
+    def _finish() -> pd.DataFrame:
+        output = pd.DataFrame(rows, columns=columns)
+        output.loc[len(output)] = {
+            "condition": "overall",
+            "passed": bool(output["passed"].all()) if not output.empty else False,
+            "observed": "",
+            "required": "all conditions pass",
+        }
+        return output
+
+    strategy_rows = strategy_summary.loc[
+        strategy_summary["strategy"].astype(str) == gate.strategy_name
+    ]
+    available_strategies = sorted(strategy_summary["strategy"].astype(str).unique())
+    if strategy_rows.empty:
+        _add(
+            "required_strategy_present",
+            False,
+            ", ".join(available_strategies),
+            gate.strategy_name,
+        )
+        return _finish()
+    strategy_row = strategy_rows.iloc[0]
+
+    required_benchmarks = _gate_benchmark_strategies(config)
+    missing_benchmarks = [
+        name for name in required_benchmarks if name not in set(available_strategies)
+    ]
+    _add(
+        "required_benchmark_strategies_present",
+        not missing_benchmarks,
+        ", ".join(missing_benchmarks) if missing_benchmarks else "present",
+        ", ".join(required_benchmarks),
+    )
+
+    primary_benchmark_rows = strategy_summary.loc[
+        strategy_summary["strategy"].astype(str) == gate.benchmark_strategy
+    ]
+    if primary_benchmark_rows.empty:
+        _add(
+            f"primary_benchmark_present_{_condition_suffix(gate.benchmark_strategy)}",
+            False,
+            ", ".join(available_strategies),
+            gate.benchmark_strategy,
+        )
+    else:
+        benchmark_row = primary_benchmark_rows.iloc[0]
+        sharpe_delta = float(strategy_row["sharpe_like"]) - float(
+            benchmark_row["sharpe_like"]
+        )
+        drawdown_delta = float(strategy_row["max_drawdown"]) - float(
+            benchmark_row["max_drawdown"]
+        )
+        _add("sharpe_like_matches_or_improves", sharpe_delta >= 0.0, sharpe_delta, ">= 0")
+        _add(
+            "max_drawdown_matches_or_improves",
+            drawdown_delta >= 0.0,
+            drawdown_delta,
+            ">= 0",
+        )
+
+    for benchmark_name in required_benchmarks:
+        benchmark_rows = strategy_summary.loc[
+            strategy_summary["strategy"].astype(str) == benchmark_name
+        ]
+        condition = f"net_cumulative_return_beats_{_condition_suffix(benchmark_name)}"
+        if benchmark_rows.empty:
+            _add(condition, False, "missing", benchmark_name)
+            continue
+        benchmark_row = benchmark_rows.iloc[0]
+        return_delta = float(strategy_row["cumulative_return"]) - float(
+            benchmark_row["cumulative_return"]
+        )
+        _add(condition, return_delta > 0.0, return_delta, "> 0")
+
+    average_exposure = float(strategy_row["avg_gross_exposure"])
+    _add(
+        "average_exposure_in_range",
+        gate.min_average_exposure <= average_exposure <= gate.max_average_exposure,
+        average_exposure,
+        f"{gate.min_average_exposure:g} to {gate.max_average_exposure:g}",
+    )
+    turnover_budget = config.evaluation.ml_strategy_tuning.max_annualized_turnover
+    if turnover_budget is not None:
+        if "avg_turnover" not in strategy_row.index:
+            _add(
+                "annualized_turnover_budget",
+                False,
+                "missing",
+                f"<= {turnover_budget:g}",
+            )
+        else:
+            annualized_turnover = (
+                float(strategy_row["avg_turnover"]) * config.evaluation.periods_per_year
+            )
+            _add(
+                "annualized_turnover_budget",
+                annualized_turnover <= turnover_budget,
+                annualized_turnover,
+                f"<= {turnover_budget:g}",
+            )
+
+    def _add_cost_condition(condition: str, bps: float, benchmark_name: str) -> None:
+        scenario = cost_sensitivity.loc[
+            cost_sensitivity["strategy"].astype(str).isin(
+                {gate.strategy_name, benchmark_name}
+            )
+            & cost_sensitivity["bps_per_trade"].astype(float).eq(float(bps))
+        ]
+        strategy_scenario = scenario.loc[scenario["strategy"].astype(str) == gate.strategy_name]
+        benchmark_scenario = scenario.loc[scenario["strategy"].astype(str) == benchmark_name]
+        if strategy_scenario.empty or benchmark_scenario.empty:
+            _add(condition, False, "missing", f"{bps:g} bps scenario for {benchmark_name}")
+            return
+        cost_delta = float(strategy_scenario.iloc[0]["cumulative_return"]) - float(
+            benchmark_scenario.iloc[0]["cumulative_return"]
+        )
+        _add(condition, cost_delta > 0.0, cost_delta, "> 0")
+
+    _add_cost_condition("cost_gate_bps", gate.cost_gate_bps, gate.benchmark_strategy)
+    _add_cost_condition(
+        "acceptable_cost_bps",
+        gate.acceptable_cost_bps,
+        gate.benchmark_strategy,
+    )
+    for benchmark_name in required_benchmarks:
+        suffix = _condition_suffix(benchmark_name)
+        _add_cost_condition(
+            f"cost_gate_bps_vs_{suffix}",
+            gate.cost_gate_bps,
+            benchmark_name,
+        )
+        _add_cost_condition(
+            f"acceptable_cost_bps_vs_{suffix}",
+            gate.acceptable_cost_bps,
+            benchmark_name,
+        )
+
+    positive_slices = int(regime_slices["active_return"].gt(0.0).sum()) if not regime_slices.empty else 0
+    _add(
+        "positive_active_return_regime_slices",
+        positive_slices >= gate.min_positive_regime_slices,
+        positive_slices,
+        f">= {gate.min_positive_regime_slices}",
+    )
+
+    selected_folds = 0
+    total_folds = 0
+    if ml_strategy_tuning_selections is not None and not ml_strategy_tuning_selections.empty:
+        total_folds = int(len(ml_strategy_tuning_selections))
+        selected_folds = int(
+            ml_strategy_tuning_selections["selection_status"].astype(str).eq("selected").sum()
+        )
+    _add("multiple_selected_walk_forward_folds", selected_folds >= 2, selected_folds, ">= 2")
+    selected_fraction = (selected_folds / total_folds) if total_folds > 0 else 0.0
+    _add(
+        "selected_walk_forward_fold_fraction",
+        selected_fraction >= gate.min_selected_fold_fraction,
+        selected_fraction,
+        f">= {gate.min_selected_fold_fraction:g}",
+    )
+
+    for row in _partial_target_support_gate_rows(
+        config=config,
+        allocation_target_diagnostics=allocation_target_diagnostics,
+    ):
+        _add(
+            str(row["condition"]),
+            bool(row["passed"]),
+            row["observed"],
+            row["required"],
+        )
+
+    for row in _predicted_target_support_gate_rows(
+        config=config,
+        allocation_probability_diagnostics=allocation_probability_diagnostics,
+    ):
+        _add(
+            str(row["condition"]),
+            bool(row["passed"]),
+            row["observed"],
+            row["required"],
+        )
+
+    return _finish()
+
+
+def _partial_target_support_gate_rows(
+    *,
+    config: ExperimentConfig,
+    allocation_target_diagnostics: pd.DataFrame | None,
+) -> list[dict[str, object]]:
+    gate = config.evaluation.strict_research_gate
+    required_weights = [float(value) for value in gate.required_partial_target_weights]
+    if not _is_allocation_target(config.target.type) or not required_weights:
+        return []
+
+    rows: list[dict[str, object]] = []
+
+    def _row(condition: str, passed: bool, observed: object, required: object) -> None:
+        rows.append(
+            {
+                "condition": condition,
+                "passed": bool(passed),
+                "observed": observed,
+                "required": required,
+            }
+        )
+
+    if allocation_target_diagnostics is None or allocation_target_diagnostics.empty:
+        for target_weight in required_weights:
+            suffix = int(target_weight * 100)
+            _row(
+                f"partial_target_{suffix}_global_fraction",
+                False,
+                "missing",
+                f">= {gate.min_partial_target_fraction:g}",
+            )
+            _row(
+                f"partial_target_{suffix}_fold_fraction",
+                False,
+                "missing",
+                f">= {gate.min_partial_target_fold_fraction:g}",
+            )
+        return rows
+
+    diagnostics = allocation_target_diagnostics.copy()
+    diagnostics["target_weight"] = pd.to_numeric(
+        diagnostics["target_weight"], errors="coerce"
+    )
+    diagnostics["row_count"] = pd.to_numeric(
+        diagnostics["row_count"], errors="coerce"
+    ).fillna(0)
+
+    if "scope" in diagnostics.columns:
+        global_rows = diagnostics.loc[diagnostics["scope"].astype(str).eq("global")]
+        fold_rows = diagnostics.loc[
+            diagnostics["scope"].astype(str).eq("train_validation")
+        ]
+    else:
+        global_rows = diagnostics
+        fold_rows = diagnostics
+
+    total_global_rows = float(global_rows["row_count"].sum())
+    eligible_folds = sorted(str(value) for value in fold_rows["fold_id"].dropna().unique())
+    for target_weight in required_weights:
+        suffix = int(target_weight * 100)
+        target_global_rows = global_rows.loc[
+            global_rows["target_weight"].sub(target_weight).abs().le(1e-9)
+        ]
+        global_count = float(target_global_rows["row_count"].sum())
+        global_fraction = (
+            global_count / total_global_rows if total_global_rows > 0.0 else 0.0
+        )
+        _row(
+            f"partial_target_{suffix}_global_fraction",
+            global_fraction >= gate.min_partial_target_fraction,
+            global_fraction,
+            f">= {gate.min_partial_target_fraction:g}",
+        )
+
+        present_folds = {
+            str(value)
+            for value in fold_rows.loc[
+                fold_rows["target_weight"].sub(target_weight).abs().le(1e-9)
+                & fold_rows["row_count"].gt(0),
+                "fold_id",
+            ].dropna()
+        }
+        fold_fraction = (
+            len(present_folds) / len(eligible_folds) if eligible_folds else 0.0
+        )
+        _row(
+            f"partial_target_{suffix}_fold_fraction",
+            fold_fraction >= gate.min_partial_target_fold_fraction,
+            fold_fraction,
+            f">= {gate.min_partial_target_fold_fraction:g}",
+        )
+
+    return rows
+
+
+def _predicted_target_support_gate_rows(
+    *,
+    config: ExperimentConfig,
+    allocation_probability_diagnostics: pd.DataFrame | None,
+) -> list[dict[str, object]]:
+    gate = config.evaluation.strict_research_gate
+    required_weights = [float(value) for value in gate.required_predicted_target_weights]
+    if not _is_allocation_target(config.target.type) or not required_weights:
+        return []
+
+    rows: list[dict[str, object]] = []
+
+    def _row(condition: str, passed: bool, observed: object, required: object) -> None:
+        rows.append(
+            {
+                "condition": condition,
+                "passed": bool(passed),
+                "observed": observed,
+                "required": required,
+            }
+        )
+
+    if allocation_probability_diagnostics is None or allocation_probability_diagnostics.empty:
+        for target_weight in required_weights:
+            suffix = int(target_weight * 100)
+            _row(
+                f"predicted_target_{suffix}_global_fraction",
+                False,
+                "missing",
+                f">= {gate.min_predicted_target_fraction:g}",
+            )
+            _row(
+                f"predicted_target_{suffix}_fold_fraction",
+                False,
+                "missing",
+                f">= {gate.min_predicted_target_fold_fraction:g}",
+            )
+        return rows
+
+    diagnostics = allocation_probability_diagnostics.copy()
+    if "predicted_tier_weight" in diagnostics.columns:
+        predicted_tier_weight = pd.to_numeric(
+            diagnostics["predicted_tier_weight"],
+            errors="coerce",
+        )
+    elif "score" in diagnostics.columns:
+        predicted_tier_weight = pd.to_numeric(diagnostics["score"], errors="coerce").map(
+            lambda value: nearest_tier(float(value)) if pd.notna(value) else pd.NA
+        )
+    else:
+        predicted_tier_weight = pd.Series(pd.NA, index=diagnostics.index)
+    diagnostics["predicted_tier_weight"] = predicted_tier_weight
+    total_rows = int(diagnostics["predicted_tier_weight"].notna().sum())
+    eligible_folds = sorted(str(value) for value in diagnostics["fold_id"].dropna().unique())
+
+    for target_weight in required_weights:
+        suffix = int(target_weight * 100)
+        matches = diagnostics["predicted_tier_weight"].sub(target_weight).abs().le(1e-9)
+        global_fraction = float(matches.sum() / total_rows) if total_rows > 0 else 0.0
+        _row(
+            f"predicted_target_{suffix}_global_fraction",
+            global_fraction >= gate.min_predicted_target_fraction,
+            global_fraction,
+            f">= {gate.min_predicted_target_fraction:g}",
+        )
+
+        present_folds = {
+            str(value)
+            for value in diagnostics.loc[matches, "fold_id"].dropna().unique()
+        }
+        fold_fraction = (
+            len(present_folds) / len(eligible_folds) if eligible_folds else 0.0
+        )
+        _row(
+            f"predicted_target_{suffix}_fold_fraction",
+            fold_fraction >= gate.min_predicted_target_fold_fraction,
+            fold_fraction,
+            f">= {gate.min_predicted_target_fold_fraction:g}",
+        )
+
+    return rows
+
+
 def _persist_experiment_outputs(
     config: ExperimentConfig,
     panel_path: Path,
@@ -380,6 +970,9 @@ def _persist_experiment_outputs(
     ml_strategy_threshold_sweep: pd.DataFrame | None = None,
     ml_strategy_tuning_candidates: pd.DataFrame | None = None,
     ml_strategy_tuning_selections: pd.DataFrame | None = None,
+    allocation_target_diagnostics: pd.DataFrame | None = None,
+    allocation_probability_diagnostics: pd.DataFrame | None = None,
+    feature_importance: pd.DataFrame | None = None,
 ) -> ExperimentArtifacts:
     artifact_run_dir = run_dir or _run_dir(config)
     metrics = compute_strategy_metrics(
@@ -407,6 +1000,20 @@ def _persist_experiment_outputs(
         base_cost_bps=config.portfolio.costs.bps_per_trade,
         sensitivity_bps=config.evaluation.cost_sensitivity_bps,
         periods_per_year=config.evaluation.periods_per_year,
+    )
+    regime_slice_diagnostics = _regime_slice_diagnostics(
+        config=config,
+        panel=load_panel_csv(panel_path) if panel_path.exists() else pd.DataFrame(),
+        performance=performance,
+    )
+    strict_research_gate = _strict_research_gate(
+        config=config,
+        strategy_summary=strategy_summary,
+        cost_sensitivity=cost_sensitivity,
+        regime_slices=regime_slice_diagnostics,
+        ml_strategy_tuning_selections=ml_strategy_tuning_selections,
+        allocation_target_diagnostics=allocation_target_diagnostics,
+        allocation_probability_diagnostics=allocation_probability_diagnostics,
     )
     factor_diagnostics: pd.DataFrame | None = None
     if config.factor_model_path is not None:
@@ -439,6 +1046,16 @@ def _persist_experiment_outputs(
     if not benchmark_relative.empty:
         benchmark_relative_path = artifact_run_dir / "benchmark_relative.csv"
         benchmark_relative.to_csv(benchmark_relative_path, index=False)
+
+    regime_slice_diagnostics_path: Path | None = None
+    if not regime_slice_diagnostics.empty:
+        regime_slice_diagnostics_path = artifact_run_dir / "regime_slice_diagnostics.csv"
+        regime_slice_diagnostics.to_csv(regime_slice_diagnostics_path, index=False)
+
+    strict_research_gate_path: Path | None = None
+    if not strict_research_gate.empty:
+        strict_research_gate_path = artifact_run_dir / "strict_research_gate.csv"
+        strict_research_gate.to_csv(strict_research_gate_path, index=False)
 
     persisted_fold_diagnostics_path = fold_diagnostics_path
     if fold_diagnostics is not None and persisted_fold_diagnostics_path is None:
@@ -588,6 +1205,26 @@ def _persist_experiment_outputs(
             index=False,
         )
 
+    allocation_target_diagnostics_path: Path | None = None
+    if allocation_target_diagnostics is not None:
+        allocation_target_diagnostics_path = artifact_run_dir / "allocation_target_diagnostics.csv"
+        allocation_target_diagnostics.to_csv(allocation_target_diagnostics_path, index=False)
+
+    allocation_probability_diagnostics_path: Path | None = None
+    if allocation_probability_diagnostics is not None:
+        allocation_probability_diagnostics_path = (
+            artifact_run_dir / "allocation_probability_diagnostics.csv"
+        )
+        allocation_probability_diagnostics.to_csv(
+            allocation_probability_diagnostics_path,
+            index=False,
+        )
+
+    feature_importance_path: Path | None = None
+    if feature_importance is not None:
+        feature_importance_path = artifact_run_dir / "feature_importance.csv"
+        feature_importance.to_csv(feature_importance_path, index=False)
+
     model_summary_path: Path | None = None
     if model_summary is not None:
         model_summary_path = artifact_run_dir / "model_summary.csv"
@@ -597,6 +1234,18 @@ def _persist_experiment_outputs(
     if fold_summary is not None:
         fold_summary_path = artifact_run_dir / "fold_summary.csv"
         fold_summary.to_csv(fold_summary_path, index=False)
+
+    phase8_run_summary: pd.DataFrame | None = None
+    phase8_run_summary_path: Path | None = None
+    if (
+        config.evaluation.strict_research_gate.enabled
+        or ml_strategy_tuning_candidates is not None
+        or allocation_target_diagnostics is not None
+        or allocation_probability_diagnostics is not None
+    ):
+        phase8_run_summary = build_phase8_run_summary(artifact_run_dir)
+        phase8_run_summary_path = artifact_run_dir / "phase8_run_summary.csv"
+        phase8_run_summary.to_csv(phase8_run_summary_path, index=False)
 
     cumulative_plot_path: Path | None = None
     drawdown_plot_path: Path | None = None
@@ -723,6 +1372,9 @@ def _persist_experiment_outputs(
             ml_strategy_threshold_sweep=ml_strategy_threshold_sweep,
             ml_strategy_tuning_candidates=ml_strategy_tuning_candidates,
             ml_strategy_tuning_selections=ml_strategy_tuning_selections,
+            regime_slice_diagnostics=regime_slice_diagnostics,
+            strict_research_gate=strict_research_gate,
+            phase8_run_summary=phase8_run_summary,
             fold_diagnostics=fold_diagnostics,
             threshold_diagnostics=threshold_diagnostics,
             calibration_curves_plot_path=calibration_curves_plot_path,
@@ -750,6 +1402,15 @@ def _persist_experiment_outputs(
             ml_strategy_threshold_sweep_path=ml_strategy_threshold_sweep_path,
             ml_strategy_tuning_candidates_path=ml_strategy_tuning_candidates_path,
             ml_strategy_tuning_selections_path=ml_strategy_tuning_selections_path,
+            allocation_target_diagnostics=allocation_target_diagnostics,
+            allocation_probability_diagnostics=allocation_probability_diagnostics,
+            feature_importance=feature_importance,
+            allocation_target_diagnostics_path=allocation_target_diagnostics_path,
+            allocation_probability_diagnostics_path=allocation_probability_diagnostics_path,
+            feature_importance_path=feature_importance_path,
+            regime_slice_diagnostics_path=regime_slice_diagnostics_path,
+            strict_research_gate_path=strict_research_gate_path,
+            phase8_run_summary_path=phase8_run_summary_path,
             pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
             pattern_detections_plot_path=pattern_detections_plot_path,
             pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,
@@ -802,6 +1463,12 @@ def _persist_experiment_outputs(
         ml_strategy_threshold_sweep_path=ml_strategy_threshold_sweep_path,
         ml_strategy_tuning_candidates_path=ml_strategy_tuning_candidates_path,
         ml_strategy_tuning_selections_path=ml_strategy_tuning_selections_path,
+        allocation_target_diagnostics_path=allocation_target_diagnostics_path,
+        allocation_probability_diagnostics_path=allocation_probability_diagnostics_path,
+        feature_importance_path=feature_importance_path,
+        regime_slice_diagnostics_path=regime_slice_diagnostics_path,
+        strict_research_gate_path=strict_research_gate_path,
+        phase8_run_summary_path=phase8_run_summary_path,
         pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
         pattern_detections_plot_path=pattern_detections_plot_path,
         pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,
@@ -1281,6 +1948,39 @@ def run_baselines(
         buy_hold_performance = buy_hold_result.performance
         backtest_results.append(buy_hold_result)
 
+    if config.baselines.partial_allocation_benchmarks.enabled:
+        for target_weight in config.baselines.partial_allocation_benchmarks.weights:
+            weights = static_partial_weights(
+                featured,
+                target_weight=float(target_weight),
+                strategy_name=static_partial_strategy_name_for_weight(float(target_weight)),
+            )
+            if not weights.empty:
+                backtest_results.append(
+                    run_backtest_detailed(
+                        panel=featured,
+                        weights=weights,
+                        cost_bps=config.portfolio.costs.bps_per_trade,
+                    )
+                )
+
+    if config.baselines.rebalanced_partial_allocation_benchmarks.enabled:
+        for target_weight in config.baselines.rebalanced_partial_allocation_benchmarks.weights:
+            weights = rebalanced_partial_weights(
+                featured,
+                target_weight=float(target_weight),
+                frequency=config.portfolio.ranking.rebalance_frequency,
+                strategy_name=rebalanced_partial_strategy_name_for_weight(float(target_weight)),
+            )
+            if not weights.empty:
+                backtest_results.append(
+                    run_backtest_detailed(
+                        panel=featured,
+                        weights=weights,
+                        cost_bps=config.portfolio.costs.bps_per_trade,
+                    )
+                )
+
     if config.baselines.allocation.enabled:
         weights = allocation_weights(
             panel=featured,
@@ -1633,6 +2333,7 @@ def run_baselines(
         partial_threshold_sweep,
     )
 
+
 def _shared_oos_dates(
     panel: pd.DataFrame,
     modeling_dataset: pd.DataFrame,
@@ -1884,11 +2585,342 @@ def _prediction_frame_for_rows(
             "target",
         ],
     ].copy()
+    optional_columns = [
+        "forward_drawdown",
+        "forward_realized_volatility",
+        "target_weight",
+        "allocation_utility_0",
+        "allocation_utility_25",
+        "allocation_utility_50",
+        "allocation_utility_100",
+    ]
+    for column in optional_columns:
+        if column in rows.columns:
+            prediction_frame[column] = rows[column].to_numpy()
     prediction_frame.insert(0, "fold_id", fold_id)
     prediction_frame.insert(0, "model_name", model_name)
     prediction_frame["score"] = score_series.to_numpy()
     prediction_frame["predicted_target"] = predicted_target.to_numpy()
+    regime_columns = [column for column in rows.columns if str(column).startswith("crypto_regime_")]
+    for column in regime_columns:
+        prediction_frame[column] = rows[column].to_numpy()
     return prediction_frame
+
+
+def _estimator_feature_importance(
+    *,
+    estimator: Any,
+    model_name: str,
+    fold_id: int,
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    fitted = estimator
+    if hasattr(estimator, "steps") and estimator.steps:
+        fitted = estimator.steps[-1][1]
+
+    rows: list[dict[str, object]] = []
+    if hasattr(fitted, "feature_importances_"):
+        importances = list(getattr(fitted, "feature_importances_"))
+        rows = [
+            {
+                "model_name": model_name,
+                "fold_id": fold_id,
+                "feature": feature,
+                "importance_type": "feature_importance",
+                "importance": float(importance),
+                "signed_coefficient": pd.NA,
+            }
+            for feature, importance in zip(feature_columns, importances)
+        ]
+    elif hasattr(fitted, "coef_"):
+        coefficients = getattr(fitted, "coef_")
+        if getattr(coefficients, "ndim", 1) == 1:
+            signed_values = list(coefficients)
+            importance_values = [abs(float(value)) for value in signed_values]
+        else:
+            signed_values = [float(values.mean()) for values in coefficients.T]
+            importance_values = [
+                float(pd.Series(values).abs().mean()) for values in coefficients.T
+            ]
+        rows = [
+            {
+                "model_name": model_name,
+                "fold_id": fold_id,
+                "feature": feature,
+                "importance_type": "coefficient",
+                "importance": float(importance),
+                "signed_coefficient": float(signed),
+            }
+            for feature, importance, signed in zip(
+                feature_columns,
+                importance_values,
+                signed_values,
+            )
+        ]
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "model_name",
+                "fold_id",
+                "feature",
+                "importance_type",
+                "importance",
+                "signed_coefficient",
+            ]
+        )
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["importance", "feature"], ascending=[False, True])
+        .head(25)
+        .reset_index(drop=True)
+    )
+
+
+def _is_allocation_target(target_type: str) -> bool:
+    return target_type in {"allocation_utility", "regime_state"}
+
+
+def _allocation_profile_candidates(config: ExperimentConfig) -> list[AllocationUtilityProfileConfig]:
+    if not _is_allocation_target(config.target.type):
+        return [
+            AllocationUtilityProfileConfig(
+                name="not_applicable",
+                drawdown_penalty=config.target.allocation_utility_drawdown_penalty,
+                volatility_penalty=config.target.allocation_utility_volatility_penalty,
+                risk_penalty_power=config.target.allocation_utility_risk_penalty_power,
+            )
+        ]
+    profiles = config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+    if profiles:
+        return list(profiles)
+    return [
+        AllocationUtilityProfileConfig(
+            name="target_config",
+            drawdown_penalty=config.target.allocation_utility_drawdown_penalty,
+            volatility_penalty=config.target.allocation_utility_volatility_penalty,
+            risk_penalty_power=config.target.allocation_utility_risk_penalty_power,
+        )
+    ]
+
+
+def _apply_allocation_profile(
+    rows: pd.DataFrame,
+    *,
+    config: ExperimentConfig,
+    profile: AllocationUtilityProfileConfig,
+) -> pd.DataFrame:
+    if not _is_allocation_target(config.target.type):
+        return rows.copy()
+    return apply_allocation_utility_profile(
+        rows,
+        target_type=config.target.type,
+        cost_bps=config.portfolio.costs.bps_per_trade,
+        drawdown_penalty=float(profile.drawdown_penalty),
+        volatility_penalty=float(profile.volatility_penalty),
+        risk_penalty_power=float(profile.risk_penalty_power),
+    )
+
+
+def _prediction_weight_map(target_type: str) -> dict[int, float]:
+    if target_type == "regime_state":
+        return {0: 0.0, 1: 0.50, 2: 1.0}
+    return {0: 0.0, 1: 0.25, 2: 0.50, 3: 1.0}
+
+
+def _allocation_sample_weights(
+    *,
+    train_target: pd.Series,
+    target_type: str,
+    class_weighting: str,
+    partial_class_multiplier: float,
+) -> pd.Series | None:
+    if not _is_allocation_target(target_type) or class_weighting == "none":
+        return None
+
+    counts = train_target.value_counts()
+    if counts.empty:
+        return None
+    row_count = float(len(train_target))
+    class_count = float(len(counts))
+    weights = train_target.map(
+        lambda value: row_count / (class_count * float(counts.loc[int(value)]))
+    ).astype(float)
+
+    if class_weighting == "balanced_partial_boost":
+        partial_classes = {1} if target_type == "regime_state" else {1, 2}
+        weights.loc[train_target.isin(partial_classes)] *= float(partial_class_multiplier)
+    return weights
+
+
+def _fit_estimator_with_sample_weights(
+    estimator: Any,
+    features: pd.DataFrame,
+    target: pd.Series,
+    sample_weights: pd.Series | None,
+) -> None:
+    if sample_weights is None:
+        estimator.fit(features, target)
+        return
+
+    if hasattr(estimator, "steps") and estimator.steps:
+        step_name = str(estimator.steps[-1][0])
+        estimator.fit(
+            features,
+            target,
+            **{f"{step_name}__sample_weight": sample_weights.to_numpy(dtype=float)},
+        )
+        return
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Since .* does not appear to accept sample_weight.*",
+            category=UserWarning,
+        )
+        estimator.fit(features, target, sample_weight=sample_weights.to_numpy(dtype=float))
+
+
+def _calibration_status(
+    *,
+    train_target: pd.Series,
+    target_type: str,
+    calibration: str,
+    calibration_cv: int,
+) -> str:
+    if not _is_allocation_target(target_type):
+        return "not_applicable"
+    if calibration == "none":
+        return "not_requested"
+    counts = train_target.value_counts()
+    if train_target.nunique(dropna=True) < 2 or counts.empty or int(counts.min()) < calibration_cv:
+        return "skipped_insufficient_class_support"
+    return calibration
+
+
+def _predicted_tier_support(
+    *,
+    predictions: pd.DataFrame,
+    required_weights: list[float],
+    min_fraction: float,
+) -> tuple[bool, dict[float, float]]:
+    if not required_weights:
+        return True, {}
+    if predictions.empty or "score" not in predictions.columns:
+        return False, {float(weight): 0.0 for weight in required_weights}
+    predicted_tiers = predictions["score"].map(lambda value: nearest_tier(float(value)))
+    fractions = {
+        float(weight): float(predicted_tiers.sub(float(weight)).abs().le(1e-9).mean())
+        for weight in required_weights
+    }
+    return all(fraction >= min_fraction for fraction in fractions.values()), fractions
+
+
+def _score_model_rows(
+    *,
+    model_name: str,
+    target_type: str,
+    train_rows: pd.DataFrame,
+    score_rows: pd.DataFrame,
+    feature_columns: list[str],
+    fold_id: int,
+    allocation_class_weighting: str = "none",
+    allocation_partial_class_weight_multiplier: float = 1.0,
+    allocation_probability_calibration: str = "none",
+    allocation_calibration_cv: int = 3,
+    utility_profile: AllocationUtilityProfileConfig | None = None,
+) -> ModelScoreOutput | None:
+    train_target = train_rows["target"].astype(int)
+    if train_target.nunique(dropna=True) < 2:
+        return None
+
+    train_features = train_rows.loc[:, feature_columns]
+    score_features = score_rows.loc[:, feature_columns]
+    sample_weights = _allocation_sample_weights(
+        train_target=train_target,
+        target_type=target_type,
+        class_weighting=allocation_class_weighting,
+        partial_class_multiplier=allocation_partial_class_weight_multiplier,
+    )
+
+    _, base_estimator = build_model_estimator(model_name, target_type)
+    _fit_estimator_with_sample_weights(
+        base_estimator,
+        train_features,
+        train_target,
+        sample_weights,
+    )
+    feature_importance = _estimator_feature_importance(
+        estimator=base_estimator,
+        model_name=model_name,
+        fold_id=fold_id,
+        feature_columns=feature_columns,
+    )
+
+    calibration_status = _calibration_status(
+        train_target=train_target,
+        target_type=target_type,
+        calibration=allocation_probability_calibration,
+        calibration_cv=int(allocation_calibration_cv),
+    )
+    estimator = base_estimator
+    if calibration_status == "sigmoid":
+        _, calibration_estimator = build_model_estimator(model_name, target_type)
+        estimator = CalibratedClassifierCV(
+            calibration_estimator,
+            method="sigmoid",
+            cv=int(allocation_calibration_cv),
+        )
+        _fit_estimator_with_sample_weights(
+            estimator,
+            train_features,
+            train_target,
+            sample_weights,
+        )
+
+    probability_frame: pd.DataFrame | None = None
+    if target_type == "allocation_utility":
+        score_series, probability_frame = predict_allocation_utility_scores(
+            estimator,
+            score_features,
+        )
+    elif target_type == "regime_state":
+        score_series, probability_frame = predict_regime_state_scores(
+            estimator,
+            score_features,
+        )
+    else:
+        score_series = predict_direction_scores(estimator, score_features)
+    predicted_target = pd.Series(
+        estimator.predict(score_features),
+        index=score_rows.index,
+        name="predicted_target",
+        dtype=int,
+    )
+    predictions = _prediction_frame_for_rows(
+        model_name=model_name,
+        fold_id=fold_id,
+        rows=score_rows,
+        score_series=score_series,
+        predicted_target=predicted_target,
+    )
+    if probability_frame is not None:
+        for column in probability_frame.columns:
+            predictions[column] = probability_frame[column].to_numpy()
+        predictions["predicted_weight"] = predictions["predicted_target"].map(
+            _prediction_weight_map(target_type)
+        )
+        predictions["predicted_tier_weight"] = predictions["score"].map(
+            lambda value: nearest_tier(float(value))
+        )
+        predictions["calibration_status"] = calibration_status
+        if utility_profile is not None:
+            predictions["utility_profile"] = utility_profile.name
+    return ModelScoreOutput(
+        predictions=predictions,
+        feature_importance=feature_importance,
+        calibration_status=calibration_status,
+    )
 
 
 def _score_direction_rows(
@@ -1900,26 +2932,15 @@ def _score_direction_rows(
     feature_columns: list[str],
     fold_id: int,
 ) -> pd.DataFrame | None:
-    train_target = train_rows["target"].astype(int)
-    if train_target.nunique(dropna=True) < 2:
-        return None
-
-    _, estimator = build_model_estimator(model_name, target_type)
-    estimator.fit(train_rows.loc[:, feature_columns], train_target)
-    score_series = predict_direction_scores(estimator, score_rows.loc[:, feature_columns])
-    predicted_target = pd.Series(
-        estimator.predict(score_rows.loc[:, feature_columns]),
-        index=score_rows.index,
-        name="predicted_target",
-        dtype=int,
-    )
-    return _prediction_frame_for_rows(
+    output = _score_model_rows(
         model_name=model_name,
+        target_type=target_type,
+        train_rows=train_rows,
+        score_rows=score_rows,
+        feature_columns=feature_columns,
         fold_id=fold_id,
-        rows=score_rows,
-        score_series=score_series,
-        predicted_target=predicted_target,
     )
+    return None if output is None else output.predictions
 
 
 def _window_dates_for_rows(
@@ -1943,21 +2964,39 @@ def _window_dates_for_rows(
     return panel_dates[(panel_dates >= start_date) & (panel_dates < pd.Timestamp(boundary_date))]
 
 
+def _strategy_metrics_for_window(
+    *,
+    performance: pd.DataFrame,
+    strategy_name: str,
+    window_dates: pd.Index,
+    periods_per_year: float,
+) -> pd.Series:
+    benchmark_window = performance.loc[
+        performance["strategy"].astype(str).eq(strategy_name)
+        & pd.to_datetime(performance["date"]).isin(window_dates)
+    ].copy()
+    if benchmark_window.empty:
+        raise RuntimeError(
+            f"ML strategy tuning produced no {strategy_name} benchmark rows."
+        )
+    return compute_strategy_metrics(
+        _slice_and_rebase_performance(benchmark_window, window_dates),
+        periods_per_year=periods_per_year,
+    ).iloc[0]
+
+
 def _benchmark_metrics_for_window(
     *,
     buy_hold_performance: pd.DataFrame,
     window_dates: pd.Index,
     periods_per_year: float,
 ) -> pd.Series:
-    benchmark_window = buy_hold_performance.loc[
-        pd.to_datetime(buy_hold_performance["date"]).isin(window_dates)
-    ].copy()
-    if benchmark_window.empty:
-        raise RuntimeError("ML strategy tuning produced no buy_hold benchmark rows.")
-    return compute_strategy_metrics(
-        _slice_and_rebase_performance(benchmark_window, window_dates),
+    return _strategy_metrics_for_window(
+        performance=buy_hold_performance,
+        strategy_name="buy_hold",
+        window_dates=window_dates,
         periods_per_year=periods_per_year,
-    ).iloc[0]
+    )
 
 
 def _cash_weights_for_rows(
@@ -1999,7 +3038,27 @@ def _weights_for_predictions(
     predictions: pd.DataFrame,
     threshold: float,
     strategy_name: str | None = None,
+    tier_thresholds: tuple[float, float, float] | None = None,
+    min_holding_period_bars: int = 0,
+    hysteresis_margin: float = 0.0,
+    direct_tiered: bool = False,
+    regime_policy: RegimeParticipationPolicy | None = None,
 ) -> pd.DataFrame:
+    if tier_thresholds is not None or direct_tiered:
+        weights = tiered_allocation_weights(
+            predictions=predictions,
+            panel=panel,
+            thresholds=tier_thresholds or (0.25, 0.50, 0.75),
+            frequency=config.portfolio.ranking.rebalance_frequency,
+            strategy_name=strategy_name,
+            max_long_exposure=config.portfolio.risk.max_long_exposure,
+            min_holding_period_bars=min_holding_period_bars,
+            hysteresis_margin=hysteresis_margin,
+            direct_scores=direct_tiered,
+            regime_policy=regime_policy,
+        )
+        return weights
+
     weights = ranking_weights(
         predictions=predictions,
         panel=panel,
@@ -2022,6 +3081,325 @@ def _weights_for_predictions(
     return weights
 
 
+def _tier_threshold_sets(config: ExperimentConfig) -> list[tuple[float, float, float]]:
+    tuning = config.evaluation.ml_strategy_tuning
+    configured_sets = tuning.tier_threshold_sets or [tuning.tier_thresholds]
+    unique_sets: list[tuple[float, float, float]] = []
+    for threshold_set in configured_sets:
+        if len(threshold_set) != 3:
+            raise ValueError("ML tiered allocation threshold sets must contain three values.")
+        resolved = tuple(float(value) for value in threshold_set)
+        if resolved not in unique_sets:
+            unique_sets.append(resolved)
+    return unique_sets
+
+
+def _rolling_train_bars_candidates(config: ExperimentConfig) -> list[int | None]:
+    values = sorted(
+        {
+            int(value)
+            for value in config.evaluation.ml_strategy_tuning.rolling_train_bars_grid
+        }
+    )
+    return values or [None]
+
+
+def _min_holding_period_candidates(config: ExperimentConfig) -> list[int]:
+    values = sorted(
+        {
+            int(value)
+            for value in config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid
+        }
+    )
+    return values or [0]
+
+
+def _hysteresis_margin_candidates(config: ExperimentConfig) -> list[float]:
+    values = sorted(
+        {
+            float(value)
+            for value in config.evaluation.ml_strategy_tuning.hysteresis_margin_grid
+        }
+    )
+    return values or [0.0]
+
+
+def _regime_participation_policy_candidates(
+    config: ExperimentConfig,
+) -> list[RegimeParticipationPolicyConfig]:
+    policies = config.evaluation.ml_strategy_tuning.regime_participation_policies
+    return policies or [RegimeParticipationPolicyConfig()]
+
+
+def _strategy_regime_policy(
+    policy: RegimeParticipationPolicyConfig,
+) -> RegimeParticipationPolicy:
+    return RegimeParticipationPolicy(
+        name=policy.name,
+        bull_floor=float(policy.bull_floor),
+        sideways_floor=float(policy.sideways_floor),
+        bear_floor=float(policy.bear_floor),
+        risk_off_cap=(
+            float(policy.risk_off_cap)
+            if policy.risk_off_cap is not None
+            else None
+        ),
+    )
+
+
+def _candidate_failure_reasons(
+    *,
+    active_candidate: bool,
+    turnover_budget_ok: bool,
+    predicted_support_ok: bool,
+    benchmark_gate_ok: bool,
+    benchmark_relative_selection: bool,
+    missing_selection_benchmarks: list[str],
+    benchmark_excess_values: list[float],
+    risk_gate_ok: bool,
+) -> str:
+    reasons: list[str] = []
+    if not active_candidate:
+        reasons.append("inactive_candidate")
+    if not turnover_budget_ok:
+        reasons.append("turnover_budget_exceeded")
+    if not predicted_support_ok:
+        reasons.append("insufficient_predicted_tier_support")
+    if not benchmark_gate_ok:
+        if benchmark_relative_selection:
+            if missing_selection_benchmarks or not benchmark_excess_values:
+                reasons.append("missing_selection_benchmark")
+            else:
+                reasons.append("non_positive_required_benchmark_excess")
+        else:
+            reasons.append("non_positive_buy_hold_excess")
+    if not risk_gate_ok:
+        reasons.append("risk_not_improved")
+    return ";".join(reasons)
+
+
+def _latest_training_rows(rows: pd.DataFrame, rolling_train_bars: int | None) -> pd.DataFrame:
+    if rolling_train_bars is None or rows.empty:
+        return rows.copy()
+
+    working = rows.copy()
+    working["signal_date"] = pd.to_datetime(working["signal_date"])
+    dates = pd.Index(sorted(working["signal_date"].drop_duplicates()))
+    selected_dates = dates[-int(rolling_train_bars):]
+    return working.loc[working["signal_date"].isin(selected_dates)].copy()
+
+
+def _annualized_turnover(
+    *,
+    performance: pd.DataFrame,
+    total_turnover: float,
+    periods_per_year: float,
+) -> float:
+    periods = max(1, int(pd.to_datetime(performance["date"]).nunique()))
+    return float(total_turnover) / periods * periods_per_year
+
+
+def _select_ml_strategy_candidate(candidates: list[dict[str, object]]) -> dict[str, object]:
+    if not candidates:
+        raise ValueError("ML strategy candidate selection requires at least one candidate.")
+
+    def _selection_score(row: dict[str, object]) -> tuple[float, float, float, float, float]:
+        min_benchmark_excess = row.get("min_benchmark_excess_cumulative_return", pd.NA)
+        if pd.isna(min_benchmark_excess):
+            min_benchmark_excess = row["excess_cumulative_return"]
+        return (
+            float(min_benchmark_excess),
+            float(row["excess_cumulative_return"]),
+            float(row["drawdown_delta"]),
+            float(row["sharpe_like_delta"]),
+            -float(row["annualized_turnover"]),
+        )
+
+    return sorted(
+        candidates,
+        key=_selection_score,
+        reverse=True,
+    )[0]
+
+
+def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
+    probability_columns = [
+        "prob_tier_0",
+        "prob_tier_25",
+        "prob_tier_50",
+        "prob_tier_100",
+    ]
+    columns = [
+        "model_name",
+        "fold_id",
+        "signal_date",
+        "effective_date",
+        "symbol",
+        "target",
+        "target_weight",
+        "predicted_target",
+        "predicted_weight",
+        "predicted_tier_weight",
+        "score",
+        *probability_columns,
+        "forward_return",
+        "forward_drawdown",
+        "forward_realized_volatility",
+        "realized_utility",
+        "utility_profile",
+        "calibration_status",
+        "fold_predicted_25_fraction",
+        "fold_predicted_50_fraction",
+    ]
+    if predictions.empty:
+        return pd.DataFrame(columns=columns)
+    working = predictions.copy()
+    if "predicted_weight" not in working.columns:
+        working["predicted_weight"] = working["predicted_target"].map(
+            {0: 0.0, 1: 0.25, 2: 0.50, 3: 1.0}
+        )
+    if "predicted_tier_weight" not in working.columns:
+        working["predicted_tier_weight"] = working["score"].map(
+            lambda value: nearest_tier(float(value))
+        )
+    for column in probability_columns:
+        if column not in working.columns:
+            working[column] = 0.0
+
+    fold_support = (
+        working.groupby("fold_id")["predicted_tier_weight"]
+        .agg(
+            fold_predicted_25_fraction=lambda values: float(
+                values.sub(0.25).abs().le(1e-9).mean()
+            ),
+            fold_predicted_50_fraction=lambda values: float(
+                values.sub(0.50).abs().le(1e-9).mean()
+            ),
+        )
+        .reset_index()
+    )
+    working = working.merge(fold_support, on="fold_id", how="left")
+
+    utility_columns = {
+        0.0: "allocation_utility_0",
+        0.25: "allocation_utility_25",
+        0.50: "allocation_utility_50",
+        1.0: "allocation_utility_100",
+    }
+    realized_utilities: list[float] = []
+    for _, row in working.iterrows():
+        utility_column = utility_columns.get(float(row["predicted_tier_weight"]))
+        realized_utilities.append(
+            float(row[utility_column])
+            if utility_column is not None and utility_column in working.columns
+            else float("nan")
+        )
+    working["realized_utility"] = realized_utilities
+    for column in columns:
+        if column not in working.columns:
+            working[column] = pd.NA
+    return working.loc[:, columns].sort_values(
+        ["fold_id", "signal_date", "symbol"]
+    ).reset_index(drop=True)
+
+
+def _allocation_regime_label(row: pd.Series) -> str:
+    if int(row.get("crypto_regime_risk_off", 0) or 0) == 1:
+        return "risk_off"
+    trend_state = int(row.get("crypto_regime_trend_state", 0) or 0)
+    if trend_state > 0:
+        return "bull"
+    if trend_state < 0:
+        return "bear"
+    return "sideways"
+
+
+def _allocation_target_diagnostics(
+    *,
+    modeling_dataset: pd.DataFrame,
+    folds: list,
+) -> pd.DataFrame:
+    columns = [
+        "fold_id",
+        "scope",
+        "regime",
+        "target",
+        "target_weight",
+        "row_count",
+        "row_fraction",
+        "avg_forward_return",
+        "avg_forward_drawdown",
+        "avg_forward_realized_volatility",
+    ]
+    if modeling_dataset.empty or "target_weight" not in modeling_dataset.columns:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+
+    def _append_distribution_rows(
+        *,
+        frame: pd.DataFrame,
+        fold_id: object,
+        scope: str,
+        group_by_regime: bool,
+    ) -> None:
+        if frame.empty:
+            return
+        working = frame.copy()
+        working["regime"] = (
+            working.apply(_allocation_regime_label, axis=1)
+            if group_by_regime
+            else "all"
+        )
+        total_rows = len(working)
+        for (regime, target, target_weight), group in working.groupby(
+            ["regime", "target", "target_weight"],
+            sort=True,
+        ):
+            rows.append(
+                {
+                    "fold_id": fold_id,
+                    "scope": scope,
+                    "regime": regime,
+                    "target": int(target),
+                    "target_weight": float(target_weight),
+                    "row_count": int(len(group)),
+                    "row_fraction": float(len(group) / total_rows),
+                    "avg_forward_return": float(group["forward_return"].mean()),
+                    "avg_forward_drawdown": float(group["forward_drawdown"].mean())
+                    if "forward_drawdown" in group.columns
+                    else pd.NA,
+                    "avg_forward_realized_volatility": float(
+                        group["forward_realized_volatility"].mean()
+                    )
+                    if "forward_realized_volatility" in group.columns
+                    else pd.NA,
+                }
+            )
+
+    _append_distribution_rows(
+        frame=modeling_dataset,
+        fold_id="all",
+        scope="global",
+        group_by_regime=False,
+    )
+    for fold in folds:
+        train_rows, test_rows = slice_fold_rows(modeling_dataset, fold)
+        _append_distribution_rows(
+            frame=train_rows,
+            fold_id=fold.fold_id,
+            scope="train_validation",
+            group_by_regime=False,
+        )
+        _append_distribution_rows(
+            frame=test_rows,
+            fold_id=fold.fold_id,
+            scope="oos_test",
+            group_by_regime=True,
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _build_ml_strategy_tuning_outputs(
     *,
     config: ExperimentConfig,
@@ -2029,11 +3407,30 @@ def _build_ml_strategy_tuning_outputs(
     modeling_dataset: pd.DataFrame,
     folds: list,
     buy_hold_performance: pd.DataFrame,
-) -> tuple[BacktestResult | None, pd.DataFrame, pd.DataFrame]:
+    baseline_performance: pd.DataFrame,
+) -> tuple[BacktestResult | None, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     candidate_columns = [
         "fold_id",
         "model_name",
+        "allocation_mode",
+        "utility_profile",
+        "utility_drawdown_penalty",
+        "utility_volatility_penalty",
+        "utility_risk_penalty_power",
+        "allocation_class_weighting",
+        "calibration_status",
+        "rolling_train_bars",
+        "min_holding_period_bars",
+        "hysteresis_margin",
+        "regime_policy",
+        "regime_bull_floor",
+        "regime_sideways_floor",
+        "regime_bear_floor",
+        "regime_risk_off_cap",
         "threshold",
+        "tier_min_threshold",
+        "tier_half_threshold",
+        "tier_full_threshold",
         "strategy",
         "validation_start",
         "validation_end",
@@ -2043,20 +3440,46 @@ def _build_ml_strategy_tuning_outputs(
         "max_drawdown",
         "sharpe_like",
         "total_turnover",
+        "annualized_turnover",
         "exposure_changes",
         "average_exposure",
         "buy_hold_cumulative_return",
         "excess_cumulative_return",
+        "selection_benchmark_strategies",
+        "selection_benchmark_excess_cumulative_returns",
+        "min_benchmark_excess_cumulative_return",
+        "validation_predicted_25_fraction",
+        "validation_predicted_50_fraction",
+        "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
         "active_candidate",
+        "failure_reasons",
         "passed_gate",
     ]
     selection_columns = [
         "fold_id",
         "selection_status",
+        "allocation_mode",
         "selected_model_name",
+        "selected_utility_profile",
+        "selected_utility_drawdown_penalty",
+        "selected_utility_volatility_penalty",
+        "selected_utility_risk_penalty_power",
+        "allocation_class_weighting",
+        "calibration_status",
+        "selected_rolling_train_bars",
+        "selected_min_holding_period_bars",
+        "selected_hysteresis_margin",
+        "selected_regime_policy",
+        "selected_regime_bull_floor",
+        "selected_regime_sideways_floor",
+        "selected_regime_bear_floor",
+        "selected_regime_risk_off_cap",
         "selected_threshold",
+        "selected_tier_min_threshold",
+        "selected_tier_half_threshold",
+        "selected_tier_full_threshold",
         "selected_strategy",
         "validation_start",
         "validation_end",
@@ -2064,25 +3487,104 @@ def _build_ml_strategy_tuning_outputs(
         "validation_rows",
         "passed_gate",
         "excess_cumulative_return",
+        "selection_benchmark_strategies",
+        "selection_benchmark_excess_cumulative_returns",
+        "min_benchmark_excess_cumulative_return",
+        "validation_predicted_25_fraction",
+        "validation_predicted_50_fraction",
+        "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
+        "annualized_turnover",
         "exposure_changes",
         "average_exposure",
     ]
+    allocation_probability_columns = [
+        "model_name",
+        "fold_id",
+        "signal_date",
+        "effective_date",
+        "symbol",
+        "target",
+        "target_weight",
+        "predicted_target",
+        "predicted_weight",
+        "predicted_tier_weight",
+        "score",
+        "prob_tier_0",
+        "prob_tier_25",
+        "prob_tier_50",
+        "prob_tier_100",
+        "forward_return",
+        "forward_drawdown",
+        "forward_realized_volatility",
+        "realized_utility",
+        "utility_profile",
+        "calibration_status",
+        "fold_predicted_25_fraction",
+        "fold_predicted_50_fraction",
+    ]
+    feature_importance_columns = [
+        "model_name",
+        "fold_id",
+        "feature",
+        "importance_type",
+        "importance",
+        "signed_coefficient",
+    ]
     tuning = config.evaluation.ml_strategy_tuning
-    if not tuning.enabled or not config.models or not tuning.thresholds:
+    allocation_mode = tuning.allocation_mode
+    selection_benchmark_names = _selection_benchmark_strategies(config)
+    benchmark_relative_selection = (
+        tuning.objective == "net_return_and_risk_vs_required_benchmarks"
+    )
+    threshold_candidates = sorted(set(float(value) for value in tuning.thresholds))
+    tier_threshold_candidates = _tier_threshold_sets(config)
+    utility_profiles = _allocation_profile_candidates(config)
+    required_predicted_weights = [
+        float(value)
+        for value in config.evaluation.strict_research_gate.required_predicted_target_weights
+    ]
+    min_predicted_fraction = (
+        config.evaluation.strict_research_gate.min_predicted_target_fraction
+    )
+    rolling_train_candidates = _rolling_train_bars_candidates(config)
+    min_holding_candidates = (
+        _min_holding_period_candidates(config)
+        if allocation_mode in {"direct_tiered", "tiered"}
+        else [0]
+    )
+    hysteresis_margin_candidates = (
+        _hysteresis_margin_candidates(config)
+        if allocation_mode in {"direct_tiered", "tiered"}
+        else [0.0]
+    )
+    regime_policy_candidates = (
+        _regime_participation_policy_candidates(config)
+        if allocation_mode in {"direct_tiered", "tiered"}
+        else [RegimeParticipationPolicyConfig()]
+    )
+    if (
+        not tuning.enabled
+        or not config.models
+        or (allocation_mode == "binary" and not threshold_candidates)
+        or (allocation_mode == "tiered" and not tier_threshold_candidates)
+    ):
         return (
             None,
             pd.DataFrame(columns=candidate_columns),
             pd.DataFrame(columns=selection_columns),
+            pd.DataFrame(columns=allocation_probability_columns),
+            pd.DataFrame(columns=feature_importance_columns),
         )
 
     feature_columns = modeling_feature_columns(modeling_dataset)
     frequency = config.portfolio.ranking.rebalance_frequency
-    thresholds = sorted(set(float(value) for value in tuning.thresholds))
     candidate_rows: list[dict[str, object]] = []
     selection_rows: list[dict[str, object]] = []
     selected_weight_frames: list[pd.DataFrame] = []
+    allocation_probability_frames: list[pd.DataFrame] = []
+    feature_importance_frames: list[pd.DataFrame] = []
     panel_timestamps = pd.to_datetime(panel["timestamp"])
 
     for fold in folds:
@@ -2118,78 +3620,349 @@ def _build_ml_strategy_tuning_outputs(
             buy_hold_return = float(benchmark_metrics["cumulative_return"])
             buy_hold_sharpe = float(benchmark_metrics["sharpe_like"])
             buy_hold_drawdown = float(benchmark_metrics["max_drawdown"])
+            selection_benchmark_returns: dict[str, float] = {}
+            missing_selection_benchmarks: list[str] = []
+            for benchmark_name in selection_benchmark_names:
+                try:
+                    benchmark_window_metrics = _strategy_metrics_for_window(
+                        performance=baseline_performance,
+                        strategy_name=benchmark_name,
+                        window_dates=validation_dates,
+                        periods_per_year=config.evaluation.periods_per_year,
+                    )
+                except RuntimeError:
+                    missing_selection_benchmarks.append(benchmark_name)
+                    continue
+                selection_benchmark_returns[benchmark_name] = float(
+                    benchmark_window_metrics["cumulative_return"]
+                )
 
             for model_spec in config.models:
-                LOGGER.info(
-                    "Fitting ML strategy tuning candidate model=%s fold=%s",
-                    model_spec.name,
-                    fold.fold_id,
-                )
-                validation_predictions = _score_direction_rows(
-                    model_name=model_spec.name,
-                    target_type=config.target.type,
-                    train_rows=inner_train_rows,
-                    score_rows=validation_rows,
-                    feature_columns=feature_columns,
-                    fold_id=fold.fold_id,
-                )
-                if validation_predictions is None:
-                    continue
-                for threshold in thresholds:
-                    weights = _weights_for_predictions(
-                        config=config,
-                        panel=panel,
-                        predictions=validation_predictions,
-                        threshold=threshold,
+                for rolling_train_bars in rolling_train_candidates:
+                    candidate_train_rows = _latest_training_rows(
+                        inner_train_rows,
+                        rolling_train_bars,
                     )
-                    if weights.empty:
-                        continue
-                    performance = run_backtest(
-                        panel=validation_panel,
-                        weights=weights,
-                        cost_bps=config.portfolio.costs.bps_per_trade,
-                    )
-                    metrics = compute_strategy_metrics(
-                        performance,
-                        periods_per_year=config.evaluation.periods_per_year,
-                    ).iloc[0]
-                    exposure_changes, average_exposure = _weight_activity(weights)
-                    excess_return = float(metrics["cumulative_return"]) - buy_hold_return
-                    sharpe_delta = float(metrics["sharpe_like"]) - buy_hold_sharpe
-                    drawdown_delta = float(metrics["max_drawdown"]) - buy_hold_drawdown
-                    active_candidate = (
-                        exposure_changes >= tuning.min_exposure_changes
-                        and average_exposure <= tuning.max_average_exposure_for_active
-                    )
-                    passed_gate = (
-                        active_candidate
-                        and excess_return > 0.0
-                        and (sharpe_delta > 0.0 or drawdown_delta >= 0.0)
-                    )
-                    row = {
-                        "fold_id": fold.fold_id,
-                        "model_name": model_spec.name,
-                        "threshold": threshold,
-                        "strategy": metrics["strategy"],
-                        "validation_start": validation_rows["signal_date"].min(),
-                        "validation_end": validation_rows["signal_date"].max(),
-                        "inner_train_rows": len(inner_train_rows),
-                        "validation_rows": len(validation_rows),
-                        "cumulative_return": metrics["cumulative_return"],
-                        "max_drawdown": metrics["max_drawdown"],
-                        "sharpe_like": metrics["sharpe_like"],
-                        "total_turnover": metrics["total_turnover"],
-                        "exposure_changes": exposure_changes,
-                        "average_exposure": average_exposure,
-                        "buy_hold_cumulative_return": buy_hold_return,
-                        "excess_cumulative_return": excess_return,
-                        "sharpe_like_delta": sharpe_delta,
-                        "drawdown_delta": drawdown_delta,
-                        "active_candidate": active_candidate,
-                        "passed_gate": passed_gate,
-                    }
-                    candidate_rows.append(row)
-                    fold_candidates.append(row)
+                    for utility_profile in utility_profiles:
+                        profiled_candidate_train_rows = _apply_allocation_profile(
+                            candidate_train_rows,
+                            config=config,
+                            profile=utility_profile,
+                        )
+                        profiled_validation_rows = _apply_allocation_profile(
+                            validation_rows,
+                            config=config,
+                            profile=utility_profile,
+                        )
+                        LOGGER.info(
+                            "Fitting ML strategy tuning candidate model=%s fold=%s rolling_train_bars=%s utility_profile=%s",
+                            model_spec.name,
+                            fold.fold_id,
+                            rolling_train_bars or "full",
+                            utility_profile.name,
+                        )
+                        validation_output = _score_model_rows(
+                            model_name=model_spec.name,
+                            target_type=config.target.type,
+                            train_rows=profiled_candidate_train_rows,
+                            score_rows=profiled_validation_rows,
+                            feature_columns=feature_columns,
+                            fold_id=fold.fold_id,
+                            allocation_class_weighting=tuning.allocation_class_weighting,
+                            allocation_partial_class_weight_multiplier=(
+                                tuning.allocation_partial_class_weight_multiplier
+                            ),
+                            allocation_probability_calibration=(
+                                tuning.allocation_probability_calibration
+                            ),
+                            allocation_calibration_cv=tuning.allocation_calibration_cv,
+                            utility_profile=utility_profile,
+                        )
+                        if validation_output is None:
+                            continue
+                        validation_predictions = validation_output.predictions
+                        (
+                            predicted_support_ok,
+                            predicted_support_fractions,
+                        ) = _predicted_tier_support(
+                            predictions=validation_predictions,
+                            required_weights=(
+                                required_predicted_weights
+                                if _is_allocation_target(config.target.type)
+                                else []
+                            ),
+                            min_fraction=min_predicted_fraction,
+                        )
+                        validation_predicted_25_fraction = predicted_support_fractions.get(
+                            0.25,
+                            pd.NA,
+                        )
+                        validation_predicted_50_fraction = predicted_support_fractions.get(
+                            0.50,
+                            pd.NA,
+                        )
+                        predicted_fraction_values = [
+                            value
+                            for value in predicted_support_fractions.values()
+                            if pd.notna(value)
+                        ]
+                        min_validation_predicted_target_fraction = (
+                            min(predicted_fraction_values)
+                            if predicted_fraction_values
+                            else pd.NA
+                        )
+                        candidate_thresholds: list[tuple[float, tuple[float, float, float] | None]]
+                        if allocation_mode == "tiered":
+                            candidate_thresholds = [
+                                (threshold_set[0], threshold_set)
+                                for threshold_set in tier_threshold_candidates
+                            ]
+                        elif allocation_mode == "direct_tiered":
+                            candidate_thresholds = [(0.0, None)]
+                        else:
+                            candidate_thresholds = [
+                                (threshold, None)
+                                for threshold in threshold_candidates
+                            ]
+                        for threshold, tier_thresholds in candidate_thresholds:
+                            for regime_policy in regime_policy_candidates:
+                                strategy_regime_policy = _strategy_regime_policy(
+                                    regime_policy
+                                )
+                                for min_holding_period_bars in min_holding_candidates:
+                                    for hysteresis_margin in hysteresis_margin_candidates:
+                                        weights = _weights_for_predictions(
+                                            config=config,
+                                            panel=panel,
+                                            predictions=validation_predictions,
+                                            threshold=threshold,
+                                            tier_thresholds=tier_thresholds,
+                                            min_holding_period_bars=min_holding_period_bars,
+                                            hysteresis_margin=hysteresis_margin,
+                                            direct_tiered=allocation_mode == "direct_tiered",
+                                            regime_policy=strategy_regime_policy,
+                                        )
+                                        if weights.empty:
+                                            continue
+                                        performance = run_backtest(
+                                            panel=validation_panel,
+                                            weights=weights,
+                                            cost_bps=config.portfolio.costs.bps_per_trade,
+                                        )
+                                        metrics = compute_strategy_metrics(
+                                            performance,
+                                            periods_per_year=config.evaluation.periods_per_year,
+                                        ).iloc[0]
+                                        total_turnover = float(metrics["total_turnover"])
+                                        annualized_turnover = _annualized_turnover(
+                                            performance=performance,
+                                            total_turnover=total_turnover,
+                                            periods_per_year=config.evaluation.periods_per_year,
+                                        )
+                                        exposure_changes, average_exposure = _weight_activity(
+                                            weights
+                                        )
+                                        excess_return = (
+                                            float(metrics["cumulative_return"])
+                                            - buy_hold_return
+                                        )
+                                        benchmark_excess_returns = {
+                                            name: float(metrics["cumulative_return"])
+                                            - benchmark_return
+                                            for name, benchmark_return in selection_benchmark_returns.items()
+                                        }
+                                        benchmark_excess_values = list(
+                                            benchmark_excess_returns.values()
+                                        )
+                                        min_benchmark_excess_return = (
+                                            min(benchmark_excess_values)
+                                            if benchmark_excess_values
+                                            else pd.NA
+                                        )
+                                        benchmark_excess_summary = ";".join(
+                                            f"{name}:{benchmark_excess_returns[name]:.12g}"
+                                            for name in selection_benchmark_names
+                                            if name in benchmark_excess_returns
+                                        )
+                                        if missing_selection_benchmarks:
+                                            missing_summary = ";".join(
+                                                f"{name}:missing"
+                                                for name in missing_selection_benchmarks
+                                            )
+                                            benchmark_excess_summary = ";".join(
+                                                value
+                                                for value in [
+                                                    benchmark_excess_summary,
+                                                    missing_summary,
+                                                ]
+                                                if value
+                                            )
+                                        sharpe_delta = (
+                                            float(metrics["sharpe_like"]) - buy_hold_sharpe
+                                        )
+                                        drawdown_delta = (
+                                            float(metrics["max_drawdown"])
+                                            - buy_hold_drawdown
+                                        )
+                                        active_candidate = (
+                                            exposure_changes >= tuning.min_exposure_changes
+                                            and average_exposure
+                                            >= tuning.min_average_exposure_for_active
+                                            and average_exposure
+                                            <= tuning.max_average_exposure_for_active
+                                        )
+                                        turnover_budget_ok = (
+                                            tuning.max_annualized_turnover is None
+                                            or annualized_turnover
+                                            <= tuning.max_annualized_turnover
+                                        )
+                                        benchmark_gate_ok = (
+                                            (
+                                                not benchmark_relative_selection
+                                                and excess_return > 0.0
+                                            )
+                                            or (
+                                                benchmark_relative_selection
+                                                and not missing_selection_benchmarks
+                                                and bool(benchmark_excess_values)
+                                                and all(
+                                                    excess > 0.0
+                                                    for excess in benchmark_excess_values
+                                                )
+                                            )
+                                        )
+                                        risk_gate_ok = (
+                                            sharpe_delta > 0.0 or drawdown_delta >= 0.0
+                                        )
+                                        failure_reasons = _candidate_failure_reasons(
+                                            active_candidate=active_candidate,
+                                            turnover_budget_ok=turnover_budget_ok,
+                                            predicted_support_ok=predicted_support_ok,
+                                            benchmark_gate_ok=benchmark_gate_ok,
+                                            benchmark_relative_selection=(
+                                                benchmark_relative_selection
+                                            ),
+                                            missing_selection_benchmarks=(
+                                                missing_selection_benchmarks
+                                            ),
+                                            benchmark_excess_values=benchmark_excess_values,
+                                            risk_gate_ok=risk_gate_ok,
+                                        )
+                                        passed_gate = (
+                                            active_candidate
+                                            and turnover_budget_ok
+                                            and predicted_support_ok
+                                            and benchmark_gate_ok
+                                            and risk_gate_ok
+                                        )
+                                        row = {
+                                            "fold_id": fold.fold_id,
+                                            "model_name": model_spec.name,
+                                            "allocation_mode": allocation_mode,
+                                            "utility_profile": utility_profile.name,
+                                            "utility_drawdown_penalty": float(
+                                                utility_profile.drawdown_penalty
+                                            ),
+                                            "utility_volatility_penalty": float(
+                                                utility_profile.volatility_penalty
+                                            ),
+                                            "utility_risk_penalty_power": float(
+                                                utility_profile.risk_penalty_power
+                                            ),
+                                            "allocation_class_weighting": (
+                                                tuning.allocation_class_weighting
+                                            ),
+                                            "calibration_status": (
+                                                validation_output.calibration_status
+                                            ),
+                                            "rolling_train_bars": (
+                                                rolling_train_bars
+                                                if rolling_train_bars is not None
+                                                else pd.NA
+                                            ),
+                                            "min_holding_period_bars": (
+                                                min_holding_period_bars
+                                            ),
+                                            "hysteresis_margin": hysteresis_margin,
+                                            "regime_policy": regime_policy.name,
+                                            "regime_bull_floor": float(
+                                                regime_policy.bull_floor
+                                            ),
+                                            "regime_sideways_floor": float(
+                                                regime_policy.sideways_floor
+                                            ),
+                                            "regime_bear_floor": float(
+                                                regime_policy.bear_floor
+                                            ),
+                                            "regime_risk_off_cap": (
+                                                float(regime_policy.risk_off_cap)
+                                                if regime_policy.risk_off_cap is not None
+                                                else pd.NA
+                                            ),
+                                            "threshold": threshold,
+                                            "tier_min_threshold": (
+                                                tier_thresholds[0]
+                                                if tier_thresholds is not None
+                                                else pd.NA
+                                            ),
+                                            "tier_half_threshold": (
+                                                tier_thresholds[1]
+                                                if tier_thresholds is not None
+                                                else pd.NA
+                                            ),
+                                            "tier_full_threshold": (
+                                                tier_thresholds[2]
+                                                if tier_thresholds is not None
+                                                else pd.NA
+                                            ),
+                                            "strategy": metrics["strategy"],
+                                            "validation_start": (
+                                                validation_rows["signal_date"].min()
+                                            ),
+                                            "validation_end": (
+                                                validation_rows["signal_date"].max()
+                                            ),
+                                            "inner_train_rows": len(
+                                                profiled_candidate_train_rows
+                                            ),
+                                            "validation_rows": len(
+                                                profiled_validation_rows
+                                            ),
+                                            "cumulative_return": metrics[
+                                                "cumulative_return"
+                                            ],
+                                            "max_drawdown": metrics["max_drawdown"],
+                                            "sharpe_like": metrics["sharpe_like"],
+                                            "total_turnover": total_turnover,
+                                            "annualized_turnover": annualized_turnover,
+                                            "exposure_changes": exposure_changes,
+                                            "average_exposure": average_exposure,
+                                            "buy_hold_cumulative_return": buy_hold_return,
+                                            "excess_cumulative_return": excess_return,
+                                            "selection_benchmark_strategies": ",".join(
+                                                selection_benchmark_names
+                                            ),
+                                            "selection_benchmark_excess_cumulative_returns": benchmark_excess_summary,
+                                            "min_benchmark_excess_cumulative_return": (
+                                                min_benchmark_excess_return
+                                            ),
+                                            "validation_predicted_25_fraction": (
+                                                validation_predicted_25_fraction
+                                            ),
+                                            "validation_predicted_50_fraction": (
+                                                validation_predicted_50_fraction
+                                            ),
+                                            "min_validation_predicted_target_fraction": (
+                                                min_validation_predicted_target_fraction
+                                            ),
+                                            "sharpe_like_delta": sharpe_delta,
+                                            "drawdown_delta": drawdown_delta,
+                                            "active_candidate": active_candidate,
+                                            "failure_reasons": failure_reasons,
+                                            "passed_gate": passed_gate,
+                                        }
+                                        candidate_rows.append(row)
+                                        fold_candidates.append(row)
 
         valid_candidates = [row for row in fold_candidates if row["passed_gate"]]
         if not valid_candidates:
@@ -2205,8 +3978,26 @@ def _build_ml_strategy_tuning_outputs(
                 {
                     "fold_id": fold.fold_id,
                     "selection_status": "no_valid_candidate",
+                    "allocation_mode": allocation_mode,
                     "selected_model_name": pd.NA,
+                    "selected_utility_profile": pd.NA,
+                    "selected_utility_drawdown_penalty": pd.NA,
+                    "selected_utility_volatility_penalty": pd.NA,
+                    "selected_utility_risk_penalty_power": pd.NA,
+                    "allocation_class_weighting": tuning.allocation_class_weighting,
+                    "calibration_status": pd.NA,
+                    "selected_rolling_train_bars": pd.NA,
+                    "selected_min_holding_period_bars": pd.NA,
+                    "selected_hysteresis_margin": pd.NA,
+                    "selected_regime_policy": pd.NA,
+                    "selected_regime_bull_floor": pd.NA,
+                    "selected_regime_sideways_floor": pd.NA,
+                    "selected_regime_bear_floor": pd.NA,
+                    "selected_regime_risk_off_cap": pd.NA,
                     "selected_threshold": pd.NA,
+                    "selected_tier_min_threshold": pd.NA,
+                    "selected_tier_half_threshold": pd.NA,
+                    "selected_tier_full_threshold": pd.NA,
                     "selected_strategy": ML_TUNED_STRATEGY_NAME,
                     "validation_start": (
                         validation_rows["signal_date"].min()
@@ -2222,34 +4013,81 @@ def _build_ml_strategy_tuning_outputs(
                     "validation_rows": len(validation_rows),
                     "passed_gate": False,
                     "excess_cumulative_return": pd.NA,
+                    "selection_benchmark_strategies": ",".join(selection_benchmark_names),
+                    "selection_benchmark_excess_cumulative_returns": pd.NA,
+                    "min_benchmark_excess_cumulative_return": pd.NA,
+                    "validation_predicted_25_fraction": pd.NA,
+                    "validation_predicted_50_fraction": pd.NA,
+                    "min_validation_predicted_target_fraction": pd.NA,
                     "sharpe_like_delta": pd.NA,
                     "drawdown_delta": pd.NA,
+                    "annualized_turnover": pd.NA,
                     "exposure_changes": 0,
                     "average_exposure": 0.0,
                 }
             )
             continue
 
-        selected = sorted(
-            valid_candidates,
-            key=lambda row: (
-                float(row["excess_cumulative_return"]),
-                float(row["sharpe_like_delta"]),
-                float(row["drawdown_delta"]),
-            ),
-            reverse=True,
-        )[0]
+        selected = _select_ml_strategy_candidate(valid_candidates)
         selected_model = str(selected["model_name"])
+        selected_rolling_train_bars = (
+            int(selected["rolling_train_bars"])
+            if pd.notna(selected["rolling_train_bars"])
+            else None
+        )
+        selected_min_holding_period_bars = int(selected["min_holding_period_bars"])
+        selected_hysteresis_margin = float(selected["hysteresis_margin"])
         selected_threshold = float(selected["threshold"])
-        selected_test_predictions = _score_direction_rows(
+        selected_regime_policy = RegimeParticipationPolicyConfig(
+            name=str(selected["regime_policy"]),
+            bull_floor=float(selected["regime_bull_floor"]),
+            sideways_floor=float(selected["regime_sideways_floor"]),
+            bear_floor=float(selected["regime_bear_floor"]),
+            risk_off_cap=(
+                float(selected["regime_risk_off_cap"])
+                if pd.notna(selected["regime_risk_off_cap"])
+                else None
+            ),
+        )
+        selected_utility_profile = AllocationUtilityProfileConfig(
+            name=str(selected["utility_profile"]),
+            drawdown_penalty=float(selected["utility_drawdown_penalty"]),
+            volatility_penalty=float(selected["utility_volatility_penalty"]),
+            risk_penalty_power=float(selected["utility_risk_penalty_power"]),
+        )
+        selected_tier_thresholds: tuple[float, float, float] | None = None
+        if allocation_mode == "tiered":
+            selected_tier_thresholds = (
+                float(selected["tier_min_threshold"]),
+                float(selected["tier_half_threshold"]),
+                float(selected["tier_full_threshold"]),
+            )
+        selected_train_rows = _apply_allocation_profile(
+            _latest_training_rows(outer_train_rows, selected_rolling_train_bars),
+            config=config,
+            profile=selected_utility_profile,
+        )
+        selected_test_rows = _apply_allocation_profile(
+            test_rows,
+            config=config,
+            profile=selected_utility_profile,
+        )
+        selected_test_output = _score_model_rows(
             model_name=selected_model,
             target_type=config.target.type,
-            train_rows=outer_train_rows,
-            score_rows=test_rows,
+            train_rows=selected_train_rows,
+            score_rows=selected_test_rows,
             feature_columns=feature_columns,
             fold_id=fold.fold_id,
+            allocation_class_weighting=tuning.allocation_class_weighting,
+            allocation_partial_class_weight_multiplier=(
+                tuning.allocation_partial_class_weight_multiplier
+            ),
+            allocation_probability_calibration=tuning.allocation_probability_calibration,
+            allocation_calibration_cv=tuning.allocation_calibration_cv,
+            utility_profile=selected_utility_profile,
         )
-        if selected_test_predictions is None:
+        if selected_test_output is None:
             selected_weight_frames.append(
                 _cash_weights_for_rows(
                     panel=panel,
@@ -2260,6 +4098,7 @@ def _build_ml_strategy_tuning_outputs(
             )
             selection_status = "no_valid_candidate"
         else:
+            selected_test_predictions = selected_test_output.predictions
             selected_weight_frames.append(
                 _weights_for_predictions(
                     config=config,
@@ -2267,17 +4106,111 @@ def _build_ml_strategy_tuning_outputs(
                     predictions=selected_test_predictions,
                     threshold=selected_threshold,
                     strategy_name=ML_TUNED_STRATEGY_NAME,
+                    tier_thresholds=selected_tier_thresholds,
+                    min_holding_period_bars=selected_min_holding_period_bars,
+                    hysteresis_margin=selected_hysteresis_margin,
+                    direct_tiered=allocation_mode == "direct_tiered",
+                    regime_policy=_strategy_regime_policy(selected_regime_policy),
                 )
             )
+            if _is_allocation_target(config.target.type):
+                allocation_probability_frames.append(
+                    _allocation_probability_diagnostics(selected_test_predictions)
+                )
+                if not selected_test_output.feature_importance.empty:
+                    feature_importance_frames.append(selected_test_output.feature_importance)
             selection_status = "selected"
 
         selection_rows.append(
             {
                 "fold_id": fold.fold_id,
                 "selection_status": selection_status,
+                "allocation_mode": allocation_mode,
                 "selected_model_name": selected_model if selection_status == "selected" else pd.NA,
+                "selected_utility_profile": (
+                    selected_utility_profile.name
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_utility_drawdown_penalty": (
+                    float(selected_utility_profile.drawdown_penalty)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_utility_volatility_penalty": (
+                    float(selected_utility_profile.volatility_penalty)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_utility_risk_penalty_power": (
+                    float(selected_utility_profile.risk_penalty_power)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "allocation_class_weighting": tuning.allocation_class_weighting,
+                "calibration_status": (
+                    selected_test_output.calibration_status
+                    if selection_status == "selected" and selected_test_output is not None
+                    else selected.get("calibration_status", pd.NA)
+                ),
+                "selected_rolling_train_bars": (
+                    selected_rolling_train_bars
+                    if selected_rolling_train_bars is not None and selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_min_holding_period_bars": (
+                    selected_min_holding_period_bars
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_hysteresis_margin": (
+                    selected_hysteresis_margin if selection_status == "selected" else pd.NA
+                ),
+                "selected_regime_policy": (
+                    selected_regime_policy.name
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_regime_bull_floor": (
+                    float(selected_regime_policy.bull_floor)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_regime_sideways_floor": (
+                    float(selected_regime_policy.sideways_floor)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_regime_bear_floor": (
+                    float(selected_regime_policy.bear_floor)
+                    if selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_regime_risk_off_cap": (
+                    float(selected_regime_policy.risk_off_cap)
+                    if (
+                        selection_status == "selected"
+                        and selected_regime_policy.risk_off_cap is not None
+                    )
+                    else pd.NA
+                ),
                 "selected_threshold": (
                     selected_threshold if selection_status == "selected" else pd.NA
+                ),
+                "selected_tier_min_threshold": (
+                    selected_tier_thresholds[0]
+                    if selected_tier_thresholds is not None and selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_tier_half_threshold": (
+                    selected_tier_thresholds[1]
+                    if selected_tier_thresholds is not None and selection_status == "selected"
+                    else pd.NA
+                ),
+                "selected_tier_full_threshold": (
+                    selected_tier_thresholds[2]
+                    if selected_tier_thresholds is not None and selection_status == "selected"
+                    else pd.NA
                 ),
                 "selected_strategy": ML_TUNED_STRATEGY_NAME,
                 "validation_start": selected["validation_start"],
@@ -2286,8 +4219,27 @@ def _build_ml_strategy_tuning_outputs(
                 "validation_rows": selected["validation_rows"],
                 "passed_gate": bool(selected["passed_gate"]) and selection_status == "selected",
                 "excess_cumulative_return": selected["excess_cumulative_return"],
+                "selection_benchmark_strategies": selected[
+                    "selection_benchmark_strategies"
+                ],
+                "selection_benchmark_excess_cumulative_returns": selected[
+                    "selection_benchmark_excess_cumulative_returns"
+                ],
+                "min_benchmark_excess_cumulative_return": selected[
+                    "min_benchmark_excess_cumulative_return"
+                ],
+                "validation_predicted_25_fraction": selected[
+                    "validation_predicted_25_fraction"
+                ],
+                "validation_predicted_50_fraction": selected[
+                    "validation_predicted_50_fraction"
+                ],
+                "min_validation_predicted_target_fraction": selected[
+                    "min_validation_predicted_target_fraction"
+                ],
                 "sharpe_like_delta": selected["sharpe_like_delta"],
                 "drawdown_delta": selected["drawdown_delta"],
+                "annualized_turnover": selected["annualized_turnover"],
                 "exposure_changes": selected["exposure_changes"],
                 "average_exposure": selected["average_exposure"],
             }
@@ -2296,14 +4248,44 @@ def _build_ml_strategy_tuning_outputs(
     candidates = pd.DataFrame(candidate_rows, columns=candidate_columns)
     if not candidates.empty:
         candidates = candidates.sort_values(
-            ["fold_id", "passed_gate", "excess_cumulative_return", "model_name", "threshold"],
-            ascending=[True, False, False, True, True],
+            [
+                "fold_id",
+                "passed_gate",
+                "min_benchmark_excess_cumulative_return",
+                "excess_cumulative_return",
+                "drawdown_delta",
+                "sharpe_like_delta",
+                "annualized_turnover",
+                "model_name",
+                "regime_policy",
+                "threshold",
+                "hysteresis_margin",
+            ],
+            ascending=[
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                True,
+                True,
+                True,
+                True,
+            ],
         ).reset_index(drop=True)
     selections = pd.DataFrame(selection_rows, columns=selection_columns)
     if not selections.empty:
         selections = selections.sort_values("fold_id").reset_index(drop=True)
     if not selected_weight_frames:
-        return None, candidates, selections
+        return (
+            None,
+            candidates,
+            selections,
+            pd.DataFrame(columns=allocation_probability_columns),
+            pd.DataFrame(columns=feature_importance_columns),
+        )
 
     selected_weights = (
         pd.concat(selected_weight_frames, ignore_index=True)
@@ -2316,11 +4298,26 @@ def _build_ml_strategy_tuning_outputs(
         weights=selected_weights,
         cost_bps=config.portfolio.costs.bps_per_trade,
     )
-    return tuned_result, candidates, selections
+    allocation_probability_diagnostics = (
+        pd.concat(allocation_probability_frames, ignore_index=True)
+        if allocation_probability_frames
+        else pd.DataFrame(columns=allocation_probability_columns)
+    )
+    feature_importance = (
+        pd.concat(feature_importance_frames, ignore_index=True)
+        if feature_importance_frames
+        else pd.DataFrame(columns=feature_importance_columns)
+    )
+    return tuned_result, candidates, selections, allocation_probability_diagnostics, feature_importance
+
 
 def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
     if not config.models:
         raise RuntimeError("No models are configured for train-models.")
+    if _is_allocation_target(config.target.type):
+        raise RuntimeError(
+            "train-models does not support allocation_utility or regime_state; use run-experiment."
+        )
 
     panel, panel_path = prepare_data(config)
     modeling_dataset = build_modeling_dataset(panel, config)
@@ -2541,44 +4538,74 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
             f"No walk-forward folds are available for run-experiment. See {fold_diagnostics_path}."
         )
 
-    training_outputs = train_direction_models_on_folds(
-        modeling_dataset=modeling_dataset,
-        folds=folds,
-        model_specs=config.models,
-        target_type=config.target.type,
-        run_dir=run_dir,
-        save_predictions=True,
-        mode=config.portfolio.ranking.mode,
-        long_n=config.portfolio.ranking.long_n,
-        short_n=config.portfolio.ranking.short_n,
-    )
-    if training_outputs.predictions is None or training_outputs.predictions.empty:
-        raise RuntimeError("run-experiment requires fold predictions for ranking.")
-
-    ml_outputs = _run_ml_strategies(
-        config=config,
-        panel=panel,
-        predictions=training_outputs.predictions,
-    )
     buy_hold_performance = baseline_outputs.performance.loc[
         baseline_outputs.performance["strategy"].astype(str) == "buy_hold"
     ].copy()
     if config.evaluation.ml_strategy_tuning.enabled and buy_hold_performance.empty:
         raise RuntimeError("ML strategy tuning requires the buy_hold baseline.")
+
+    training_outputs = None
+    ml_outputs: BacktestResult | None = None
+    model_summary: pd.DataFrame | None = None
+    fold_summary: pd.DataFrame | None = None
+    ml_strategy_threshold_sweep: pd.DataFrame | None = None
+    ranking_diagnostics: pd.DataFrame | None = None
+    calibration_diagnostics: pd.DataFrame | None = None
+    score_histograms: pd.DataFrame | None = None
+    threshold_diagnostics: pd.DataFrame | None = None
+
+    if not _is_allocation_target(config.target.type):
+        training_outputs = train_direction_models_on_folds(
+            modeling_dataset=modeling_dataset,
+            folds=folds,
+            model_specs=config.models,
+            target_type=config.target.type,
+            run_dir=run_dir,
+            save_predictions=True,
+            mode=config.portfolio.ranking.mode,
+            long_n=config.portfolio.ranking.long_n,
+            short_n=config.portfolio.ranking.short_n,
+        )
+        if training_outputs.predictions is None or training_outputs.predictions.empty:
+            raise RuntimeError("run-experiment requires fold predictions for ranking.")
+
+        ml_outputs = _run_ml_strategies(
+            config=config,
+            panel=panel,
+            predictions=training_outputs.predictions,
+        )
+        model_summary = build_model_summary(
+            model_metrics=training_outputs.metrics,
+            model_manifest=training_outputs.manifest,
+        )
+        fold_summary = build_fold_summary(
+            model_metrics=training_outputs.metrics,
+            model_manifest=training_outputs.manifest,
+        )
+        ranking_diagnostics = training_outputs.ranking_diagnostics
+        calibration_diagnostics = training_outputs.calibration_diagnostics
+        score_histograms = training_outputs.score_histograms
+        threshold_diagnostics = training_outputs.threshold_diagnostics
+
     ml_strategy_tuning_result: BacktestResult | None = None
     ml_strategy_tuning_candidates: pd.DataFrame | None = None
     ml_strategy_tuning_selections: pd.DataFrame | None = None
+    allocation_probability_diagnostics: pd.DataFrame | None = None
+    feature_importance: pd.DataFrame | None = None
     if config.evaluation.ml_strategy_tuning.enabled:
         (
             ml_strategy_tuning_result,
             ml_strategy_tuning_candidates,
             ml_strategy_tuning_selections,
+            allocation_probability_diagnostics,
+            feature_importance,
         ) = _build_ml_strategy_tuning_outputs(
             config=config,
             panel=panel,
             modeling_dataset=modeling_dataset,
             folds=folds,
             buy_hold_performance=buy_hold_performance,
+            baseline_performance=baseline_outputs.performance,
         )
     oos_dates = _shared_oos_dates(
         panel=panel,
@@ -2586,22 +4613,25 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         folds=folds,
         frequency=config.portfolio.ranking.rebalance_frequency,
     )
-    result_frames = [baseline_outputs, ml_outputs]
+    result_frames = [baseline_outputs]
+    if ml_outputs is not None:
+        result_frames.append(ml_outputs)
     if ml_strategy_tuning_result is not None:
         result_frames.append(ml_strategy_tuning_result)
     combined_outputs = _concat_backtest_results(result_frames)
     oos_outputs = _slice_backtest_result(combined_outputs, oos_dates)
-    comparison_metrics = compute_strategy_metrics(
-        oos_outputs.performance,
-        periods_per_year=config.evaluation.periods_per_year,
-    )
-    ml_strategy_threshold_sweep = _build_ml_strategy_threshold_sweep(
-        config=config,
-        panel=panel,
-        predictions=training_outputs.predictions,
-        oos_dates=oos_dates,
-        comparison_metrics=comparison_metrics,
-    )
+    if training_outputs is not None and training_outputs.predictions is not None:
+        comparison_metrics = compute_strategy_metrics(
+            oos_outputs.performance,
+            periods_per_year=config.evaluation.periods_per_year,
+        )
+        ml_strategy_threshold_sweep = _build_ml_strategy_threshold_sweep(
+            config=config,
+            panel=panel,
+            predictions=training_outputs.predictions,
+            oos_dates=oos_dates,
+            comparison_metrics=comparison_metrics,
+        )
     black_litterman_assumptions = _slice_black_litterman_assumptions(
         black_litterman_assumptions,
         oos_dates,
@@ -2622,13 +4652,10 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         pattern_exit_overlay_diagnostics_frame,
         oos_dates,
     )
-    model_summary = build_model_summary(
-        model_metrics=training_outputs.metrics,
-        model_manifest=training_outputs.manifest,
-    )
-    fold_summary = build_fold_summary(
-        model_metrics=training_outputs.metrics,
-        model_manifest=training_outputs.manifest,
+    allocation_target_diagnostics = (
+        _allocation_target_diagnostics(modeling_dataset=modeling_dataset, folds=folds)
+        if _is_allocation_target(config.target.type)
+        else None
     )
 
     return _persist_experiment_outputs(
@@ -2643,10 +4670,10 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         fold_summary=fold_summary,
         fold_diagnostics=fold_diagnostics,
         fold_diagnostics_path=fold_diagnostics_path,
-        ranking_diagnostics=training_outputs.ranking_diagnostics,
-        calibration_diagnostics=training_outputs.calibration_diagnostics,
-        score_histograms=training_outputs.score_histograms,
-        threshold_diagnostics=training_outputs.threshold_diagnostics,
+        ranking_diagnostics=ranking_diagnostics,
+        calibration_diagnostics=calibration_diagnostics,
+        score_histograms=score_histograms,
+        threshold_diagnostics=threshold_diagnostics,
         covariance_diagnostics=covariance_diagnostics,
         black_litterman_assumptions=black_litterman_assumptions,
         indicator_diagnostics=indicator_diagnostics,
@@ -2663,6 +4690,9 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         ml_strategy_threshold_sweep=ml_strategy_threshold_sweep,
         ml_strategy_tuning_candidates=ml_strategy_tuning_candidates,
         ml_strategy_tuning_selections=ml_strategy_tuning_selections,
+        allocation_target_diagnostics=allocation_target_diagnostics,
+        allocation_probability_diagnostics=allocation_probability_diagnostics,
+        feature_importance=feature_importance,
     )
 
 

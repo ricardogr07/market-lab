@@ -10,6 +10,80 @@ from marketlab.features.engineering import add_feature_set
 from marketlab.rebalance import next_effective_dates, rebalance_signal_dates
 from marketlab.strategies.indicator_stack import build_indicator_frame
 
+ALLOCATION_UTILITY_TIERS = (0.0, 0.25, 0.50, 1.0)
+ALLOCATION_UTILITY_LABELS = {
+    0.0: 0,
+    0.25: 1,
+    0.50: 2,
+    1.0: 3,
+}
+REGIME_STATE_LABELS = {
+    0.0: 0,
+    0.25: 1,
+    0.50: 1,
+    1.0: 2,
+}
+
+
+def apply_allocation_utility_profile(
+    rows: pd.DataFrame,
+    *,
+    target_type: str = "allocation_utility",
+    cost_bps: float = 0.0,
+    drawdown_penalty: float = 0.50,
+    volatility_penalty: float = 0.25,
+    risk_penalty_power: float = 2.0,
+) -> pd.DataFrame:
+    required_columns = {
+        "forward_return",
+        "forward_drawdown",
+        "forward_realized_volatility",
+    }
+    missing_columns = required_columns - set(rows.columns)
+    if missing_columns:
+        joined = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Allocation utility rows are missing required columns: {joined}")
+    if target_type not in {"allocation_utility", "regime_state"}:
+        raise ValueError(f"Unsupported allocation utility target_type: {target_type}")
+
+    working = rows.copy()
+    entry_cost = float(cost_bps) / 10_000.0
+    utility_rows: dict[float, list[float]] = {tier: [] for tier in ALLOCATION_UTILITY_TIERS}
+    target_weights: list[float] = []
+    target_labels: list[int] = []
+    label_map = (
+        REGIME_STATE_LABELS if target_type == "regime_state" else ALLOCATION_UTILITY_LABELS
+    )
+
+    for _, row in working.iterrows():
+        forward_return = float(row["forward_return"])
+        path_drawdown = abs(float(row["forward_drawdown"]))
+        path_volatility = float(row["forward_realized_volatility"])
+        utilities = {
+            tier: (
+                tier * forward_return
+                - drawdown_penalty * (tier**risk_penalty_power) * path_drawdown
+                - volatility_penalty * (tier**risk_penalty_power) * path_volatility
+                - entry_cost * tier
+            )
+            for tier in ALLOCATION_UTILITY_TIERS
+        }
+        selected_tier = max(
+            ALLOCATION_UTILITY_TIERS,
+            key=lambda tier: (utilities[tier], -tier),
+        )
+        target_weights.append(selected_tier)
+        target_labels.append(label_map[selected_tier])
+        for tier, utility in utilities.items():
+            utility_rows[tier].append(float(utility))
+
+    working["target_weight"] = target_weights
+    working["target"] = target_labels
+    for tier, values in utility_rows.items():
+        suffix = str(int(tier * 100))
+        working[f"allocation_utility_{suffix}"] = values
+    return working
+
 
 def _add_indicator_stack_ml_features(
     featured_panel: pd.DataFrame,
@@ -134,6 +208,11 @@ def add_forward_targets(
     panel: pd.DataFrame,
     horizon_days: int,
     target_type: str = "direction",
+    *,
+    cost_bps: float = 0.0,
+    allocation_utility_drawdown_penalty: float = 0.50,
+    allocation_utility_volatility_penalty: float = 0.25,
+    allocation_utility_risk_penalty_power: float = 2.0,
 ) -> pd.DataFrame:
     if horizon_days < 1:
         raise ValueError("horizon_days must be at least 1.")
@@ -186,6 +265,51 @@ def add_forward_targets(
         working["target"] = working["forward_return"].gt(0.0).astype(int)
     elif target_type == "return":
         working["target"] = working["forward_return"]
+    elif target_type in {"allocation_utility", "regime_state"}:
+        price_paths = {
+            symbol: frame.set_index("timestamp").sort_index()
+            for symbol, frame in prices.groupby("symbol", sort=True)
+        }
+
+        drawdowns: list[float] = []
+        realized_volatility: list[float] = []
+
+        for index, row in working.iterrows():
+            symbol = str(row["symbol"])
+            start_position = int(effective_positions.loc[index])
+            end_position = int(horizon_positions.loc[index])
+            path_dates = unique_dates[start_position : end_position + 1]
+            symbol_prices = price_paths[symbol].reindex(path_dates)
+            closes = symbol_prices["adj_close"].dropna().astype(float)
+            entry_price = float(row["entry_adj_open"])
+
+            if closes.empty or entry_price == 0.0:
+                path_drawdown = 0.0
+                path_volatility = 0.0
+            else:
+                path_returns = (closes / entry_price) - 1.0
+                path_drawdown = min(0.0, float(path_returns.min()))
+                period_prices = pd.concat(
+                    [pd.Series([entry_price]), closes.reset_index(drop=True)],
+                    ignore_index=True,
+                )
+                path_volatility = float(period_prices.pct_change().dropna().std(ddof=0))
+                if pd.isna(path_volatility):
+                    path_volatility = 0.0
+
+            drawdowns.append(path_drawdown)
+            realized_volatility.append(path_volatility)
+
+        working["forward_drawdown"] = drawdowns
+        working["forward_realized_volatility"] = realized_volatility
+        working = apply_allocation_utility_profile(
+            working,
+            target_type=target_type,
+            cost_bps=cost_bps,
+            drawdown_penalty=allocation_utility_drawdown_penalty,
+            volatility_penalty=allocation_utility_volatility_penalty,
+            risk_penalty_power=allocation_utility_risk_penalty_power,
+        )
     else:
         raise ValueError(f"Unsupported target_type: {target_type}")
 
@@ -216,6 +340,10 @@ def build_modeling_dataset(
         panel=featured_panel,
         horizon_days=config.target.horizon_days,
         target_type=config.target.type,
+        cost_bps=config.portfolio.costs.bps_per_trade,
+        allocation_utility_drawdown_penalty=config.target.allocation_utility_drawdown_penalty,
+        allocation_utility_volatility_penalty=config.target.allocation_utility_volatility_penalty,
+        allocation_utility_risk_penalty_power=config.target.allocation_utility_risk_penalty_power,
     )
     required_columns = [*feature_columns, "forward_return", "target"]
     dataset = dataset.dropna(subset=required_columns).reset_index(drop=True)
