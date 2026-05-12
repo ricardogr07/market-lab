@@ -31,13 +31,16 @@ from marketlab.paper.core import (
     CONSENSUS_POLICY,
     SUBMISSION_PENDING,
     SUBMISSION_SKIPPED,
+    _is_crypto_paper_config,
     _iso_date,
     _local_now,
     _now_utc,
     _paper_model_names,
     _paper_symbol,
+    _paper_symbol_token,
     validate_paper_trading_config,
 )
+from marketlab.strategies.tiered_allocation import nearest_tier, target_weight_for_score
 from marketlab.targets import add_forward_targets, build_rebalance_snapshots
 
 
@@ -84,7 +87,7 @@ def _next_trading_date(
 
 
 def _proposal_id(signal_date: str, effective_date: str, symbol: str) -> str:
-    return f"{effective_date}-{symbol}-{signal_date}"
+    return f"{effective_date}-{_paper_symbol_token(symbol)}-{signal_date}"
 
 
 def _training_rows_for_latest_signal(
@@ -135,21 +138,47 @@ def _train_and_score_models(
     feature_columns: list[str],
 ) -> list[dict[str, Any]]:
     threshold = float(config.portfolio.ranking.min_score_threshold)
+    tier_thresholds_values = tuple(
+        float(value) for value in config.evaluation.ml_strategy_tuning.tier_thresholds
+    )
+    if len(tier_thresholds_values) != 3:
+        raise RuntimeError("BTC paper tiered allocation requires three tier thresholds.")
+    tier_thresholds = (
+        tier_thresholds_values[0],
+        tier_thresholds_values[1],
+        tier_thresholds_values[2],
+    )
+    use_tiered_allocation = _is_crypto_paper_config(config)
     rows: list[dict[str, Any]] = []
     target = train_rows["target"].astype(int)
+    risk_off_value = (
+        latest_snapshot["crypto_regime_risk_off"].iloc[0]
+        if "crypto_regime_risk_off" in latest_snapshot.columns
+        else 0
+    )
+    risk_off = bool(float(risk_off_value)) if pd.notna(risk_off_value) else False
 
     for model_name in _paper_model_names(config):
         definition, estimator = build_model_estimator(model_name, config.target.type)
         estimator.fit(train_rows[feature_columns], target)
         score = float(predict_direction_scores(estimator, latest_snapshot[feature_columns]).iloc[0])
-        vote = "long" if score >= threshold else "cash"
+        if use_tiered_allocation:
+            target_weight = target_weight_for_score(
+                score,
+                tier_thresholds,
+                risk_off=risk_off,
+            )
+            vote = "long" if target_weight > 0.0 else "cash"
+        else:
+            vote = "long" if score >= threshold else "cash"
+            target_weight = 1.0 if vote == "long" else 0.0
         rows.append(
             {
                 "model_name": model_name,
                 "estimator_label": definition.estimator_label,
                 "score": score,
                 "vote": vote,
-                "target_weight": 1.0 if vote == "long" else 0.0,
+                "target_weight": target_weight,
             }
         )
 
@@ -168,14 +197,23 @@ def _proposal_consensus(
         "min_long_votes": int(config.paper.consensus_min_long_votes),
         "model_count": len(model_rows),
     }
-    target_weight = 1.0 if long_vote_count >= config.paper.consensus_min_long_votes else 0.0
+    if _is_crypto_paper_config(config):
+        average_model_target = sum(float(row["target_weight"]) for row in model_rows) / len(model_rows)
+        target_weight = nearest_tier(average_model_target)
+        consensus_rule["allocation_policy"] = "average_model_weight_nearest_tier"
+        consensus_rule["allowed_target_weights"] = [0.0, 0.25, 0.5, 1.0]
+        consensus_rule["average_model_target_weight"] = average_model_target
+        decision = f"long_{int(target_weight * 100)}" if target_weight > 0.0 else "cash"
+    else:
+        target_weight = 1.0 if long_vote_count >= config.paper.consensus_min_long_votes else 0.0
+        decision = "long" if target_weight > 0.0 else "cash"
     return (
         {
             "decision_policy": CONSENSUS_POLICY,
             "consensus_rule": consensus_rule,
             "long_vote_count": long_vote_count,
             "cash_vote_count": cash_vote_count,
-            "decision": "long" if target_weight > 0.0 else "cash",
+            "decision": decision,
             "target_weight": target_weight,
         },
         target_weight,
@@ -231,11 +269,12 @@ class DecisionService:
         config = self._config
         validate_paper_trading_config(config)
         paper_symbol = _paper_symbol(config)
+        crypto_paper = _is_crypto_paper_config(config)
         local_now = _local_now(config, request.now)
         broker_client = self._broker(request)
         market_date = local_now.date()
 
-        if not _is_trading_day(broker_client, market_date=market_date):
+        if not crypto_paper and not _is_trading_day(broker_client, market_date=market_date):
             status = {
                 "event": "paper-decision",
                 "status": SUBMISSION_SKIPPED,
@@ -288,10 +327,13 @@ class DecisionService:
             raise RuntimeError("The paper decision path produced no labeled historical rows.")
 
         feature_columns = modeling_feature_columns(labeled_dataset)
-        effective_date = _next_trading_date(
-            broker_client,
-            market_date=market_date,
-        ).isoformat()
+        if crypto_paper:
+            effective_date = market_date.isoformat()
+        else:
+            effective_date = _next_trading_date(
+                broker_client,
+                market_date=market_date,
+            ).isoformat()
         latest_snapshot = _latest_snapshot_row(
             featured_panel,
             feature_columns,

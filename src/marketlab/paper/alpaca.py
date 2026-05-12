@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -105,6 +105,31 @@ def _normalize_daily_timestamp(value: object) -> pd.Timestamp:
     raise TypeError(f"Unsupported timestamp value: {value!r}")
 
 
+def _normalize_intraday_timestamp(value: object) -> pd.Timestamp:
+    timestamp = pd.to_datetime(value, utc=True)
+    if isinstance(timestamp, pd.Timestamp):
+        return timestamp.tz_convert(None)
+    raise TypeError(f"Unsupported timestamp value: {value!r}")
+
+
+def _alpaca_timeframe(interval: str) -> str:
+    mapping = {
+        "1m": "1Min",
+        "5m": "5Min",
+        "15m": "15Min",
+        "30m": "30Min",
+        "1h": "1Hour",
+        "2h": "2Hour",
+        "4h": "4Hour",
+        "1d": "1Day",
+    }
+    normalized = interval.lower()
+    if normalized not in mapping:
+        allowed = ", ".join(sorted(mapping))
+        raise ValueError(f"Unsupported Alpaca paper-data interval: {interval}. Allowed: {allowed}")
+    return mapping[normalized]
+
+
 class AlpacaMarketDataProvider(MarketDataProvider):
     def __init__(self, credentials: AlpacaCredentials | None = None) -> None:
         self._credentials = credentials or AlpacaCredentials.from_env()
@@ -116,8 +141,16 @@ class AlpacaMarketDataProvider(MarketDataProvider):
         end_date: str,
         interval: str,
     ) -> pd.DataFrame:
+        if "/" in symbol:
+            return self._download_crypto_symbol_history(
+                symbol,
+                start_date,
+                end_date,
+                interval,
+            )
+
         if interval != "1d":
-            raise ValueError("The Alpaca paper-data path currently supports interval='1d' only.")
+            raise ValueError("The Alpaca stock paper-data path supports interval='1d' only.")
 
         payload = _json_request(
             method="GET",
@@ -146,6 +179,50 @@ class AlpacaMarketDataProvider(MarketDataProvider):
             [
                 {
                     "Date": _normalize_daily_timestamp(bar["t"]),
+                    "Open": float(bar["o"]),
+                    "High": float(bar["h"]),
+                    "Low": float(bar["l"]),
+                    "Close": float(bar["c"]),
+                    "Adj Close": float(bar["c"]),
+                    "Volume": float(bar["v"]),
+                }
+                for bar in bars
+            ]
+        )
+        return frame.sort_values("Date").reset_index(drop=True)
+
+    def _download_crypto_symbol_history(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        interval: str,
+    ) -> pd.DataFrame:
+        payload = _json_request(
+            method="GET",
+            base_url=self._credentials.data_base_url,
+            path="/v1beta3/crypto/us/bars",
+            api_key_id=self._credentials.api_key_id,
+            api_secret_key=self._credentials.api_secret_key,
+            timeout_seconds=self._credentials.timeout_seconds,
+            params={
+                "symbols": symbol,
+                "timeframe": _alpaca_timeframe(interval),
+                "start": f"{start_date}T00:00:00Z",
+                "end": f"{end_date}T23:59:59Z",
+                "sort": "asc",
+                "limit": 10000,
+            },
+        )
+
+        bars = (payload.get("bars") or {}).get(symbol, [])
+        if not bars:
+            raise RuntimeError(f"No Alpaca crypto market data returned for {symbol}.")
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "Date": _normalize_intraday_timestamp(bar["t"]),
                     "Open": float(bar["o"]),
                     "High": float(bar["h"]),
                     "Low": float(bar["l"]),
@@ -212,7 +289,7 @@ class AlpacaPaperBrokerClient:
             payload = _json_request(
                 method="GET",
                 base_url=self._credentials.trading_base_url,
-                path=f"/v2/positions/{symbol}",
+                path=f"/v2/positions/{quote(symbol, safe='')}",
                 api_key_id=self._credentials.api_key_id,
                 api_secret_key=self._credentials.api_secret_key,
                 timeout_seconds=self._credentials.timeout_seconds,
@@ -233,6 +310,7 @@ class AlpacaPaperBrokerClient:
         qty: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, Any]:
         payload = _json_request(
             method="POST",
@@ -246,7 +324,7 @@ class AlpacaPaperBrokerClient:
                 "qty": f"{qty:.6f}",
                 "side": side,
                 "type": "market",
-                "time_in_force": "day",
+                "time_in_force": time_in_force,
                 "client_order_id": client_order_id,
             },
         )
@@ -261,6 +339,7 @@ class AlpacaPaperBrokerClient:
         notional: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, Any]:
         payload = _json_request(
             method="POST",
@@ -274,7 +353,7 @@ class AlpacaPaperBrokerClient:
                 "notional": f"{notional:.2f}",
                 "side": side,
                 "type": "market",
-                "time_in_force": "day",
+                "time_in_force": time_in_force,
                 "client_order_id": client_order_id,
             },
         )
