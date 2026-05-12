@@ -70,6 +70,43 @@ def test_crypto_time_series_features_are_trailing_only() -> None:
         assert baseline_features.iloc[:-1][column].equals(modified_features.iloc[:-1][column])
 
 
+def test_crypto_regime_features_are_trailing_only() -> None:
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "crypto_hourly_panel.csv"
+    baseline = load_panel_csv(fixture_path)
+    modified = baseline.copy()
+    modified.loc[modified.index[-1], "adj_close"] *= 3.0
+    modified.loc[modified.index[-1], "volume"] *= 5.0
+
+    kwargs = {
+        "return_windows": [1, 3],
+        "ma_windows": [3],
+        "vol_windows": [3],
+        "momentum_window": 3,
+        "crypto_regime_features_enabled": True,
+        "crypto_regime_trend_windows": [3, 6],
+        "crypto_regime_volatility_window": 3,
+        "crypto_regime_percentile_window": 6,
+        "crypto_regime_drawdown_window": 6,
+        "crypto_regime_volume_window": 3,
+    }
+    baseline_features = add_feature_set(baseline, **kwargs)
+    modified_features = add_feature_set(modified, **kwargs)
+
+    compare_columns = [
+        "crypto_regime_return_3",
+        "crypto_regime_price_to_ma_6",
+        "crypto_regime_realized_vol_3",
+        "crypto_regime_vol_percentile_3_6",
+        "crypto_regime_drawdown_6",
+        "crypto_regime_volume_shock_3",
+        "crypto_regime_trend_state",
+        "crypto_regime_risk_off",
+    ]
+    for column in compare_columns:
+        assert column in baseline_features.columns
+        assert baseline_features.iloc[:-1][column].equals(modified_features.iloc[:-1][column])
+
+
 def test_indicator_stack_ml_features_are_trailing_only() -> None:
     fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "crypto_hourly_panel.csv"
     baseline = load_panel_csv(fixture_path)

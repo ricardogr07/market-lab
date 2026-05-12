@@ -13,6 +13,7 @@ def _write_config(
     *,
     data: dict[str, object] | None = None,
     features: dict[str, object] | None = None,
+    target: dict[str, object] | None = None,
     portfolio: dict[str, object] | None = None,
     baselines: dict[str, object] | None = None,
     evaluation: dict[str, object] | None = None,
@@ -31,6 +32,8 @@ def _write_config(
         payload["data"].update(data)
     if features is not None:
         payload["features"] = features
+    if target is not None:
+        payload["target"] = target
     if portfolio is not None:
         payload["portfolio"] = portfolio
     if baselines is not None:
@@ -52,6 +55,10 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.baselines.allocation.mode == "equal"
     assert config.baselines.allocation.symbol_weights == {}
     assert config.baselines.allocation.group_weights == {}
+    assert config.baselines.partial_allocation_benchmarks.enabled is False
+    assert config.baselines.partial_allocation_benchmarks.weights == []
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.enabled is False
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.weights == []
     assert config.baselines.optimized.enabled is False
     assert config.baselines.optimized.method == "mean_variance"
     assert config.baselines.optimized.lookback_days == 252
@@ -97,6 +104,20 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
         0.62,
         0.65,
     ]
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == []
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0]
+    assert config.evaluation.ml_strategy_tuning.max_annualized_turnover is None
+    assert [
+        (
+            policy.name,
+            policy.bull_floor,
+            policy.sideways_floor,
+            policy.bear_floor,
+            policy.risk_off_cap,
+        )
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+    ] == [("model_only", 0.0, 0.0, 0.0, 0.25)]
     assert config.baselines.pattern_exit_overlay.enabled is False
     assert config.baselines.pattern_meta_label.enabled is False
 
@@ -139,6 +160,10 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
                 "min_validation_rows": 50,
                 "min_exposure_changes": 3,
                 "max_average_exposure_for_active": 0.99,
+                "rolling_train_bars_grid": [540, 1095],
+                "min_holding_period_bars_grid": [0, 6],
+                "hysteresis_margin_grid": [0.0, 0.02],
+                "max_annualized_turnover": 24.0,
                 "objective": "net_return_and_risk_vs_buy_hold",
             },
         },
@@ -164,6 +189,251 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
     assert config.evaluation.ml_strategy_tuning.max_average_exposure_for_active == pytest.approx(
         0.99
     )
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [540, 1095]
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0, 6]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
+    assert config.evaluation.ml_strategy_tuning.max_annualized_turnover == pytest.approx(24.0)
+    assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == []
+    assert config.target.allocation_utility_risk_penalty_power == pytest.approx(2.0)
+
+
+def test_load_config_accepts_btc_regime_tiered_research_config() -> None:
+    config = load_config("configs/experiment.btc_phase8_regime_allocation.yaml")
+
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "4h"
+    assert config.features.crypto_regime_features_enabled is True
+    assert config.evaluation.ml_strategy_tuning.allocation_mode == "tiered"
+    assert config.evaluation.ml_strategy_tuning.tier_thresholds == [0.50, 0.55, 0.62]
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [540, 1095, 1620]
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
+        12,
+        18,
+        24,
+        36,
+        54,
+    ]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [
+        0.0,
+        0.02,
+        0.04,
+        0.06,
+    ]
+    assert config.evaluation.ml_strategy_tuning.max_annualized_turnover == pytest.approx(24.0)
+    assert config.evaluation.strict_research_gate.enabled is True
+    assert config.portfolio.costs.bps_per_trade == pytest.approx(35.0)
+    assert config.evaluation.cost_sensitivity_bps == [10, 25, 35, 50, 75]
+    assert config.baselines.partial_allocation_benchmarks.weights == [0.25, 0.50, 0.75]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "interval", "periods"),
+    [
+        ("configs/experiment.btc_phase8_regime_allocation_12h_hysteresis.yaml", "12h", 730),
+        ("configs/experiment.btc_phase8_regime_allocation_1d_hysteresis.yaml", "1d", 365),
+    ],
+)
+def test_load_config_accepts_btc_lower_cadence_hysteresis_configs(
+    path: str,
+    interval: str,
+    periods: float,
+) -> None:
+    config = load_config(path)
+
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == interval
+    assert config.portfolio.ranking.rebalance_frequency == "bar"
+    assert config.evaluation.periods_per_year == pytest.approx(periods)
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
+        12,
+        18,
+        24,
+        36,
+        54,
+    ]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [
+        0.0,
+        0.02,
+        0.04,
+        0.06,
+    ]
+    assert config.evaluation.ml_strategy_tuning.max_annualized_turnover == pytest.approx(24.0)
+    assert config.evaluation.strict_research_gate.enabled is True
+    assert config.evaluation.strict_research_gate.cost_gate_bps == pytest.approx(35.0)
+    assert config.evaluation.strict_research_gate.acceptable_cost_bps == pytest.approx(50.0)
+    assert config.baselines.partial_allocation_benchmarks.weights == [0.25, 0.50, 0.75]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+    ]
+
+
+def test_load_config_accepts_btc_long_history_partial_benchmark_config() -> None:
+    config = load_config("configs/experiment.btc_phase8_regime_allocation_1d_long_history.yaml")
+
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.start_date == "2015-01-01"
+    assert config.data.interval == "1d"
+    assert config.baselines.partial_allocation_benchmarks.enabled is True
+    assert config.baselines.partial_allocation_benchmarks.weights == [0.25, 0.50, 0.75]
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.enabled is True
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.weights == [
+        0.25,
+        0.50,
+        0.75,
+    ]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.evaluation.strict_research_gate.min_selected_fold_fraction == pytest.approx(
+        0.75
+    )
+    assert config.evaluation.walk_forward.train_years == 3
+    assert config.evaluation.walk_forward.test_months == 6
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [365, 730, 1095]
+
+
+def test_load_config_accepts_btc_allocation_utility_long_history_config() -> None:
+    config = load_config("configs/experiment.btc_phase8_allocation_utility_1d_long_history.yaml")
+
+    assert config.experiment_name == "btc_phase8_allocation_utility_1d_long_history"
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "1d"
+    assert config.target.type == "allocation_utility"
+    assert config.target.horizon_days == 14
+    assert config.target.allocation_utility_risk_penalty_power == pytest.approx(2.0)
+    assert config.features.crypto_return_windows == [1, 3, 5, 7, 14, 30, 60]
+    assert config.evaluation.ml_strategy_tuning.objective == (
+        "net_return_and_risk_vs_required_benchmarks"
+    )
+    assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == [
+        "buy_hold",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.evaluation.ml_strategy_tuning.allocation_mode == "direct_tiered"
+    assert config.evaluation.ml_strategy_tuning.tier_thresholds == [0.25, 0.50, 0.75]
+    assert [
+        policy.name
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+    ] == [
+        "model_only",
+        "bull50_sideways25",
+        "bull100_sideways25",
+        "bull100_sideways50_bear25",
+    ]
+    assert [
+        profile.name
+        for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+    ] == [
+        "gentle_p15",
+        "baseline_p20",
+        "partial_p25",
+        "partial_p30",
+        "vol_sensitive_p25",
+    ]
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_class_weighting
+        == "balanced_partial_boost"
+    )
+    assert config.evaluation.ml_strategy_tuning.allocation_partial_class_weight_multiplier == pytest.approx(
+        2.0
+    )
+    assert config.evaluation.ml_strategy_tuning.allocation_probability_calibration == "sigmoid"
+    assert config.evaluation.ml_strategy_tuning.allocation_calibration_cv == 3
+    assert config.baselines.partial_allocation_benchmarks.weights == [0.25, 0.50, 0.75]
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.weights == [
+        0.25,
+        0.50,
+        0.75,
+    ]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.evaluation.strict_research_gate.required_partial_target_weights == [
+        0.25,
+        0.50,
+    ]
+    assert config.evaluation.strict_research_gate.min_partial_target_fraction == pytest.approx(
+        0.05
+    )
+    assert config.evaluation.strict_research_gate.min_partial_target_fold_fraction == pytest.approx(
+        0.60
+    )
+    assert config.evaluation.strict_research_gate.required_predicted_target_weights == [
+        0.25,
+        0.50,
+    ]
+    assert config.evaluation.strict_research_gate.min_predicted_target_fraction == pytest.approx(
+        0.03
+    )
+    assert config.evaluation.strict_research_gate.min_predicted_target_fold_fraction == pytest.approx(
+        0.50
+    )
+
+
+def test_load_config_accepts_btc_regime_state_long_history_config() -> None:
+    config = load_config("configs/experiment.btc_phase8_regime_state_1d_long_history.yaml")
+
+    assert config.experiment_name == "btc_phase8_regime_state_1d_long_history"
+    assert config.target.type == "regime_state"
+    assert config.evaluation.ml_strategy_tuning.allocation_mode == "direct_tiered"
+    assert [
+        policy.name
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+    ] == [
+        "model_only",
+        "bull50_sideways25",
+        "bull100_sideways25",
+        "bull100_sideways50_bear25",
+    ]
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_class_weighting
+        == "balanced_partial_boost"
+    )
+    assert config.evaluation.ml_strategy_tuning.allocation_probability_calibration == "sigmoid"
+    assert [
+        profile.risk_penalty_power
+        for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+    ] == [1.5, 2.0, 2.5, 3.0, 2.5]
+    assert config.evaluation.strict_research_gate.required_predicted_target_weights == [
+        0.25,
+        0.50,
+    ]
+
+
+def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
+    config = load_config("configs/experiment.btc_paper_daily.yaml")
+
+    assert config.experiment_name == "btc_paper_daily"
+    assert config.data.symbols == ["BTC/USD"]
+    assert config.paper.enabled is True
+    assert config.paper.order_type == "crypto_market_gtc"
+    assert config.paper.position_sizing == "target_weight_fractional"
+    assert config.paper_approval_inbox_dir.as_posix().endswith("artifacts/btc-paper/inbox")
+    assert config.paper_state_dir.as_posix().endswith("artifacts/btc-paper/state")
+    assert config.output_dir.as_posix().endswith("artifacts/btc-paper/runs")
 
 
 @pytest.mark.parametrize(
@@ -174,7 +444,89 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
         ({"min_validation_rows": 0}, "min_validation_rows"),
         ({"min_exposure_changes": -1}, "min_exposure_changes"),
         ({"max_average_exposure_for_active": 1.5}, "max_average_exposure_for_active"),
+        ({"rolling_train_bars_grid": [0]}, "rolling_train_bars_grid"),
+        ({"min_holding_period_bars_grid": [-1]}, "min_holding_period_bars_grid"),
+        ({"hysteresis_margin_grid": [-0.01]}, "hysteresis_margin_grid"),
+        ({"hysteresis_margin_grid": [0.50]}, "hysteresis_margin_grid"),
+        ({"max_annualized_turnover": 0.0}, "max_annualized_turnover"),
         ({"objective": "auc"}, "ml_strategy_tuning.objective"),
+        (
+            {"objective": "net_return_and_risk_vs_required_benchmarks"},
+            "selection_benchmark_strategies",
+        ),
+        ({"selection_benchmark_strategies": ["buy_hold", ""]}, "selection_benchmark_strategies"),
+        (
+            {"selection_benchmark_strategies": ["buy_hold", "buy_hold"]},
+            "selection_benchmark_strategies",
+        ),
+        (
+            {
+                "allocation_utility_profiles": [
+                    {
+                        "name": "duplicate",
+                        "drawdown_penalty": 0.5,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.0,
+                    },
+                    {
+                        "name": "duplicate",
+                        "drawdown_penalty": 0.5,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.5,
+                    },
+                ]
+            },
+            "allocation_utility_profiles",
+        ),
+        (
+            {
+                "allocation_utility_profiles": [
+                    {
+                        "name": "bad_power",
+                        "drawdown_penalty": 0.5,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 0.5,
+                    }
+                ]
+            },
+            "risk_penalty_power",
+        ),
+        ({"allocation_class_weighting": "rare_magic"}, "allocation_class_weighting"),
+        (
+            {"allocation_partial_class_weight_multiplier": 0.0},
+            "allocation_partial_class_weight_multiplier",
+        ),
+        ({"allocation_probability_calibration": "isotonic"}, "allocation_probability_calibration"),
+        ({"allocation_calibration_cv": 1}, "allocation_calibration_cv"),
+        (
+            {"regime_participation_policies": [{"name": ""}]},
+            "regime_participation_policies",
+        ),
+        (
+            {
+                "regime_participation_policies": [
+                    {"name": "duplicate"},
+                    {"name": "duplicate"},
+                ]
+            },
+            "regime_participation_policies",
+        ),
+        (
+            {
+                "regime_participation_policies": [
+                    {"name": "bad_floor", "bull_floor": 0.75},
+                ]
+            },
+            "bull_floor",
+        ),
+        (
+            {
+                "regime_participation_policies": [
+                    {"name": "bad_cap", "risk_off_cap": 0.75},
+                ]
+            },
+            "risk_off_cap",
+        ),
     ],
 )
 def test_load_config_rejects_invalid_ml_strategy_tuning_values(
@@ -185,6 +537,87 @@ def test_load_config_rejects_invalid_ml_strategy_tuning_values(
     config_path = _write_config(
         tmp_path / "config.yaml",
         evaluation={"ml_strategy_tuning": {"enabled": True, **payload}},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("target_payload", "message"),
+    [
+        ({"allocation_utility_risk_penalty_power": 0.5}, "risk_penalty_power"),
+        ({"allocation_utility_risk_penalty_power": "nan"}, "risk_penalty_power"),
+    ],
+)
+def test_load_config_rejects_invalid_allocation_utility_target_values(
+    tmp_path: Path,
+    target_payload: dict[str, object],
+    message: str,
+) -> None:
+    config_path = _write_config(tmp_path / "config.yaml", target=target_payload)
+
+    with pytest.raises(ValueError, match=message):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"required_benchmark_strategies": [""]},
+            "required_benchmark_strategies",
+        ),
+        (
+            {"min_selected_fold_fraction": -0.1},
+            "min_selected_fold_fraction",
+        ),
+        (
+            {"min_selected_fold_fraction": 1.1},
+            "min_selected_fold_fraction",
+        ),
+        (
+            {"required_partial_target_weights": [0.0]},
+            "required_partial_target_weights",
+        ),
+        (
+            {"required_partial_target_weights": [0.25, 0.25]},
+            "required_partial_target_weights",
+        ),
+        (
+            {"min_partial_target_fraction": -0.1},
+            "min_partial_target_fraction",
+        ),
+        (
+            {"min_partial_target_fold_fraction": 1.1},
+            "min_partial_target_fold_fraction",
+        ),
+        (
+            {"required_predicted_target_weights": [0.0]},
+            "required_predicted_target_weights",
+        ),
+        (
+            {"required_predicted_target_weights": [0.25, 0.25]},
+            "required_predicted_target_weights",
+        ),
+        (
+            {"min_predicted_target_fraction": -0.1},
+            "min_predicted_target_fraction",
+        ),
+        (
+            {"min_predicted_target_fold_fraction": 1.1},
+            "min_predicted_target_fold_fraction",
+        ),
+    ],
+)
+def test_load_config_rejects_invalid_strict_research_gate_values(
+    tmp_path: Path,
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={"strict_research_gate": {"enabled": True, **payload}},
     )
 
     with pytest.raises(ValueError, match=message):
@@ -404,6 +837,107 @@ def test_load_config_rejects_invalid_partial_exposure_overlay(tmp_path: Path) ->
         load_config(config_path)
 
 
+def test_load_config_accepts_partial_allocation_benchmarks(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["BTC-USD"]},
+        baselines={
+            "partial_allocation_benchmarks": {
+                "enabled": True,
+                "weights": [0.25, 0.50, 0.75],
+            }
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.baselines.partial_allocation_benchmarks.enabled is True
+    assert config.baselines.partial_allocation_benchmarks.weights == [0.25, 0.50, 0.75]
+
+
+def test_load_config_accepts_rebalanced_partial_allocation_benchmarks(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["BTC-USD"]},
+        baselines={
+            "rebalanced_partial_allocation_benchmarks": {
+                "enabled": True,
+                "weights": [0.25, 0.50, 0.75],
+            }
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.enabled is True
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.weights == [
+        0.25,
+        0.50,
+        0.75,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("data", "payload", "message"),
+    [
+        (
+            {"symbols": ["BTC-USD"]},
+            {"enabled": True, "weights": []},
+            "must contain at least one value",
+        ),
+        (
+            {"symbols": ["BTC-USD"]},
+            {"enabled": True, "weights": [0.0]},
+            "greater than 0.0 and less than 1.0",
+        ),
+        (
+            {"symbols": ["BTC-USD"]},
+            {"enabled": True, "weights": [0.25, 0.25]},
+            "must not contain duplicate values",
+        ),
+        (
+            {"symbols": ["BTC-USD", "ETH-USD"]},
+            {"enabled": True, "weights": [0.25]},
+            "requires exactly one data symbol",
+        ),
+    ],
+)
+def test_load_config_rejects_invalid_partial_allocation_benchmarks(
+    tmp_path: Path,
+    data: dict[str, object],
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data=data,
+        baselines={"partial_allocation_benchmarks": payload},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_rebalanced_partial_allocation_benchmarks(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["BTC-USD"]},
+        baselines={
+            "rebalanced_partial_allocation_benchmarks": {
+                "enabled": True,
+                "weights": [0.25, 0.25],
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="rebalanced_partial_allocation_benchmarks"):
+        load_config(config_path)
+
+
 def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "config.yaml",
@@ -413,6 +947,14 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
                 "enabled": False,
                 "symbol_weights": None,
                 "group_weights": None,
+            },
+            "partial_allocation_benchmarks": {
+                "enabled": False,
+                "weights": None,
+            },
+            "rebalanced_partial_allocation_benchmarks": {
+                "enabled": False,
+                "weights": None,
             },
             "optimized": {
                 "external_covariance_path": None,
@@ -429,6 +971,8 @@ def test_load_config_normalizes_nullable_mapping_sections(tmp_path: Path) -> Non
     assert config.data.symbol_groups == {}
     assert config.baselines.allocation.symbol_weights == {}
     assert config.baselines.allocation.group_weights == {}
+    assert config.baselines.partial_allocation_benchmarks.weights == []
+    assert config.baselines.rebalanced_partial_allocation_benchmarks.weights == []
     assert config.baselines.optimized.external_covariance_path == ""
     assert config.baselines.optimized.external_expected_returns_path == ""
     assert config.baselines.optimized.equilibrium_weights == {}

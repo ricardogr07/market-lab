@@ -213,6 +213,7 @@ class FakeAlpacaBroker:
         qty: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, object]:
         order = {
             "id": f"order-{len(self.submitted_orders) + 1}",
@@ -220,6 +221,7 @@ class FakeAlpacaBroker:
             "qty": f"{qty:.6f}",
             "side": side,
             "client_order_id": client_order_id,
+            "time_in_force": time_in_force,
             "status": self.order_status,
         }
         self.submitted_orders.append(order)
@@ -236,6 +238,7 @@ class FakeAlpacaBroker:
         notional: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, object]:
         order = {
             "id": f"order-{len(self.submitted_orders) + 1}",
@@ -243,6 +246,7 @@ class FakeAlpacaBroker:
             "notional": f"{notional:.2f}",
             "side": side,
             "client_order_id": client_order_id,
+            "time_in_force": time_in_force,
             "status": self.order_status,
         }
         self.submitted_orders.append(order)

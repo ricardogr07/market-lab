@@ -14,7 +14,14 @@ from marketlab.config import (
 )
 from marketlab.data.panel import load_panel_csv
 from marketlab.rebalance import rebalance_signal_dates, weekly_signal_dates
-from marketlab.targets.timing import build_modeling_dataset, build_rebalance_snapshots
+from marketlab.targets.timing import (
+    add_forward_targets as add_intraday_forward_targets,
+)
+from marketlab.targets.timing import (
+    apply_allocation_utility_profile,
+    build_modeling_dataset,
+    build_rebalance_snapshots,
+)
 from marketlab.targets.weekly import (
     add_forward_targets,
     build_weekly_modeling_dataset,
@@ -281,3 +288,200 @@ def test_daily_modeling_dataset_respects_daily_frequency_and_one_day_target() ->
     assert dataset["effective_date"].gt(dataset["signal_date"]).all()
     assert dataset["target_end_date"].eq(dataset["effective_date"]).all()
     assert dataset["target"].isin({0, 1}).all()
+
+
+def test_allocation_utility_targets_choose_best_exposure_tier(
+    featured_panel: pd.DataFrame,
+) -> None:
+    snapshots = build_rebalance_snapshots(
+        featured_panel,
+        feature_columns=["feature_a", "feature_b"],
+        frequency="D",
+    )
+
+    labeled = add_intraday_forward_targets(
+        snapshots,
+        featured_panel,
+        horizon_days=3,
+        target_type="allocation_utility",
+        cost_bps=0.0,
+    )
+
+    aaa_row = labeled.loc[
+        (labeled["symbol"] == "AAA")
+        & (labeled["signal_date"] == pd.Timestamp("2024-01-12"))
+    ].iloc[0]
+    bbb_row = labeled.loc[
+        (labeled["symbol"] == "BBB")
+        & (labeled["signal_date"] == pd.Timestamp("2024-01-12"))
+    ].iloc[0]
+
+    assert aaa_row["target_weight"] == pytest.approx(1.0)
+    assert aaa_row["target"] == 3
+    assert bbb_row["target_weight"] == pytest.approx(0.0)
+    assert bbb_row["target"] == 0
+    assert {
+        "forward_drawdown",
+        "forward_realized_volatility",
+        "allocation_utility_0",
+        "allocation_utility_25",
+        "allocation_utility_50",
+        "allocation_utility_100",
+    }.issubset(labeled.columns)
+
+
+def _allocation_utility_target_for_path(
+    closes: list[float],
+    *,
+    drawdown_penalty: float = 1.0,
+    volatility_penalty: float = 0.0,
+) -> pd.Series:
+    dates = pd.date_range("2024-01-01", periods=len(closes), freq="D")
+    panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"] * len(dates),
+            "timestamp": dates,
+            "adj_open": [100.0] * len(dates),
+            "adj_close": closes,
+            "feature_a": list(range(len(dates))),
+        }
+    )
+    snapshots = pd.DataFrame(
+        [
+            {
+                "symbol": "BTC-USD",
+                "signal_date": pd.Timestamp("2024-01-01"),
+                "effective_date": pd.Timestamp("2024-01-02"),
+                "feature_a": 0,
+            }
+        ]
+    )
+
+    labeled = add_intraday_forward_targets(
+        snapshots,
+        panel,
+        horizon_days=len(closes) - 1,
+        target_type="allocation_utility",
+        cost_bps=0.0,
+        allocation_utility_drawdown_penalty=drawdown_penalty,
+        allocation_utility_volatility_penalty=volatility_penalty,
+        allocation_utility_risk_penalty_power=2.0,
+    )
+
+    return labeled.iloc[0]
+
+
+def test_allocation_utility_nonlinear_risk_can_choose_quarter_exposure() -> None:
+    row = _allocation_utility_target_for_path([100.0, 80.0, 100.0, 110.0])
+
+    assert row["target_weight"] == pytest.approx(0.25)
+    assert row["target"] == 1
+    assert row["allocation_utility_25"] > row["allocation_utility_50"]
+
+
+def test_allocation_utility_nonlinear_risk_can_choose_half_exposure() -> None:
+    row = _allocation_utility_target_for_path([100.0, 80.0, 100.0, 120.0])
+
+    assert row["target_weight"] == pytest.approx(0.50)
+    assert row["target"] == 2
+    assert row["allocation_utility_50"] > row["allocation_utility_25"]
+    assert row["allocation_utility_50"] > row["allocation_utility_100"]
+
+
+def test_allocation_utility_nonlinear_risk_still_chooses_full_exposure() -> None:
+    row = _allocation_utility_target_for_path([100.0, 105.0, 110.0, 120.0])
+
+    assert row["target_weight"] == pytest.approx(1.0)
+    assert row["target"] == 3
+
+
+def test_allocation_utility_nonlinear_risk_chooses_cash_for_negative_path() -> None:
+    row = _allocation_utility_target_for_path([100.0, 95.0, 90.0, 85.0])
+
+    assert row["target_weight"] == pytest.approx(0.0)
+    assert row["target"] == 0
+
+
+def test_allocation_utility_target_tie_breaks_to_lower_exposure() -> None:
+    dates = pd.date_range("2024-01-01", periods=6, freq="D")
+    flat_panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"] * len(dates),
+            "timestamp": dates,
+            "adj_open": [100.0] * len(dates),
+            "adj_close": [100.0] * len(dates),
+            "feature_a": list(range(len(dates))),
+        }
+    )
+    snapshots = build_rebalance_snapshots(
+        flat_panel,
+        feature_columns=["feature_a"],
+        frequency="D",
+    )
+
+    labeled = add_intraday_forward_targets(
+        snapshots,
+        flat_panel,
+        horizon_days=2,
+        target_type="allocation_utility",
+        cost_bps=0.0,
+    )
+
+    assert labeled["target_weight"].eq(0.0).all()
+    assert labeled["target"].eq(0).all()
+
+
+def test_allocation_utility_profile_relabels_without_changing_timing() -> None:
+    dates = pd.date_range("2024-01-01", periods=4, freq="D")
+    base_rows = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"],
+            "signal_date": [dates[0]],
+            "effective_date": [dates[1]],
+            "target_end_date": [dates[3]],
+            "forward_return": [0.12],
+            "forward_drawdown": [-0.20],
+            "forward_realized_volatility": [0.02],
+        }
+    )
+
+    gentle = apply_allocation_utility_profile(
+        base_rows,
+        target_type="allocation_utility",
+        drawdown_penalty=0.1,
+        volatility_penalty=0.0,
+        risk_penalty_power=1.5,
+    )
+    strict = apply_allocation_utility_profile(
+        base_rows,
+        target_type="allocation_utility",
+        drawdown_penalty=2.0,
+        volatility_penalty=0.0,
+        risk_penalty_power=3.0,
+    )
+
+    assert gentle.iloc[0]["target_weight"] != strict.iloc[0]["target_weight"]
+    assert gentle.iloc[0]["signal_date"] == strict.iloc[0]["signal_date"]
+    assert gentle.iloc[0]["effective_date"] == strict.iloc[0]["effective_date"]
+    assert gentle.iloc[0]["target_end_date"] == strict.iloc[0]["target_end_date"]
+
+
+def test_regime_state_targets_map_utility_tiers_to_states() -> None:
+    full_row = _allocation_utility_target_for_path([100.0, 105.0, 110.0, 120.0])
+    half_row = _allocation_utility_target_for_path([100.0, 80.0, 100.0, 120.0])
+    quarter_row = _allocation_utility_target_for_path([100.0, 80.0, 100.0, 110.0])
+    cash_row = _allocation_utility_target_for_path([100.0, 95.0, 90.0, 85.0])
+    rows = pd.DataFrame(
+        [full_row, half_row, quarter_row, cash_row]
+    ).drop(columns=["target"])
+
+    regime_rows = apply_allocation_utility_profile(
+        rows,
+        target_type="regime_state",
+        drawdown_penalty=1.0,
+        volatility_penalty=0.0,
+        risk_penalty_power=2.0,
+    )
+
+    assert regime_rows["target_weight"].tolist() == [1.0, 0.50, 0.25, 0.0]
+    assert regime_rows["target"].tolist() == [2, 1, 1, 0]

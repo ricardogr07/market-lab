@@ -9,7 +9,19 @@ from marketlab.backtest.engine import run_backtest
 from marketlab.data.panel import load_panel_csv
 from marketlab.strategies.allocation import generate_weights as allocation_weights
 from marketlab.strategies.buy_hold import generate_weights as buy_hold_weights
+from marketlab.strategies.rebalanced_partial import (
+    generate_weights as rebalanced_partial_weights,
+)
+from marketlab.strategies.rebalanced_partial import (
+    strategy_name_for_weight as rebalanced_partial_strategy_name_for_weight,
+)
 from marketlab.strategies.sma import generate_weights as sma_weights
+from marketlab.strategies.static_partial import (
+    generate_weights as static_partial_weights,
+)
+from marketlab.strategies.static_partial import (
+    strategy_name_for_weight as static_partial_strategy_name_for_weight,
+)
 
 
 @pytest.fixture()
@@ -24,6 +36,63 @@ def test_buy_hold_generates_equal_weights(panel: pd.DataFrame) -> None:
     assert weights["effective_date"].nunique() == 1
     assert weights["weight"].sum() == pytest.approx(1.0)
     assert weights["weight"].nunique() == 1
+
+
+def test_static_partial_btc_benchmark_uses_initial_weight_and_cash(panel: pd.DataFrame) -> None:
+    btc_panel = panel.loc[panel["symbol"].eq("VOO")].copy()
+    btc_panel["symbol"] = "BTC-USD"
+
+    weights = static_partial_weights(btc_panel, target_weight=0.25)
+
+    assert weights.to_dict("records") == [
+        {
+            "strategy": "btc_static_25",
+            "effective_date": pd.Timestamp(btc_panel["timestamp"].min()),
+            "symbol": "BTC-USD",
+            "weight": 0.25,
+        }
+    ]
+    assert static_partial_strategy_name_for_weight(0.75) == "btc_static_75"
+
+
+def test_static_partial_btc_benchmark_rejects_multi_symbol_panel(panel: pd.DataFrame) -> None:
+    with pytest.raises(ValueError, match="one BTC symbol"):
+        static_partial_weights(panel, target_weight=0.25)
+
+
+def test_rebalanced_partial_btc_benchmark_rebalances_each_signal_bar() -> None:
+    dates = pd.date_range("2024-01-01", periods=5, freq="D")
+    panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"] * len(dates),
+            "timestamp": dates,
+            "open": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "high": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "low": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "close": [200.0, 100.0, 200.0, 100.0, 200.0],
+            "volume": [1000] * len(dates),
+            "adj_open": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "adj_high": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "adj_low": [100.0, 200.0, 100.0, 200.0, 100.0],
+            "adj_close": [200.0, 100.0, 200.0, 100.0, 200.0],
+            "adj_factor": [1.0] * len(dates),
+        }
+    )
+
+    weights = rebalanced_partial_weights(panel, target_weight=0.25, frequency="D")
+    performance = run_backtest(panel, weights, cost_bps=35.0)
+
+    assert rebalanced_partial_strategy_name_for_weight(0.25) == "btc_rebalanced_25"
+    assert weights["effective_date"].tolist() == list(dates[1:])
+    assert weights["weight"].tolist() == [0.25, 0.25, 0.25, 0.25]
+    assert performance["turnover"].sum() > 0.25
+
+
+def test_rebalanced_partial_btc_benchmark_rejects_multi_symbol_panel(
+    panel: pd.DataFrame,
+) -> None:
+    with pytest.raises(ValueError, match="one BTC symbol"):
+        rebalanced_partial_weights(panel, target_weight=0.25)
 
 
 def test_allocation_equal_rebalances_from_first_date_and_effective_dates(panel: pd.DataFrame) -> None:

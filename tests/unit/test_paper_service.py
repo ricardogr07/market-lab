@@ -467,6 +467,57 @@ def test_run_paper_submit_does_not_top_up_existing_long_position(tmp_path: Path)
     assert not broker.submitted_orders
 
 
+def test_run_paper_submit_rebalances_btc_target_weight_with_gtc_order(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="BTC/USD")
+    config.data.interval = "4h"
+    config.target.horizon_days = 6
+    config.portfolio.ranking.rebalance_frequency = "4h"
+    config.paper.order_type = "crypto_market_gtc"
+    config.paper.position_sizing = "target_weight_fractional"
+    config.paper.schedule_timezone = "UTC"
+    config.paper.submission_time = "00:00"
+    config.paper.approval_inbox_dir = "artifacts/btc-paper/inbox"
+    config.paper.state_dir = "artifacts/btc-paper/state"
+    broker = FakeAlpacaBroker(
+        symbol="BTC/USD",
+        equity=1000.0,
+        buying_power=500.0,
+        cash=500.0,
+        current_qty=0.02,
+        market_price=50000.0,
+    )
+    proposal = {
+        "proposal_id": "2026-04-10-BTC-USD-2026-04-10",
+        "experiment_name": config.experiment_name,
+        "symbol": "BTC/USD",
+        "signal_date": "2026-04-10",
+        "effective_date": "2026-04-10",
+        "reference_price": 50000.0,
+        "execution_mode": config.paper.execution_mode,
+        "approval_status": "approved",
+        "approval_actor": "agent",
+        "submission_status": "pending",
+        "decision_policy": "consensus_vote",
+        "decision": "long_25",
+        "target_weight": 0.25,
+        "long_vote_count": 4,
+        "cash_vote_count": 2,
+        "created_at": datetime(2026, 4, 10, 0, 10, tzinfo=UTC).isoformat(),
+    }
+    PaperStateStore(config).save_proposal(proposal)
+
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 4, 10, 0, 5, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert submission["status"] == "submitted"
+    assert submission["side"] == "sell"
+    assert submission["qty"] == pytest.approx(0.01505)
+    assert broker.submitted_orders[-1]["time_in_force"] == "gtc"
+
+
 def test_run_paper_submit_treats_sub_dollar_long_gap_as_already_at_target(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
     broker = FakeAlpacaBroker(
