@@ -67,6 +67,19 @@ def _client_order_id(proposal_id: str, *, retry_suffix: str = "") -> str:
     return f"{base[:max_base_length]}{suffix}"
 
 
+def _is_crypto_paper_config(config: ExperimentConfig) -> bool:
+    symbol = config.data.symbols[0] if len(config.data.symbols) == 1 else ""
+    return (
+        str(symbol).find("/") >= 0
+        or config.paper.order_type.startswith("crypto_")
+        or config.paper.position_sizing == "target_weight_fractional"
+    )
+
+
+def _paper_symbol_token(symbol: str) -> str:
+    return "".join(char if char.isalnum() else "-" for char in symbol).strip("-")
+
+
 def _position_market_value(position: dict[str, object] | None, *, reference_price: float) -> float:
     if position is None:
         return 0.0
@@ -129,6 +142,26 @@ def validate_paper_trading_config(config: ExperimentConfig) -> None:
         raise RuntimeError("paper.enabled must be true for Phase 7 paper-trading commands.")
     _paper_symbol(config)
     _paper_model_names(config)
+    if _is_crypto_paper_config(config):
+        if config.data.interval != "4h":
+            raise RuntimeError("BTC paper trading requires data.interval='4h'.")
+        if config.target.type != "direction":
+            raise RuntimeError("BTC paper trading requires target.type='direction'.")
+        if config.target.horizon_days != 6:
+            raise RuntimeError("BTC paper trading requires target.horizon_days=6.")
+        if config.portfolio.ranking.rebalance_frequency.lower() not in {"4h", "bar"}:
+            raise RuntimeError(
+                "BTC paper trading requires portfolio.ranking.rebalance_frequency='4h' or 'bar'."
+            )
+        if config.portfolio.ranking.mode != "long_only":
+            raise RuntimeError("BTC paper trading requires portfolio.ranking.mode='long_only'.")
+        if config.portfolio.ranking.long_n != 1 or config.portfolio.ranking.short_n != 1:
+            raise RuntimeError("BTC paper trading requires long_n=1 and short_n=1.")
+        if config.paper.order_type not in {"crypto_market_gtc", "crypto_market_ioc"}:
+            raise RuntimeError("BTC paper trading requires a crypto market order type.")
+        if config.paper.position_sizing != "target_weight_fractional":
+            raise RuntimeError("BTC paper trading requires target_weight_fractional sizing.")
+        return
     if config.data.interval != "1d":
         raise RuntimeError("Phase 7 paper trading requires data.interval='1d'.")
     if config.target.type != "direction":

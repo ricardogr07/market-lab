@@ -52,6 +52,14 @@ def _submission_gate_status(
     return "ready", ""
 
 
+def _order_time_in_force(config: ExperimentConfig) -> str:
+    if config.paper.order_type == "crypto_market_gtc":
+        return "gtc"
+    if config.paper.order_type == "crypto_market_ioc":
+        return "ioc"
+    return "day"
+
+
 class SubmissionService:
     def __init__(
         self,
@@ -215,7 +223,8 @@ class SubmissionService:
         target_weight = _safe_float(proposal.get("target_weight"))
         current_signed_market_value = current_qty * reference_price
         hold_existing_long = (
-            target_weight > 0.0
+            config.paper.position_sizing == "full_equity_fractional"
+            and target_weight > 0.0
             and current_qty > 0.0
             and current_market_value >= ALPACA_MIN_NOTIONAL_ORDER
         )
@@ -237,6 +246,10 @@ class SubmissionService:
                 gap_notional = max(desired_notional - current_signed_market_value, 0.0)
                 order_notional = _rounded_notional(order_notional)
                 desired_qty = desired_notional / reference_price if reference_price > 0.0 else 0.0
+                if config.paper.position_sizing == "target_weight_fractional":
+                    gap_notional = desired_notional - current_signed_market_value
+                    if gap_notional < 0.0:
+                        order_notional = 0.0
         delta_qty = round(desired_qty - current_qty, 6)
         if delta_qty > 1e-6:
             side = "buy"
@@ -265,7 +278,12 @@ class SubmissionService:
             payload=order_preview,
         )
 
-        if side == "none" or (side == "buy" and order_notional < ALPACA_MIN_NOTIONAL_ORDER):
+        minimum_trade_notional = abs(delta_qty) * reference_price
+        if (
+            side == "none"
+            or (side == "buy" and order_notional < ALPACA_MIN_NOTIONAL_ORDER)
+            or (side == "sell" and minimum_trade_notional < ALPACA_MIN_NOTIONAL_ORDER)
+        ):
             buy_reason = "already_at_target"
             if _rounded_notional(gap_notional) >= ALPACA_MIN_NOTIONAL_ORDER:
                 buy_reason = "insufficient_buying_power"
@@ -301,20 +319,39 @@ class SubmissionService:
             )
 
         client_order_id = _client_order_id(str(proposal["proposal_id"]), retry_suffix=retry_suffix)
+        time_in_force = _order_time_in_force(config)
         if side == "buy":
-            order = broker_client.submit_notional_day_market_order(
-                symbol=paper_symbol,
-                notional=order_notional,
-                side=side,
-                client_order_id=client_order_id,
-            )
+            if time_in_force == "day":
+                order = broker_client.submit_notional_day_market_order(
+                    symbol=paper_symbol,
+                    notional=order_notional,
+                    side=side,
+                    client_order_id=client_order_id,
+                )
+            else:
+                order = broker_client.submit_notional_day_market_order(
+                    symbol=paper_symbol,
+                    notional=order_notional,
+                    side=side,
+                    client_order_id=client_order_id,
+                    time_in_force=time_in_force,
+                )
         else:
-            order = broker_client.submit_fractional_day_market_order(
-                symbol=paper_symbol,
-                qty=abs(delta_qty),
-                side=side,
-                client_order_id=client_order_id,
-            )
+            if time_in_force == "day":
+                order = broker_client.submit_fractional_day_market_order(
+                    symbol=paper_symbol,
+                    qty=abs(delta_qty),
+                    side=side,
+                    client_order_id=client_order_id,
+                )
+            else:
+                order = broker_client.submit_fractional_day_market_order(
+                    symbol=paper_symbol,
+                    qty=abs(delta_qty),
+                    side=side,
+                    client_order_id=client_order_id,
+                    time_in_force=time_in_force,
+                )
         order_status, poll_status = _poll_order_status(
             broker_client=broker_client,
             order_id=str(order["id"]),

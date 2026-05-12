@@ -12,6 +12,7 @@ from marketlab.paper.contracts import (
     PaperApprovalClientDecision,
     PaperApprovalEvaluationRequest,
 )
+from marketlab.strategies.tiered_allocation import nearest_tier
 
 
 class PaperApprovalClientError(RuntimeError):
@@ -127,8 +128,23 @@ def _proposal_is_consistent(
         return False, "cash vote tally mismatch"
     if model_count != len(models):
         return False, "consensus model_count mismatch"
-    expected_target_weight = 1.0 if long_votes >= threshold else 0.0
-    expected_decision = "long" if expected_target_weight > 0.0 else "cash"
+    allocation_policy = str(consensus_rule.get("allocation_policy", "binary_vote"))
+    if allocation_policy == "average_model_weight_nearest_tier":
+        try:
+            model_target_weights = [float(row.get("target_weight", 0.0)) for row in models]
+        except (TypeError, ValueError):
+            return False, "invalid model target weights"
+        expected_target_weight = nearest_tier(
+            sum(model_target_weights) / len(model_target_weights)
+        )
+        expected_decision = (
+            f"long_{int(expected_target_weight * 100)}"
+            if expected_target_weight > 0.0
+            else "cash"
+        )
+    else:
+        expected_target_weight = 1.0 if long_votes >= threshold else 0.0
+        expected_decision = "long" if expected_target_weight > 0.0 else "cash"
     if proposal.get("decision") != expected_decision:
         return False, "consensus decision mismatch"
     if proposal_target_weight != expected_target_weight:
@@ -158,6 +174,19 @@ class _DeterministicConsensusBackend(_Backend):
         model_count = len(request.evidence["models"])
         threshold = int(request.evidence["consensus_rule"]["min_long_votes"])
         decision = str(request.proposal["decision"])
+        allocation_policy = str(
+            request.evidence["consensus_rule"].get("allocation_policy", "binary_vote")
+        )
+        if allocation_policy == "average_model_weight_nearest_tier":
+            return PaperApprovalClientDecision(
+                decision="approve",
+                rationale=(
+                    "Approved because the tiered BTC allocation proposal is internally "
+                    f"consistent and the persisted model weights round to {decision}."
+                ),
+                provider=self.provider_name,
+                model=self.provider_name,
+            )
         return PaperApprovalClientDecision(
             decision="approve",
             rationale=(

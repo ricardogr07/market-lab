@@ -13,11 +13,14 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!.env.btc-paper.example
 build/
 dist/
 site/
 .vscode/mcp.json
 workspace/
+workspace-btc-paper/
+artifacts-btc-paper/
 pytest-cache-files-*/
 *.egg-info/
 artifacts/*

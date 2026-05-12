@@ -62,6 +62,7 @@ class PaperBroker(Protocol):
         qty: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, Any]: ...
 
     def submit_notional_day_market_order(
@@ -71,6 +72,7 @@ class PaperBroker(Protocol):
         notional: float,
         side: str,
         client_order_id: str,
+        time_in_force: str = "day",
     ) -> dict[str, Any]: ...
 
     def get_order(self, order_id: str) -> dict[str, Any]: ...

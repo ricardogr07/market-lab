@@ -13,6 +13,14 @@ This is still a paper-trading MVP. It is not a live-money workflow. The tracked 
 
 The tracked `QQQ` config is launch-ready for the unattended local month run, including Telegram notifications. The alternate `VOO` config keeps the same paper shape but leaves Telegram explicit and disabled.
 
+Phase 8/9 adds an isolated BTC paper path with its own contract:
+
+- BTC research must pass the strict Phase 8 regime gate before Phase 9 submits paper orders.
+- The BTC model emits only `0%`, `25%`, `50%`, or `100%` target BTC exposure.
+- BTC paper state uses `artifacts/btc-paper/...` and must not share QQQ state or approval inbox paths.
+- Alpaca crypto paper orders use the configured crypto market order type, with `gtc` or `ioc` time-in-force.
+- BTC LLM approval remains approve/reject only; the model output and target weight are persisted before the agent sees the proposal.
+
 ## Tracked Config
 
 The tracked Phase 7 config is:
@@ -57,6 +65,14 @@ python scripts/run_marketlab.py paper-agent-approve --config configs/experiment.
 python scripts/run_marketlab.py paper-submit --config configs/experiment.qqq_paper_daily.yaml
 python scripts/run_marketlab.py paper-scheduler --config configs/experiment.qqq_paper_daily.yaml --once
 python scripts/run_marketlab.py paper-report --config configs/experiment.qqq_paper_daily.yaml --start 2026-04-13 --end 2026-05-15
+```
+
+BTC paper uses the same commands with the isolated config:
+
+```bash
+python scripts/run_marketlab.py paper-decision --config configs/experiment.btc_paper_daily.yaml
+python scripts/run_marketlab.py paper-agent-approve --config configs/experiment.btc_paper_daily.yaml --once
+python scripts/run_marketlab.py paper-submit --config configs/experiment.btc_paper_daily.yaml
 ```
 
 Behavior:
@@ -143,6 +159,24 @@ MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS=qqq_paper_daily
 ```
 
 The paper broker path rejects non-paper trading endpoints at runtime unless the base URL is a local test server.
+
+For BTC, copy `.env.btc-paper.example` to `.env.btc-paper` and use a separate Alpaca paper account, separate `OPENAI_API_KEY`, separate `ANTHROPIC_API_KEY`, and separate Telegram bot/chat values. Keep `MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS=btc_paper_daily` so the BTC container cannot notify for QQQ experiments.
+
+## Local Docker
+
+Run the tracked QQQ local sidecars with:
+
+```bash
+docker compose -f docker/compose.paper.yml up --build
+```
+
+Run the isolated BTC sidecars with:
+
+```bash
+docker compose --env-file .env.btc-paper -f docker/compose.btc-paper.yml up --build
+```
+
+The BTC compose file uses `marketlab-btc-paper-scheduler`, `marketlab-btc-paper-agent`, and `marketlab-btc-paper-mcp`, mounts `../artifacts-btc-paper` to `/app/repo/artifacts`, and points only at `configs/experiment.btc_paper_daily.yaml`.
 
 ## Telegram Ops Feed
 
