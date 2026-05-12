@@ -25,3 +25,21 @@ def test_paper_compose_includes_scheduler_agent_and_mcp_sidecar() -> None:
     assert compose_text.count("TELEGRAM_CHAT_ID") == 6
     assert compose_text.count("MARKETLAB_PAPER_TELEGRAM_ENABLED") == 6
     assert compose_text.count("MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS") == 6
+
+
+def test_btc_paper_compose_is_isolated_from_qqq_stack() -> None:
+    compose_text = Path("docker/compose.btc-paper.yml").read_text(encoding="utf-8")
+
+    assert "marketlab-btc-paper-scheduler:" in compose_text
+    assert "marketlab-btc-paper-agent:" in compose_text
+    assert "marketlab-btc-paper-mcp:" in compose_text
+    assert "container_name: marketlab-btc-paper-scheduler" in compose_text
+    assert "container_name: marketlab-btc-paper-agent" in compose_text
+    assert "container_name: marketlab-btc-paper-mcp" in compose_text
+    assert "/app/repo/configs/experiment.btc_paper_daily.yaml" in compose_text
+    assert "/app/repo/configs/experiment.qqq_paper_daily.yaml" not in compose_text
+    assert "../workspace-btc-paper:/app/workspace" in compose_text
+    assert "../artifacts-btc-paper:/app/repo/artifacts" in compose_text
+    assert "../artifacts:/app/repo/artifacts" not in compose_text
+    assert "../.env.btc-paper" in compose_text
+    assert 'MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS: "btc_paper_daily"' in compose_text

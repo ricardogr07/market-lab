@@ -18,7 +18,11 @@ from tests._paper_fakes import (
 import marketlab.paper.agent as agent_module
 from marketlab.log import configure_logging
 from marketlab.paper.agent import run_agent_approval_iteration, run_agent_approval_loop
-from marketlab.paper.contracts import PaperApprovalClientDecision
+from marketlab.paper.approval_clients import build_default_paper_approval_client
+from marketlab.paper.contracts import (
+    PaperApprovalClientDecision,
+    PaperApprovalEvaluationRequest,
+)
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.service import PaperStateStore, run_paper_decision
 
@@ -363,6 +367,58 @@ def test_agent_worker_does_not_override_rejection_for_under_threshold_consensus(
     assert proposal["approval_backend"] == "claude"
     assert proposal["approval_model"] == "claude-sonnet-4-5"
     assert proposal["approval_fallback_used"] is False
+
+
+def test_deterministic_approval_accepts_tiered_btc_proposal(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path, agent_backend="deterministic_consensus")
+    models = [
+        {"model_name": "m1", "vote": "long", "target_weight": 0.25},
+        {"model_name": "m2", "vote": "long", "target_weight": 0.50},
+        {"model_name": "m3", "vote": "long", "target_weight": 0.50},
+        {"model_name": "m4", "vote": "long", "target_weight": 1.00},
+        {"model_name": "m5", "vote": "cash", "target_weight": 0.00},
+        {"model_name": "m6", "vote": "cash", "target_weight": 0.00},
+    ]
+    evidence = {
+        "proposal_id": "2026-04-10-BTC-USD-2026-04-10",
+        "symbol": "BTC/USD",
+        "effective_date": "2026-04-10",
+        "decision_policy": "consensus_vote",
+        "decision": "long_25",
+        "target_weight": 0.25,
+        "long_vote_count": 4,
+        "cash_vote_count": 2,
+        "models": models,
+        "consensus_rule": {
+            "type": "consensus_vote",
+            "min_long_votes": 4,
+            "model_count": 6,
+            "allocation_policy": "average_model_weight_nearest_tier",
+        },
+    }
+    proposal = {
+        key: evidence[key]
+        for key in [
+            "proposal_id",
+            "symbol",
+            "effective_date",
+            "decision_policy",
+            "decision",
+            "target_weight",
+            "long_vote_count",
+            "cash_vote_count",
+        ]
+    }
+
+    result = build_default_paper_approval_client(config).evaluate(
+        PaperApprovalEvaluationRequest(
+            proposal=proposal,
+            evidence=evidence,
+        )
+    )
+
+    assert result.decision == "approve"
+    assert result.provider == "deterministic_consensus"
 
 
 def test_agent_worker_preserves_primary_decision_when_guardrail_cannot_validate(

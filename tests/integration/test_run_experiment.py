@@ -6,7 +6,9 @@ import pandas as pd
 import pytest
 from tests.integration import _cli_harness
 
+from marketlab.config import load_config
 from marketlab.data.panel import save_panel_csv
+from marketlab.evaluation import build_walk_forward_folds
 
 EXPECTED_METRICS_COLUMNS = _cli_harness.EXPECTED_METRICS_COLUMNS
 MODEL_SUMMARY_COLUMNS = _cli_harness.MODEL_SUMMARY_COLUMNS
@@ -82,6 +84,8 @@ def _write_run_experiment_config(
     symbol_specs: tuple[tuple[str, float, float], ...] | None = None,
     symbol_groups: dict[str, str] | None = None,
     allocation: dict[str, object] | None = None,
+    partial_allocation_benchmarks: dict[str, object] | None = None,
+    rebalanced_partial_allocation_benchmarks: dict[str, object] | None = None,
     indicator_stack: dict[str, object] | None = None,
     optimized: dict[str, object] | None = None,
     models: list[dict[str, str]] | None = None,
@@ -140,6 +144,12 @@ def _write_run_experiment_config(
     }
     if allocation is not None:
         baselines_payload["allocation"] = allocation
+    if partial_allocation_benchmarks is not None:
+        baselines_payload["partial_allocation_benchmarks"] = partial_allocation_benchmarks
+    if rebalanced_partial_allocation_benchmarks is not None:
+        baselines_payload["rebalanced_partial_allocation_benchmarks"] = (
+            rebalanced_partial_allocation_benchmarks
+        )
     if indicator_stack is not None:
         baselines_payload["indicator_stack"] = indicator_stack
     if optimized is not None:
@@ -972,6 +982,14 @@ def test_run_experiment_writes_indicator_ml_strategy_tuning(
             "volume_window": 3,
             "min_confirmations": 2,
         },
+        partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        rebalanced_partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
         walk_forward={
             "train_years": 1,
             "test_months": 2,
@@ -1000,13 +1018,40 @@ def test_run_experiment_writes_indicator_ml_strategy_tuning(
 
     run_root = tmp_path / "runs" / "integration_fixture"
     run_dir = latest_run_dir(run_root)
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    performance = pd.read_csv(run_dir / "performance.csv")
     strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    cost_sensitivity = pd.read_csv(run_dir / "cost_sensitivity.csv")
     candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
     selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
     folds = pd.read_csv(run_dir / "fold_diagnostics.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
     assert "ml_indicator_tuned__long_only__cash" in set(strategy_summary["strategy"])
+    assert {"btc_static_25", "btc_static_50", "btc_static_75"}.issubset(
+        set(metrics["strategy"])
+    )
+    assert {"btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"}.issubset(
+        set(metrics["strategy"])
+    )
+    assert {"btc_static_25", "btc_static_50", "btc_static_75"}.issubset(
+        set(performance["strategy"])
+    )
+    assert {"btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"}.issubset(
+        set(performance["strategy"])
+    )
+    assert {"btc_static_25", "btc_static_50", "btc_static_75"}.issubset(
+        set(strategy_summary["strategy"])
+    )
+    assert {"btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"}.issubset(
+        set(strategy_summary["strategy"])
+    )
+    assert {"btc_static_25", "btc_static_50", "btc_static_75"}.issubset(
+        set(cost_sensitivity["strategy"])
+    )
+    assert {"btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"}.issubset(
+        set(cost_sensitivity["strategy"])
+    )
     assert not candidates.empty
     assert not selections.empty
     assert {
@@ -1035,6 +1080,379 @@ def test_run_experiment_writes_indicator_ml_strategy_tuning(
         ).all()
     assert "## ML Strategy Tuning" in report_text
     assert "ML strategy tuning candidates" in report_text
+    assert "btc_static_25" in report_text
+    assert "btc_rebalanced_25" in report_text
+
+
+def test_run_experiment_writes_allocation_utility_outputs(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 1.00),),
+        features={
+            "return_windows": [3, 5, 7],
+            "ma_windows": [3, 5, 7],
+            "vol_windows": [3, 5],
+            "momentum_window": 3,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3, 5],
+            "crypto_vol_windows": [3, 5],
+            "crypto_ma_windows": [3, 5],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+            "crypto_regime_features_enabled": True,
+            "crypto_regime_trend_windows": [3, 6, 12],
+            "crypto_regime_volatility_window": 3,
+            "crypto_regime_percentile_window": 12,
+            "crypto_regime_drawdown_window": 12,
+            "crypto_regime_volume_window": 3,
+        },
+        target={"horizon_days": 3, "type": "allocation_utility"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        rebalanced_partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "cost_sensitivity_bps": [35, 50],
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_mode": "direct_tiered",
+                "thresholds": [0.50],
+                "tier_thresholds": [0.25, 0.50, 0.75],
+                "validation_months": 2,
+                "min_validation_rows": 10,
+                "min_exposure_changes": 0,
+                "min_average_exposure_for_active": 0.0,
+                "max_average_exposure_for_active": 1.0,
+                "rolling_train_bars_grid": [120],
+                "min_holding_period_bars_grid": [0],
+                "hysteresis_margin_grid": [0.0],
+                "regime_participation_policies": [
+                    {
+                        "name": "model_only",
+                        "bull_floor": 0.0,
+                        "sideways_floor": 0.0,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    },
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    },
+                ],
+                "max_annualized_turnover": 365.0,
+                "objective": "net_return_and_risk_vs_required_benchmarks",
+                "selection_benchmark_strategies": [
+                    "buy_hold",
+                    "btc_rebalanced_25",
+                    "btc_rebalanced_50",
+                    "btc_rebalanced_75",
+                ],
+                "allocation_utility_profiles": [
+                    {
+                        "name": "fixture_profile",
+                        "drawdown_penalty": 0.50,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.0,
+                    }
+                ],
+                "allocation_class_weighting": "balanced_partial_boost",
+                "allocation_partial_class_weight_multiplier": 2.0,
+                "allocation_probability_calibration": "sigmoid",
+                "allocation_calibration_cv": 3,
+            },
+            "strict_research_gate": {
+                "enabled": True,
+                "required_benchmark_strategies": [
+                    "buy_hold",
+                    "btc_static_25",
+                    "btc_static_50",
+                    "btc_static_75",
+                    "btc_rebalanced_25",
+                    "btc_rebalanced_50",
+                    "btc_rebalanced_75",
+                ],
+                "required_partial_target_weights": [0.25, 0.50],
+                "min_partial_target_fraction": 0.05,
+                "min_partial_target_fold_fraction": 0.60,
+                "required_predicted_target_weights": [0.25, 0.50],
+                "min_predicted_target_fraction": 0.0,
+                "min_predicted_target_fold_fraction": 0.0,
+            },
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    target_diagnostics = pd.read_csv(run_dir / "allocation_target_diagnostics.csv")
+    probability_diagnostics = pd.read_csv(run_dir / "allocation_probability_diagnostics.csv")
+    feature_importance = pd.read_csv(run_dir / "feature_importance.csv")
+    tuning_candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
+    tuning_selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
+    phase8_summary = pd.read_csv(run_dir / "phase8_run_summary.csv")
+    strict_gate = pd.read_csv(run_dir / "strict_research_gate.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "ml_indicator_tuned__long_only__cash" in set(strategy_summary["strategy"])
+    assert {"btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"}.issubset(
+        set(strategy_summary["strategy"])
+    )
+    assert {"scope", "target_weight", "row_count", "avg_forward_return"}.issubset(
+        target_diagnostics.columns
+    )
+    assert {
+        "selection_benchmark_strategies",
+        "min_benchmark_excess_cumulative_return",
+        "utility_profile",
+        "allocation_class_weighting",
+        "calibration_status",
+        "regime_policy",
+        "regime_bull_floor",
+        "regime_sideways_floor",
+        "regime_bear_floor",
+        "regime_risk_off_cap",
+        "failure_reasons",
+        "validation_predicted_25_fraction",
+        "validation_predicted_50_fraction",
+    }.issubset(tuning_candidates.columns)
+    assert {
+        "selected_regime_policy",
+        "selected_regime_bull_floor",
+        "selected_regime_sideways_floor",
+        "selected_regime_bear_floor",
+        "selected_regime_risk_off_cap",
+    }.issubset(tuning_selections.columns)
+    assert "selected_fold_fraction" in set(phase8_summary["metric"])
+    assert {
+        "partial_target_25_global_fraction",
+        "partial_target_50_fold_fraction",
+        "predicted_target_25_global_fraction",
+        "predicted_target_50_fold_fraction",
+    }.issubset(set(strict_gate["condition"]))
+    assert {
+        "score",
+        "predicted_tier_weight",
+        "prob_tier_0",
+        "prob_tier_25",
+        "prob_tier_50",
+        "prob_tier_100",
+        "fold_predicted_25_fraction",
+        "fold_predicted_50_fraction",
+    }.issubset(probability_diagnostics.columns)
+    assert {"feature", "importance_type", "importance"}.issubset(feature_importance.columns)
+    assert "## Allocation Utility Diagnostics" in report_text
+    assert "## Phase 8 Run Summary" in report_text
+    assert "Target-support gate requires" in report_text
+    assert "Predicted-support gate requires" in report_text
+    assert "Allocation target diagnostics" in report_text
+
+
+def test_run_experiment_writes_regime_state_outputs(tmp_path: Path) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 1.00),),
+        features={
+            "return_windows": [3, 5, 7],
+            "ma_windows": [3, 5, 7],
+            "vol_windows": [3, 5],
+            "momentum_window": 3,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3, 5],
+            "crypto_vol_windows": [3, 5],
+            "crypto_ma_windows": [3, 5],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+            "crypto_regime_features_enabled": True,
+            "crypto_regime_trend_windows": [3, 6, 12],
+            "crypto_regime_volatility_window": 3,
+            "crypto_regime_percentile_window": 12,
+            "crypto_regime_drawdown_window": 12,
+            "crypto_regime_volume_window": 3,
+        },
+        target={"horizon_days": 3, "type": "regime_state"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        rebalanced_partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.05,
+            "min_test_positive_rate": 0.05,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "cost_sensitivity_bps": [35, 50],
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_mode": "direct_tiered",
+                "thresholds": [0.50],
+                "tier_thresholds": [0.25, 0.50, 0.75],
+                "validation_months": 2,
+                "min_validation_rows": 10,
+                "min_exposure_changes": 0,
+                "min_average_exposure_for_active": 0.0,
+                "max_average_exposure_for_active": 1.0,
+                "rolling_train_bars_grid": [120],
+                "min_holding_period_bars_grid": [0],
+                "hysteresis_margin_grid": [0.0],
+                "regime_participation_policies": [
+                    {
+                        "name": "model_only",
+                        "bull_floor": 0.0,
+                        "sideways_floor": 0.0,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    },
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    },
+                ],
+                "max_annualized_turnover": 365.0,
+                "objective": "net_return_and_risk_vs_required_benchmarks",
+                "selection_benchmark_strategies": [
+                    "buy_hold",
+                    "btc_rebalanced_25",
+                    "btc_rebalanced_50",
+                    "btc_rebalanced_75",
+                ],
+                "allocation_utility_profiles": [
+                    {
+                        "name": "fixture_profile",
+                        "drawdown_penalty": 0.50,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.0,
+                    }
+                ],
+                "allocation_class_weighting": "balanced_partial_boost",
+                "allocation_partial_class_weight_multiplier": 2.0,
+                "allocation_probability_calibration": "sigmoid",
+                "allocation_calibration_cv": 3,
+            },
+            "strict_research_gate": {
+                "enabled": True,
+                "required_benchmark_strategies": [
+                    "buy_hold",
+                    "btc_static_25",
+                    "btc_static_50",
+                    "btc_static_75",
+                    "btc_rebalanced_25",
+                    "btc_rebalanced_50",
+                    "btc_rebalanced_75",
+                ],
+                "required_partial_target_weights": [0.25, 0.50],
+                "min_partial_target_fraction": 0.05,
+                "min_partial_target_fold_fraction": 0.60,
+                "required_predicted_target_weights": [0.25, 0.50],
+                "min_predicted_target_fraction": 0.0,
+                "min_predicted_target_fold_fraction": 0.0,
+            },
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_root = tmp_path / "runs" / "integration_fixture"
+    run_dir = latest_run_dir(run_root)
+    target_diagnostics = pd.read_csv(run_dir / "allocation_target_diagnostics.csv")
+    probability_diagnostics = pd.read_csv(run_dir / "allocation_probability_diagnostics.csv")
+    tuning_candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
+    phase8_summary = pd.read_csv(run_dir / "phase8_run_summary.csv")
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+
+    assert set(target_diagnostics["target"].dropna().astype(int)).issubset({0, 1, 2})
+    assert {"predicted_tier_weight", "prob_tier_0", "prob_tier_50"}.issubset(
+        probability_diagnostics.columns
+    )
+    assert {"utility_profile", "calibration_status", "regime_policy"}.issubset(
+        tuning_candidates.columns
+    )
+    assert "candidate_rejections" in set(phase8_summary["section"])
+    assert "`regime_state` maps utility tiers" in report_text
+
+
+def test_btc_long_history_config_produces_walk_forward_folds() -> None:
+    config = load_config("configs/experiment.btc_phase8_regime_allocation_1d_long_history.yaml")
+    dates = pd.date_range(config.data.start_date, config.data.end_date, freq="D")
+    modeling_dataset = pd.DataFrame(
+        {
+            "signal_date": dates,
+            "target_end_date": dates,
+            "target": [index % 2 for index in range(len(dates))],
+        }
+    )
+
+    folds = build_walk_forward_folds(
+        modeling_dataset=modeling_dataset,
+        walk_forward=config.evaluation.walk_forward,
+        frequency=config.data.interval,
+    )
+
+    assert len(folds) >= 10
+    assert all(fold.train_rows >= config.evaluation.walk_forward.min_train_rows for fold in folds)
+    assert all(fold.test_rows >= config.evaluation.walk_forward.min_test_rows for fold in folds)
 
 
 def test_run_experiment_supports_capped_long_short_strategy_variants(tmp_path: Path) -> None:

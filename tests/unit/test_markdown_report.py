@@ -346,6 +346,74 @@ def test_write_markdown_report_adds_calibration_section_and_plot_links(tmp_path:
 
 
 
+def test_write_markdown_report_adds_allocation_utility_section(tmp_path: Path) -> None:
+    config = ExperimentConfig(experiment_name="markdown_fixture")
+    config.target.type = "allocation_utility"
+    target_path = tmp_path / "allocation_target_diagnostics.csv"
+    probability_path = tmp_path / "allocation_probability_diagnostics.csv"
+    importance_path = tmp_path / "feature_importance.csv"
+
+    report_path = write_markdown_report(
+        config=config,
+        metrics=_base_metrics(),
+        performance=_base_performance(),
+        path=tmp_path / "report.md",
+        allocation_target_diagnostics=pd.DataFrame(
+            {
+                "fold_id": [1],
+                "scope": ["oos_test"],
+                "regime": ["bull"],
+                "target": [3],
+                "target_weight": [1.0],
+                "row_count": [20],
+                "row_fraction": [0.5],
+                "avg_forward_return": [0.04],
+                "avg_forward_drawdown": [-0.02],
+                "avg_forward_realized_volatility": [0.01],
+            }
+        ),
+        allocation_probability_diagnostics=pd.DataFrame(
+            {
+                "fold_id": [1],
+                "score": [0.55],
+                "predicted_weight": [0.5],
+                "predicted_tier_weight": [0.5],
+                "target_weight": [1.0],
+                "realized_utility": [0.02],
+                "forward_return": [0.04],
+                "fold_predicted_25_fraction": [0.0],
+                "fold_predicted_50_fraction": [1.0],
+            }
+        ),
+        feature_importance=pd.DataFrame(
+            {
+                "fold_id": [1],
+                "model_name": ["logistic_regression"],
+                "feature": ["crypto_return_3"],
+                "importance_type": ["coefficient"],
+                "importance": [0.8],
+                "signed_coefficient": [0.8],
+            }
+        ),
+        allocation_target_diagnostics_path=target_path,
+        allocation_probability_diagnostics_path=probability_path,
+        feature_importance_path=importance_path,
+    )
+
+    report_text = report_path.read_text(encoding="utf-8")
+
+    assert "## Allocation Utility Diagnostics" in report_text
+    assert "Allocation-utility target distribution" in report_text
+    assert "weight^2" in report_text
+    assert "Target-support gate requires" in report_text
+    assert "Predicted-support gate requires" in report_text
+    assert "Selected-fold allocation probability summary" in report_text
+    assert "Top selected-model features" in report_text
+    assert "Allocation target diagnostics" in report_text
+    assert "Allocation probability diagnostics" in report_text
+    assert "Feature importance" in report_text
+
+
 def test_write_markdown_report_adds_benchmark_relative_summary_section(
     tmp_path: Path,
 ) -> None:

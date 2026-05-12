@@ -15,8 +15,36 @@ from marketlab.paper.alpaca import (
 
 
 class _FakeAlpacaHandler(BaseHTTPRequestHandler):
+    last_order_payload: dict[str, object] = {}
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/v1beta3/crypto/us/bars":
+            self._json_response(
+                {
+                    "bars": {
+                        "BTC/USD": [
+                            {
+                                "t": "2026-04-10T00:00:00Z",
+                                "o": 70000.0,
+                                "h": 70100.0,
+                                "l": 69900.0,
+                                "c": 70050.0,
+                                "v": 12.5,
+                            },
+                            {
+                                "t": "2026-04-10T04:00:00Z",
+                                "o": 70050.0,
+                                "h": 70200.0,
+                                "l": 70000.0,
+                                "c": 70125.0,
+                                "v": 15.0,
+                            },
+                        ]
+                    }
+                }
+            )
+            return
         if parsed.path == "/v2/stocks/bars":
             _ = parse_qs(parsed.query)
             self._json_response(
@@ -62,10 +90,11 @@ class _FakeAlpacaHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        if parsed.path == "/v2/positions/VOO":
+        if parsed.path in {"/v2/positions/VOO", "/v2/positions/BTC%2FUSD"}:
+            symbol = "BTC/USD" if parsed.path.endswith("BTC%2FUSD") else "VOO"
             self._json_response(
                 {
-                    "symbol": "VOO",
+                    "symbol": symbol,
                     "qty": "0.250000",
                     "market_value": "25.00",
                 }
@@ -87,6 +116,7 @@ class _FakeAlpacaHandler(BaseHTTPRequestHandler):
         if parsed.path == "/v2/orders":
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            _FakeAlpacaHandler.last_order_payload = payload
             response = {
                 "id": "order-1",
                 "status": "accepted",
@@ -114,6 +144,7 @@ class _FakeAlpacaHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def fake_alpaca_server():
+    _FakeAlpacaHandler.last_order_payload = {}
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeAlpacaHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -179,6 +210,37 @@ def test_alpaca_client_reads_configured_symbol_position(
 
     assert position is not None
     assert position["symbol"] == "VOO"
+
+
+def test_alpaca_clients_support_crypto_bars_position_and_gtc_order(
+    fake_alpaca_server: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "test-key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_DATA_BASE_URL", fake_alpaca_server)
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", fake_alpaca_server)
+
+    provider = AlpacaMarketDataProvider()
+    broker = AlpacaPaperBrokerClient()
+
+    frame = provider.download_symbol_history("BTC/USD", "2026-04-10", "2026-04-10", "4h")
+    position = broker.get_position("BTC/USD")
+    order = broker.submit_notional_day_market_order(
+        symbol="BTC/USD",
+        notional=250.0,
+        side="buy",
+        client_order_id="marketlab-btc-test-order",
+        time_in_force="gtc",
+    )
+
+    assert len(frame) == 2
+    assert frame["Date"].iloc[1].hour == 4
+    assert position is not None
+    assert position["symbol"] == "BTC/USD"
+    assert order["id"] == "order-1"
+    assert _FakeAlpacaHandler.last_order_payload["time_in_force"] == "gtc"
+    assert _FakeAlpacaHandler.last_order_payload["symbol"] == "BTC/USD"
 
 
 def test_paper_broker_rejects_live_endpoint() -> None:
