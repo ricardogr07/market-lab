@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
-from marketlab.config import ExperimentConfig
+from marketlab.config import ExperimentConfig, RegimeParticipationPolicyConfig
 from marketlab.pipeline import (
+    _apply_allocation_score_policy,
+    _deterministic_regime_fallback_weights_for_rows,
     _latest_training_rows,
     _predicted_tier_support,
     _select_ml_strategy_candidate,
+    _select_ml_strategy_candidate_for_policy,
     _strict_research_gate,
 )
 
@@ -85,6 +89,123 @@ def test_strict_research_gate_requires_cost_regime_and_exposure_checks() -> None
     assert bool(
         gate.loc[gate["condition"] == "selected_walk_forward_fold_fraction", "passed"].iloc[0]
     ) is True
+
+
+def test_allocation_score_policy_promotes_only_runtime_bull_rows() -> None:
+    rows = pd.DataFrame(
+        {
+            "crypto_regime_risk_off": [0, 1, 0, 0],
+            "crypto_regime_trend_state": [1, 1, 0, -1],
+        },
+        index=[10, 11, 12, 13],
+    )
+    scores = pd.Series([0.42, 0.42, 0.42, 0.42], index=rows.index)
+    probabilities = pd.DataFrame(
+        {
+            "prob_tier_0": [0.15, 0.10, 0.05, 0.05],
+            "prob_tier_100": [0.25, 0.30, 0.40, 0.40],
+        },
+        index=rows.index,
+    )
+
+    final_scores, triggered = _apply_allocation_score_policy(
+        rows=rows,
+        score_series=scores,
+        probability_frame=probabilities,
+        allocation_score_policy="bull_prob100_threshold",
+        prob100_threshold=0.20,
+    )
+
+    assert final_scores.tolist() == [1.0, 0.42, 0.42, 0.42]
+    assert triggered.tolist() == [True, False, False, False]
+
+
+def test_allocation_score_policy_keeps_expected_score_when_threshold_fails() -> None:
+    rows = pd.DataFrame(
+        {
+            "crypto_regime_risk_off": [0, 0],
+            "crypto_regime_trend_state": [1, 1],
+        }
+    )
+    scores = pd.Series([0.42, 0.45])
+    probabilities = pd.DataFrame(
+        {
+            "prob_tier_0": [0.30, 0.10],
+            "prob_tier_100": [0.25, 0.19],
+        }
+    )
+
+    final_scores, triggered = _apply_allocation_score_policy(
+        rows=rows,
+        score_series=scores,
+        probability_frame=probabilities,
+        allocation_score_policy="bull_prob100_threshold",
+        prob100_threshold=0.20,
+    )
+
+    assert final_scores.tolist() == [0.42, 0.45]
+    assert triggered.tolist() == [False, False]
+
+
+def test_deterministic_regime_fallback_weights_map_test_regime_labels() -> None:
+    panel_dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"] * len(panel_dates),
+            "timestamp": panel_dates,
+        }
+    )
+    rows = pd.DataFrame(
+        {
+            "signal_date": panel_dates[:4],
+            "effective_date": panel_dates[1:5],
+            "crypto_regime_risk_off": [1, 0, 0, 0],
+            "crypto_regime_trend_state": [1, 1, 0, -1],
+        }
+    )
+    policy = RegimeParticipationPolicyConfig(
+        name="bull100_sideways50_bear25",
+        bull_floor=1.0,
+        sideways_floor=0.50,
+        bear_floor=0.25,
+        risk_off_cap=0.25,
+    )
+
+    weights = _deterministic_regime_fallback_weights_for_rows(
+        panel=panel,
+        rows=rows,
+        frequency="bar",
+        strategy_name="ml_indicator_tuned__long_only__cash",
+        policy=policy,
+    )
+
+    assert weights["weight"].tolist() == [0.25, 1.0, 0.50, 0.25, 0.0]
+    assert weights["symbol"].eq("BTC-USD").all()
+    assert weights["strategy"].eq("ml_indicator_tuned__long_only__cash").all()
+
+
+def test_deterministic_regime_fallback_weights_require_regime_columns() -> None:
+    panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"],
+            "timestamp": [pd.Timestamp("2026-01-01")],
+        }
+    )
+    rows = pd.DataFrame(
+        {
+            "signal_date": [pd.Timestamp("2026-01-01")],
+            "effective_date": [pd.Timestamp("2026-01-02")],
+        }
+    )
+
+    with pytest.raises(ValueError, match="no_candidate_fallback_regime_policy"):
+        _deterministic_regime_fallback_weights_for_rows(
+            panel=panel,
+            rows=rows,
+            frequency="bar",
+            strategy_name="ml_indicator_tuned__long_only__cash",
+            policy=RegimeParticipationPolicyConfig(name="bull100_sideways25"),
+        )
 
 
 def test_strict_research_gate_fails_when_cost_case_misses_benchmark() -> None:
@@ -511,6 +632,37 @@ def test_strict_research_gate_fails_when_selected_fold_fraction_is_low() -> None
     assert bool(gate.loc[gate["condition"] == "overall", "passed"].iloc[0]) is False
 
 
+def test_strict_gate_counts_deterministic_regime_fallback_rows_as_selected() -> None:
+    config = ExperimentConfig()
+    config.evaluation.strict_research_gate.enabled = True
+    config.evaluation.strict_research_gate.min_selected_fold_fraction = 0.75
+    strategy_summary, cost_sensitivity, regime_slices, _ = (
+        _passing_target_support_gate_inputs()
+    )
+    selections = pd.DataFrame(
+        {
+            "fold_id": [1, 2, 3, 4],
+            "selection_status": ["selected", "selected", "selected", "selected"],
+            "selection_source": ["deterministic_regime_fallback"] * 4,
+            "passed_gate": [False, False, False, False],
+            "selected_model_name": [pd.NA, pd.NA, pd.NA, pd.NA],
+            "selected_regime_policy": ["bull100_sideways25"] * 4,
+        }
+    )
+
+    gate = _strict_research_gate(
+        config=config,
+        strategy_summary=strategy_summary,
+        cost_sensitivity=cost_sensitivity,
+        regime_slices=regime_slices,
+        ml_strategy_tuning_selections=selections,
+    )
+
+    assert bool(
+        gate.loc[gate["condition"] == "selected_walk_forward_fold_fraction", "passed"].iloc[0]
+    ) is True
+
+
 def test_strict_research_gate_fails_low_oos_exposure_even_with_positive_active_return() -> None:
     config = ExperimentConfig()
     config.evaluation.strict_research_gate.enabled = True
@@ -628,6 +780,134 @@ def test_ml_strategy_candidate_selection_prefers_required_benchmark_margin() -> 
     selected = _select_ml_strategy_candidate(candidates)
 
     assert selected["model_name"] == "better_benchmark_margin"
+
+
+def _runtime_selection_candidate(
+    *,
+    model_name: str,
+    passed_gate: bool,
+    failure_reasons: str,
+    min_benchmark_excess: float,
+    excess_return: float = 0.10,
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "passed_gate": passed_gate,
+        "failure_reasons": failure_reasons,
+        "excess_cumulative_return": excess_return,
+        "min_benchmark_excess_cumulative_return": min_benchmark_excess,
+        "drawdown_delta": 0.05,
+        "sharpe_like_delta": 0.05,
+        "annualized_turnover": 4.0,
+    }
+
+
+def test_runtime_selection_policy_prefers_strict_candidate() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="fallback",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.01,
+                excess_return=0.50,
+            ),
+            _runtime_selection_candidate(
+                model_name="strict",
+                passed_gate=True,
+                failure_reasons="",
+                min_benchmark_excess=0.01,
+                excess_return=0.02,
+            ),
+        ],
+        selection_policy="best_active_fallback",
+    )
+
+    assert selected is not None
+    assert selected["model_name"] == "strict"
+    assert source == "strict"
+
+
+def test_runtime_selection_policy_accepts_benchmark_only_fallback() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="weaker_fallback",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.25,
+            ),
+            _runtime_selection_candidate(
+                model_name="better_fallback",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.05,
+            ),
+        ],
+        selection_policy="best_active_fallback",
+    )
+
+    assert selected is not None
+    assert selected["model_name"] == "better_fallback"
+    assert source == "best_active_fallback"
+
+
+def test_runtime_selection_policy_rejects_non_benchmark_fallback_failures() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="inactive",
+                passed_gate=False,
+                failure_reasons="inactive_candidate;non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.01,
+            ),
+            _runtime_selection_candidate(
+                model_name="turnover",
+                passed_gate=False,
+                failure_reasons="turnover_budget_exceeded",
+                min_benchmark_excess=0.20,
+            ),
+            _runtime_selection_candidate(
+                model_name="predicted_support",
+                passed_gate=False,
+                failure_reasons="insufficient_predicted_tier_support;non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.01,
+            ),
+            _runtime_selection_candidate(
+                model_name="risk",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess;risk_not_improved",
+                min_benchmark_excess=-0.01,
+            ),
+            _runtime_selection_candidate(
+                model_name="missing_benchmark",
+                passed_gate=False,
+                failure_reasons="missing_selection_benchmark",
+                min_benchmark_excess=-0.01,
+            ),
+        ],
+        selection_policy="best_active_fallback",
+    )
+
+    assert selected is None
+    assert source == "none"
+
+
+def test_runtime_selection_policy_strict_does_not_fallback() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="fallback",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.01,
+            ),
+        ],
+        selection_policy="strict",
+    )
+
+    assert selected is None
+    assert source == "none"
 
 
 def _passing_target_support_gate_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:

@@ -138,6 +138,10 @@ from marketlab.targets import apply_allocation_utility_profile, build_modeling_d
 
 LOGGER = logging.getLogger(__name__)
 ML_TUNED_STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
+BENCHMARK_SELECTION_FAILURE_REASONS = {
+    "non_positive_buy_hold_excess",
+    "non_positive_required_benchmark_excess",
+}
 
 
 @dataclass(slots=True)
@@ -2816,6 +2820,37 @@ def _predicted_tier_support(
     return all(fraction >= min_fraction for fraction in fractions.values()), fractions
 
 
+def _apply_allocation_score_policy(
+    *,
+    rows: pd.DataFrame,
+    score_series: pd.Series,
+    probability_frame: pd.DataFrame,
+    allocation_score_policy: str,
+    prob100_threshold: float,
+) -> tuple[pd.Series, pd.Series]:
+    final_scores = score_series.astype(float).copy()
+    triggered_100 = pd.Series(False, index=score_series.index, dtype=bool)
+    if allocation_score_policy == "expected_allocation":
+        return final_scores.rename("score"), triggered_100
+    if allocation_score_policy != "bull_prob100_threshold":
+        raise ValueError(f"Unsupported allocation score policy: {allocation_score_policy}")
+
+    required_columns = {"prob_tier_0", "prob_tier_100"}
+    if not required_columns.issubset(probability_frame.columns):
+        return final_scores.rename("score"), triggered_100
+
+    runtime_regime = rows.apply(_allocation_regime_label, axis=1)
+    prob_tier_100 = probability_frame["prob_tier_100"].astype(float)
+    prob_tier_0 = probability_frame["prob_tier_0"].astype(float)
+    triggered_100 = (
+        runtime_regime.eq("bull")
+        & prob_tier_100.ge(float(prob100_threshold))
+        & prob_tier_100.ge(prob_tier_0)
+    )
+    final_scores.loc[triggered_100] = 1.0
+    return final_scores.rename("score"), triggered_100.rename("score_policy_triggered_100")
+
+
 def _score_model_rows(
     *,
     model_name: str,
@@ -2828,6 +2863,8 @@ def _score_model_rows(
     allocation_partial_class_weight_multiplier: float = 1.0,
     allocation_probability_calibration: str = "none",
     allocation_calibration_cv: int = 3,
+    allocation_score_policy: str = "expected_allocation",
+    allocation_score_policy_prob100_threshold: float = 0.20,
     utility_profile: AllocationUtilityProfileConfig | None = None,
 ) -> ModelScoreOutput | None:
     train_target = train_rows["target"].astype(int)
@@ -2891,6 +2928,18 @@ def _score_model_rows(
         )
     else:
         score_series = predict_direction_scores(estimator, score_features)
+    raw_expected_allocation_score = score_series.astype(float).rename(
+        "raw_expected_allocation_score"
+    )
+    score_policy_triggered_100 = pd.Series(False, index=score_series.index, dtype=bool)
+    if probability_frame is not None:
+        score_series, score_policy_triggered_100 = _apply_allocation_score_policy(
+            rows=score_rows,
+            score_series=score_series,
+            probability_frame=probability_frame,
+            allocation_score_policy=allocation_score_policy,
+            prob100_threshold=allocation_score_policy_prob100_threshold,
+        )
     predicted_target = pd.Series(
         estimator.predict(score_features),
         index=score_rows.index,
@@ -2907,6 +2956,15 @@ def _score_model_rows(
     if probability_frame is not None:
         for column in probability_frame.columns:
             predictions[column] = probability_frame[column].to_numpy()
+        predictions["allocation_score_policy"] = allocation_score_policy
+        predictions["allocation_score_policy_prob100_threshold"] = float(
+            allocation_score_policy_prob100_threshold
+        )
+        predictions["raw_expected_allocation_score"] = raw_expected_allocation_score.to_numpy()
+        predictions["final_allocation_score"] = predictions["score"].to_numpy()
+        predictions["score_policy_triggered_100"] = score_policy_triggered_100.to_numpy(
+            dtype=bool
+        )
         predictions["predicted_weight"] = predictions["predicted_target"].map(
             _prediction_weight_map(target_type)
         )
@@ -3147,6 +3205,130 @@ def _strategy_regime_policy(
     )
 
 
+def _no_candidate_fallback_regime_policy(
+    config: ExperimentConfig,
+) -> RegimeParticipationPolicyConfig | None:
+    policy_name = config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
+    if policy_name is None:
+        return None
+    resolved_name = str(policy_name).strip()
+    if not resolved_name:
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy must be non-empty when configured."
+        )
+    for policy in _regime_participation_policy_candidates(config):
+        if policy.name == resolved_name:
+            if policy.risk_off_cap is None:
+                raise ValueError(
+                    "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+                    "requires the referenced policy to define risk_off_cap."
+                )
+            return policy
+    allowed = ", ".join(
+        sorted(policy.name for policy in _regime_participation_policy_candidates(config))
+    )
+    raise ValueError(
+        "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+        f"must reference one of regime_participation_policies: {allowed}."
+    )
+
+
+def _regime_policy_weight_for_row(
+    row: pd.Series,
+    policy: RegimeParticipationPolicyConfig,
+) -> float:
+    regime = _allocation_regime_label(row)
+    if regime == "risk_off":
+        if policy.risk_off_cap is None:
+            raise ValueError(
+                "Deterministic regime fallback requires the referenced policy to define risk_off_cap."
+            )
+        return float(policy.risk_off_cap)
+    if regime == "bull":
+        return float(policy.bull_floor)
+    if regime == "bear":
+        return float(policy.bear_floor)
+    return float(policy.sideways_floor)
+
+
+def _deterministic_regime_fallback_weights_for_rows(
+    *,
+    panel: pd.DataFrame,
+    rows: pd.DataFrame,
+    frequency: str,
+    strategy_name: str,
+    policy: RegimeParticipationPolicyConfig,
+) -> pd.DataFrame:
+    required_columns = {
+        "signal_date",
+        "effective_date",
+        "crypto_regime_risk_off",
+        "crypto_regime_trend_state",
+    }
+    missing_columns = sorted(required_columns - set(rows.columns))
+    if missing_columns:
+        joined = ", ".join(missing_columns)
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+            f"requires test rows with regime columns: {joined}."
+        )
+
+    symbols = sorted(panel["symbol"].drop_duplicates().tolist())
+    if len(symbols) != 1:
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+            "is only supported for single-symbol allocation runs."
+        )
+    if rows.empty:
+        return pd.DataFrame(columns=["strategy", "effective_date", "symbol", "weight"])
+
+    working = rows.copy()
+    working["signal_date"] = pd.to_datetime(working["signal_date"], errors="coerce")
+    working["effective_date"] = pd.to_datetime(working["effective_date"], errors="coerce")
+    if working["signal_date"].isna().any() or working["effective_date"].isna().any():
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+            "requires valid signal_date and effective_date values."
+        )
+
+    weight_rows: list[dict[str, object]] = []
+    for effective_date, date_rows in working.sort_values(
+        ["effective_date", "signal_date"]
+    ).groupby("effective_date", sort=True):
+        selected_row = date_rows.iloc[-1]
+        weight_rows.append(
+            {
+                "strategy": strategy_name,
+                "effective_date": pd.Timestamp(effective_date),
+                "symbol": symbols[0],
+                "weight": _regime_policy_weight_for_row(selected_row, policy),
+            }
+        )
+
+    boundary_date = next_rebalance_effective_date(
+        panel,
+        signal_date=pd.Timestamp(working["signal_date"].max()),
+        frequency=frequency,
+    )
+    if boundary_date is not None:
+        boundary_date = pd.Timestamp(boundary_date)
+        effective_dates = {pd.Timestamp(row["effective_date"]) for row in weight_rows}
+        if boundary_date not in effective_dates:
+            weight_rows.append(
+                {
+                    "strategy": strategy_name,
+                    "effective_date": boundary_date,
+                    "symbol": symbols[0],
+                    "weight": 0.0,
+                }
+            )
+
+    return pd.DataFrame(
+        weight_rows,
+        columns=["strategy", "effective_date", "symbol", "weight"],
+    ).sort_values(["effective_date", "symbol"]).reset_index(drop=True)
+
+
 def _candidate_failure_reasons(
     *,
     active_candidate: bool,
@@ -3176,6 +3358,28 @@ def _candidate_failure_reasons(
     if not risk_gate_ok:
         reasons.append("risk_not_improved")
     return ";".join(reasons)
+
+
+def _candidate_failure_reason_set(row: dict[str, object]) -> set[str]:
+    value = row.get("failure_reasons", "")
+    if pd.isna(value):
+        return set()
+    return {reason.strip() for reason in str(value).split(";") if reason.strip()}
+
+
+def _benchmark_only_fallback_candidates(
+    candidates: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in candidates:
+        reasons = _candidate_failure_reason_set(row)
+        if (
+            not bool(row.get("passed_gate"))
+            and reasons
+            and reasons.issubset(BENCHMARK_SELECTION_FAILURE_REASONS)
+        ):
+            rows.append(row)
+    return rows
 
 
 def _latest_training_rows(rows: pd.DataFrame, rolling_train_bars: int | None) -> pd.DataFrame:
@@ -3222,6 +3426,21 @@ def _select_ml_strategy_candidate(candidates: list[dict[str, object]]) -> dict[s
     )[0]
 
 
+def _select_ml_strategy_candidate_for_policy(
+    candidates: list[dict[str, object]],
+    *,
+    selection_policy: str,
+) -> tuple[dict[str, object] | None, str]:
+    valid_candidates = [row for row in candidates if row["passed_gate"]]
+    if valid_candidates:
+        return _select_ml_strategy_candidate(valid_candidates), "strict"
+    if selection_policy == "best_active_fallback":
+        fallback_candidates = _benchmark_only_fallback_candidates(candidates)
+        if fallback_candidates:
+            return _select_ml_strategy_candidate(fallback_candidates), "best_active_fallback"
+    return None, "none"
+
+
 def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
     probability_columns = [
         "prob_tier_0",
@@ -3235,11 +3454,19 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "signal_date",
         "effective_date",
         "symbol",
+        "runtime_regime",
+        "crypto_regime_risk_off",
+        "crypto_regime_trend_state",
         "target",
         "target_weight",
         "predicted_target",
         "predicted_weight",
         "predicted_tier_weight",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
+        "raw_expected_allocation_score",
+        "final_allocation_score",
+        "score_policy_triggered_100",
         "score",
         *probability_columns,
         "forward_return",
@@ -3250,6 +3477,8 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "calibration_status",
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
+        "fold_predicted_100_fraction",
+        "fold_score_policy_triggered_100_fraction",
     ]
     if predictions.empty:
         return pd.DataFrame(columns=columns)
@@ -3262,6 +3491,16 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         working["predicted_tier_weight"] = working["score"].map(
             lambda value: nearest_tier(float(value))
         )
+    if "final_allocation_score" not in working.columns:
+        working["final_allocation_score"] = working["score"]
+    if "raw_expected_allocation_score" not in working.columns:
+        working["raw_expected_allocation_score"] = working["score"]
+    if "score_policy_triggered_100" not in working.columns:
+        working["score_policy_triggered_100"] = False
+    if {"crypto_regime_risk_off", "crypto_regime_trend_state"}.issubset(
+        working.columns
+    ):
+        working["runtime_regime"] = working.apply(_allocation_regime_label, axis=1)
     for column in probability_columns:
         if column not in working.columns:
             working[column] = 0.0
@@ -3275,10 +3514,23 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
             fold_predicted_50_fraction=lambda values: float(
                 values.sub(0.50).abs().le(1e-9).mean()
             ),
+            fold_predicted_100_fraction=lambda values: float(
+                values.sub(1.0).abs().le(1e-9).mean()
+            ),
         )
         .reset_index()
     )
     working = working.merge(fold_support, on="fold_id", how="left")
+    trigger_support = (
+        working.groupby("fold_id")["score_policy_triggered_100"]
+        .agg(
+            fold_score_policy_triggered_100_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(trigger_support, on="fold_id", how="left")
 
     utility_columns = {
         0.0: "allocation_utility_0",
@@ -3304,9 +3556,12 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
 
 
 def _allocation_regime_label(row: pd.Series) -> str:
-    if int(row.get("crypto_regime_risk_off", 0) or 0) == 1:
+    risk_off_value = row.get("crypto_regime_risk_off", 0)
+    trend_state_value = row.get("crypto_regime_trend_state", 0)
+    risk_off = 0 if pd.isna(risk_off_value) else int(risk_off_value)
+    trend_state = 0 if pd.isna(trend_state_value) else int(trend_state_value)
+    if risk_off == 1:
         return "risk_off"
-    trend_state = int(row.get("crypto_regime_trend_state", 0) or 0)
     if trend_state > 0:
         return "bull"
     if trend_state < 0:
@@ -3418,6 +3673,8 @@ def _build_ml_strategy_tuning_outputs(
         "utility_volatility_penalty",
         "utility_risk_penalty_power",
         "allocation_class_weighting",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
         "calibration_status",
         "rolling_train_bars",
         "min_holding_period_bars",
@@ -3450,6 +3707,8 @@ def _build_ml_strategy_tuning_outputs(
         "min_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
+        "validation_predicted_100_fraction",
+        "validation_score_policy_triggered_100_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
@@ -3460,6 +3719,8 @@ def _build_ml_strategy_tuning_outputs(
     selection_columns = [
         "fold_id",
         "selection_status",
+        "selection_policy",
+        "selection_source",
         "allocation_mode",
         "selected_model_name",
         "selected_utility_profile",
@@ -3467,6 +3728,8 @@ def _build_ml_strategy_tuning_outputs(
         "selected_utility_volatility_penalty",
         "selected_utility_risk_penalty_power",
         "allocation_class_weighting",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
         "calibration_status",
         "selected_rolling_train_bars",
         "selected_min_holding_period_bars",
@@ -3492,6 +3755,8 @@ def _build_ml_strategy_tuning_outputs(
         "min_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
+        "validation_predicted_100_fraction",
+        "validation_score_policy_triggered_100_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
@@ -3505,11 +3770,19 @@ def _build_ml_strategy_tuning_outputs(
         "signal_date",
         "effective_date",
         "symbol",
+        "runtime_regime",
+        "crypto_regime_risk_off",
+        "crypto_regime_trend_state",
         "target",
         "target_weight",
         "predicted_target",
         "predicted_weight",
         "predicted_tier_weight",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
+        "raw_expected_allocation_score",
+        "final_allocation_score",
+        "score_policy_triggered_100",
         "score",
         "prob_tier_0",
         "prob_tier_25",
@@ -3523,6 +3796,8 @@ def _build_ml_strategy_tuning_outputs(
         "calibration_status",
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
+        "fold_predicted_100_fraction",
+        "fold_score_policy_triggered_100_fraction",
     ]
     feature_importance_columns = [
         "model_name",
@@ -3586,6 +3861,88 @@ def _build_ml_strategy_tuning_outputs(
     allocation_probability_frames: list[pd.DataFrame] = []
     feature_importance_frames: list[pd.DataFrame] = []
     panel_timestamps = pd.to_datetime(panel["timestamp"])
+    fallback_regime_policy = _no_candidate_fallback_regime_policy(config)
+
+    def _deterministic_fallback_selection(
+        *,
+        fold_id: int,
+        test_rows: pd.DataFrame,
+        validation_rows: pd.DataFrame,
+        inner_train_rows: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, dict[str, object]]:
+        if fallback_regime_policy is None:
+            raise ValueError("Deterministic regime fallback requires a configured policy.")
+        weights = _deterministic_regime_fallback_weights_for_rows(
+            panel=panel,
+            rows=test_rows,
+            frequency=frequency,
+            strategy_name=ML_TUNED_STRATEGY_NAME,
+            policy=fallback_regime_policy,
+        )
+        exposure_changes, average_exposure = _weight_activity(weights)
+        row = {
+            "fold_id": fold_id,
+            "selection_status": "selected",
+            "selection_policy": tuning.selection_policy,
+            "selection_source": "deterministic_regime_fallback",
+            "allocation_mode": allocation_mode,
+            "selected_model_name": pd.NA,
+            "selected_utility_profile": pd.NA,
+            "selected_utility_drawdown_penalty": pd.NA,
+            "selected_utility_volatility_penalty": pd.NA,
+            "selected_utility_risk_penalty_power": pd.NA,
+            "allocation_class_weighting": tuning.allocation_class_weighting,
+            "allocation_score_policy": tuning.allocation_score_policy,
+            "allocation_score_policy_prob100_threshold": (
+                tuning.allocation_score_policy_prob100_threshold
+            ),
+            "calibration_status": pd.NA,
+            "selected_rolling_train_bars": pd.NA,
+            "selected_min_holding_period_bars": pd.NA,
+            "selected_hysteresis_margin": pd.NA,
+            "selected_regime_policy": fallback_regime_policy.name,
+            "selected_regime_bull_floor": float(fallback_regime_policy.bull_floor),
+            "selected_regime_sideways_floor": float(
+                fallback_regime_policy.sideways_floor
+            ),
+            "selected_regime_bear_floor": float(fallback_regime_policy.bear_floor),
+            "selected_regime_risk_off_cap": float(fallback_regime_policy.risk_off_cap)
+            if fallback_regime_policy.risk_off_cap is not None
+            else pd.NA,
+            "selected_threshold": pd.NA,
+            "selected_tier_min_threshold": pd.NA,
+            "selected_tier_half_threshold": pd.NA,
+            "selected_tier_full_threshold": pd.NA,
+            "selected_strategy": ML_TUNED_STRATEGY_NAME,
+            "validation_start": (
+                validation_rows["signal_date"].min()
+                if not validation_rows.empty
+                else pd.NaT
+            ),
+            "validation_end": (
+                validation_rows["signal_date"].max()
+                if not validation_rows.empty
+                else pd.NaT
+            ),
+            "inner_train_rows": len(inner_train_rows),
+            "validation_rows": len(validation_rows),
+            "passed_gate": False,
+            "excess_cumulative_return": pd.NA,
+            "selection_benchmark_strategies": ",".join(selection_benchmark_names),
+            "selection_benchmark_excess_cumulative_returns": pd.NA,
+            "min_benchmark_excess_cumulative_return": pd.NA,
+            "validation_predicted_25_fraction": pd.NA,
+            "validation_predicted_50_fraction": pd.NA,
+            "validation_predicted_100_fraction": pd.NA,
+            "validation_score_policy_triggered_100_fraction": pd.NA,
+            "min_validation_predicted_target_fraction": pd.NA,
+            "sharpe_like_delta": pd.NA,
+            "drawdown_delta": pd.NA,
+            "annualized_turnover": pd.NA,
+            "exposure_changes": exposure_changes,
+            "average_exposure": average_exposure,
+        }
+        return weights, row
 
     for fold in folds:
         outer_train_rows, test_rows = slice_fold_rows(modeling_dataset, fold)
@@ -3676,6 +4033,10 @@ def _build_ml_strategy_tuning_outputs(
                                 tuning.allocation_probability_calibration
                             ),
                             allocation_calibration_cv=tuning.allocation_calibration_cv,
+                            allocation_score_policy=tuning.allocation_score_policy,
+                            allocation_score_policy_prob100_threshold=(
+                                tuning.allocation_score_policy_prob100_threshold
+                            ),
                             utility_profile=utility_profile,
                         )
                         if validation_output is None:
@@ -3701,6 +4062,22 @@ def _build_ml_strategy_tuning_outputs(
                             0.50,
                             pd.NA,
                         )
+                        validation_predicted_100_fraction = float(
+                            validation_predictions["score"]
+                            .map(lambda value: nearest_tier(float(value)))
+                            .sub(1.0)
+                            .abs()
+                            .le(1e-9)
+                            .mean()
+                        )
+                        if "score_policy_triggered_100" in validation_predictions.columns:
+                            validation_score_policy_triggered_100_fraction = float(
+                                validation_predictions[
+                                    "score_policy_triggered_100"
+                                ].astype(bool).mean()
+                            )
+                        else:
+                            validation_score_policy_triggered_100_fraction = pd.NA
                         predicted_fraction_values = [
                             value
                             for value in predicted_support_fractions.values()
@@ -3872,6 +4249,12 @@ def _build_ml_strategy_tuning_outputs(
                                             "allocation_class_weighting": (
                                                 tuning.allocation_class_weighting
                                             ),
+                                            "allocation_score_policy": (
+                                                tuning.allocation_score_policy
+                                            ),
+                                            "allocation_score_policy_prob100_threshold": (
+                                                tuning.allocation_score_policy_prob100_threshold
+                                            ),
                                             "calibration_status": (
                                                 validation_output.calibration_status
                                             ),
@@ -3952,6 +4335,12 @@ def _build_ml_strategy_tuning_outputs(
                                             "validation_predicted_50_fraction": (
                                                 validation_predicted_50_fraction
                                             ),
+                                            "validation_predicted_100_fraction": (
+                                                validation_predicted_100_fraction
+                                            ),
+                                            "validation_score_policy_triggered_100_fraction": (
+                                                validation_score_policy_triggered_100_fraction
+                                            ),
                                             "min_validation_predicted_target_fraction": (
                                                 min_validation_predicted_target_fraction
                                             ),
@@ -3964,8 +4353,21 @@ def _build_ml_strategy_tuning_outputs(
                                         candidate_rows.append(row)
                                         fold_candidates.append(row)
 
-        valid_candidates = [row for row in fold_candidates if row["passed_gate"]]
-        if not valid_candidates:
+        selected, selected_source = _select_ml_strategy_candidate_for_policy(
+            fold_candidates,
+            selection_policy=tuning.selection_policy,
+        )
+        if selected is None:
+            if fallback_regime_policy is not None:
+                fallback_weights, fallback_selection = _deterministic_fallback_selection(
+                    fold_id=fold.fold_id,
+                    test_rows=test_rows,
+                    validation_rows=validation_rows,
+                    inner_train_rows=inner_train_rows,
+                )
+                selected_weight_frames.append(fallback_weights)
+                selection_rows.append(fallback_selection)
+                continue
             selected_weight_frames.append(
                 _cash_weights_for_rows(
                     panel=panel,
@@ -3978,6 +4380,8 @@ def _build_ml_strategy_tuning_outputs(
                 {
                     "fold_id": fold.fold_id,
                     "selection_status": "no_valid_candidate",
+                    "selection_policy": tuning.selection_policy,
+                    "selection_source": "none",
                     "allocation_mode": allocation_mode,
                     "selected_model_name": pd.NA,
                     "selected_utility_profile": pd.NA,
@@ -3985,6 +4389,10 @@ def _build_ml_strategy_tuning_outputs(
                     "selected_utility_volatility_penalty": pd.NA,
                     "selected_utility_risk_penalty_power": pd.NA,
                     "allocation_class_weighting": tuning.allocation_class_weighting,
+                    "allocation_score_policy": tuning.allocation_score_policy,
+                    "allocation_score_policy_prob100_threshold": (
+                        tuning.allocation_score_policy_prob100_threshold
+                    ),
                     "calibration_status": pd.NA,
                     "selected_rolling_train_bars": pd.NA,
                     "selected_min_holding_period_bars": pd.NA,
@@ -4018,6 +4426,8 @@ def _build_ml_strategy_tuning_outputs(
                     "min_benchmark_excess_cumulative_return": pd.NA,
                     "validation_predicted_25_fraction": pd.NA,
                     "validation_predicted_50_fraction": pd.NA,
+                    "validation_predicted_100_fraction": pd.NA,
+                    "validation_score_policy_triggered_100_fraction": pd.NA,
                     "min_validation_predicted_target_fraction": pd.NA,
                     "sharpe_like_delta": pd.NA,
                     "drawdown_delta": pd.NA,
@@ -4027,8 +4437,6 @@ def _build_ml_strategy_tuning_outputs(
                 }
             )
             continue
-
-        selected = _select_ml_strategy_candidate(valid_candidates)
         selected_model = str(selected["model_name"])
         selected_rolling_train_bars = (
             int(selected["rolling_train_bars"])
@@ -4085,9 +4493,23 @@ def _build_ml_strategy_tuning_outputs(
             ),
             allocation_probability_calibration=tuning.allocation_probability_calibration,
             allocation_calibration_cv=tuning.allocation_calibration_cv,
+            allocation_score_policy=tuning.allocation_score_policy,
+            allocation_score_policy_prob100_threshold=(
+                tuning.allocation_score_policy_prob100_threshold
+            ),
             utility_profile=selected_utility_profile,
         )
         if selected_test_output is None:
+            if fallback_regime_policy is not None:
+                fallback_weights, fallback_selection = _deterministic_fallback_selection(
+                    fold_id=fold.fold_id,
+                    test_rows=test_rows,
+                    validation_rows=validation_rows,
+                    inner_train_rows=inner_train_rows,
+                )
+                selected_weight_frames.append(fallback_weights)
+                selection_rows.append(fallback_selection)
+                continue
             selected_weight_frames.append(
                 _cash_weights_for_rows(
                     panel=panel,
@@ -4125,6 +4547,10 @@ def _build_ml_strategy_tuning_outputs(
             {
                 "fold_id": fold.fold_id,
                 "selection_status": selection_status,
+                "selection_policy": tuning.selection_policy,
+                "selection_source": (
+                    selected_source if selection_status == "selected" else "none"
+                ),
                 "allocation_mode": allocation_mode,
                 "selected_model_name": selected_model if selection_status == "selected" else pd.NA,
                 "selected_utility_profile": (
@@ -4148,6 +4574,10 @@ def _build_ml_strategy_tuning_outputs(
                     else pd.NA
                 ),
                 "allocation_class_weighting": tuning.allocation_class_weighting,
+                "allocation_score_policy": tuning.allocation_score_policy,
+                "allocation_score_policy_prob100_threshold": (
+                    tuning.allocation_score_policy_prob100_threshold
+                ),
                 "calibration_status": (
                     selected_test_output.calibration_status
                     if selection_status == "selected" and selected_test_output is not None
@@ -4233,6 +4663,12 @@ def _build_ml_strategy_tuning_outputs(
                 ],
                 "validation_predicted_50_fraction": selected[
                     "validation_predicted_50_fraction"
+                ],
+                "validation_predicted_100_fraction": selected[
+                    "validation_predicted_100_fraction"
+                ],
+                "validation_score_policy_triggered_100_fraction": selected[
+                    "validation_score_policy_triggered_100_fraction"
                 ],
                 "min_validation_predicted_target_fraction": selected[
                     "min_validation_predicted_target_fraction"

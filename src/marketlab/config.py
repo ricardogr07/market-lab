@@ -25,6 +25,11 @@ ML_STRATEGY_TUNING_OBJECTIVES = {
     "net_return_and_risk_vs_buy_hold",
     "net_return_and_risk_vs_required_benchmarks",
 }
+ML_STRATEGY_SELECTION_POLICIES = {"best_active_fallback", "strict"}
+ML_STRATEGY_ALLOCATION_SCORE_POLICIES = {
+    "bull_prob100_threshold",
+    "expected_allocation",
+}
 ALLOCATION_CLASS_WEIGHTING_MODES = {
     "balanced",
     "balanced_partial_boost",
@@ -325,6 +330,7 @@ class MLStrategyTuningConfig:
     min_exposure_changes: int = 5
     min_average_exposure_for_active: float = 0.0
     max_average_exposure_for_active: float = 0.995
+    selection_policy: str = "strict"
     objective: str = "net_return_and_risk_vs_buy_hold"
     selection_benchmark_strategies: list[str] = field(default_factory=list)
     allocation_mode: str = "binary"
@@ -338,10 +344,13 @@ class MLStrategyTuningConfig:
     regime_participation_policies: list[RegimeParticipationPolicyConfig] = field(
         default_factory=lambda: [RegimeParticipationPolicyConfig()]
     )
+    no_candidate_fallback_regime_policy: str | None = None
     allocation_class_weighting: str = "none"
     allocation_partial_class_weight_multiplier: float = 1.0
     allocation_probability_calibration: str = "none"
     allocation_calibration_cv: int = 3
+    allocation_score_policy: str = "expected_allocation"
+    allocation_score_policy_prob100_threshold: float = 0.20
 
 
 @dataclass(slots=True)
@@ -885,6 +894,37 @@ def _validate_config(config: ExperimentConfig) -> None:
         raise ValueError(
             f"evaluation.ml_strategy_tuning.objective must be one of: {allowed}."
         )
+    ml_tuning.selection_policy = str(ml_tuning.selection_policy).strip()
+    if ml_tuning.selection_policy not in ML_STRATEGY_SELECTION_POLICIES:
+        allowed = ", ".join(sorted(ML_STRATEGY_SELECTION_POLICIES))
+        raise ValueError(
+            f"evaluation.ml_strategy_tuning.selection_policy must be one of: {allowed}."
+        )
+    ml_tuning.allocation_score_policy = str(ml_tuning.allocation_score_policy).strip()
+    if ml_tuning.allocation_score_policy not in ML_STRATEGY_ALLOCATION_SCORE_POLICIES:
+        allowed = ", ".join(sorted(ML_STRATEGY_ALLOCATION_SCORE_POLICIES))
+        raise ValueError(
+            f"evaluation.ml_strategy_tuning.allocation_score_policy must be one of: {allowed}."
+        )
+    try:
+        allocation_score_policy_prob100_threshold = float(
+            ml_tuning.allocation_score_policy_prob100_threshold
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold must be a finite value between 0.0 and 1.0."
+        ) from exc
+    if (
+        not math.isfinite(allocation_score_policy_prob100_threshold)
+        or allocation_score_policy_prob100_threshold < 0.0
+        or allocation_score_policy_prob100_threshold > 1.0
+    ):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold must be a finite value between 0.0 and 1.0."
+        )
+    ml_tuning.allocation_score_policy_prob100_threshold = (
+        allocation_score_policy_prob100_threshold
+    )
     seen_selection_benchmarks: set[str] = set()
     for benchmark_strategy in ml_tuning.selection_benchmark_strategies:
         benchmark_name = str(benchmark_strategy).strip()
@@ -964,6 +1004,29 @@ def _validate_config(config: ExperimentConfig) -> None:
                 f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].risk_off_cap",
                 policy.risk_off_cap,
             )
+    if ml_tuning.no_candidate_fallback_regime_policy is not None:
+        fallback_policy_name = str(ml_tuning.no_candidate_fallback_regime_policy).strip()
+        if fallback_policy_name == "":
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy must be non-empty when configured."
+            )
+        if fallback_policy_name not in seen_policy_names:
+            allowed = ", ".join(sorted(seen_policy_names))
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+                f"must reference one of regime_participation_policies: {allowed}."
+            )
+        fallback_policy = next(
+            policy
+            for policy in ml_tuning.regime_participation_policies
+            if policy.name == fallback_policy_name
+        )
+        if fallback_policy.risk_off_cap is None:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+                "requires the referenced policy to define risk_off_cap."
+            )
+        ml_tuning.no_candidate_fallback_regime_policy = fallback_policy_name
     if ml_tuning.allocation_class_weighting not in ALLOCATION_CLASS_WEIGHTING_MODES:
         allowed = ", ".join(sorted(ALLOCATION_CLASS_WEIGHTING_MODES))
         raise ValueError(

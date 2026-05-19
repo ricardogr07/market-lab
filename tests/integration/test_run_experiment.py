@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -1241,6 +1242,8 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "min_benchmark_excess_cumulative_return",
         "utility_profile",
         "allocation_class_weighting",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
         "calibration_status",
         "regime_policy",
         "regime_bull_floor",
@@ -1250,8 +1253,14 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "failure_reasons",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
+        "validation_predicted_100_fraction",
+        "validation_score_policy_triggered_100_fraction",
     }.issubset(tuning_candidates.columns)
     assert {
+        "selection_policy",
+        "selection_source",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
         "selected_regime_policy",
         "selected_regime_bull_floor",
         "selected_regime_sideways_floor",
@@ -1267,20 +1276,354 @@ def test_run_experiment_writes_allocation_utility_outputs(
     }.issubset(set(strict_gate["condition"]))
     assert {
         "score",
+        "runtime_regime",
+        "crypto_regime_risk_off",
+        "crypto_regime_trend_state",
         "predicted_tier_weight",
+        "allocation_score_policy",
+        "allocation_score_policy_prob100_threshold",
+        "raw_expected_allocation_score",
+        "final_allocation_score",
+        "score_policy_triggered_100",
         "prob_tier_0",
         "prob_tier_25",
         "prob_tier_50",
         "prob_tier_100",
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
+        "fold_predicted_100_fraction",
+        "fold_score_policy_triggered_100_fraction",
     }.issubset(probability_diagnostics.columns)
     assert {"feature", "importance_type", "importance"}.issubset(feature_importance.columns)
     assert "## Allocation Utility Diagnostics" in report_text
     assert "## Phase 8 Run Summary" in report_text
     assert "Target-support gate requires" in report_text
     assert "Predicted-support gate requires" in report_text
+    assert "Allocation score policy" in report_text
     assert "Allocation target diagnostics" in report_text
+    assert "selection_policy" in report_text
+
+
+def test_run_experiment_supports_diagnostic_best_active_fallback_selection(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 1.00),),
+        features={
+            "return_windows": [3, 5, 7],
+            "ma_windows": [3, 5, 7],
+            "vol_windows": [3, 5],
+            "momentum_window": 3,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3, 5],
+            "crypto_vol_windows": [3, 5],
+            "crypto_ma_windows": [3, 5],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+            "crypto_regime_features_enabled": True,
+            "crypto_regime_trend_windows": [3, 6, 12],
+            "crypto_regime_volatility_window": 3,
+            "crypto_regime_percentile_window": 12,
+            "crypto_regime_drawdown_window": 12,
+            "crypto_regime_volume_window": 3,
+        },
+        target={"horizon_days": 3, "type": "allocation_utility"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        rebalanced_partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.0,
+            "min_test_positive_rate": 0.0,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "cost_sensitivity_bps": [35, 50],
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_mode": "direct_tiered",
+                "selection_policy": "best_active_fallback",
+                "thresholds": [0.50],
+                "tier_thresholds": [0.25, 0.50, 0.75],
+                "validation_months": 2,
+                "min_validation_rows": 10,
+                "min_exposure_changes": 0,
+                "min_average_exposure_for_active": 0.0,
+                "max_average_exposure_for_active": 1.0,
+                "rolling_train_bars_grid": [120],
+                "min_holding_period_bars_grid": [0],
+                "hysteresis_margin_grid": [0.0],
+                "regime_participation_policies": [
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    }
+                ],
+                "max_annualized_turnover": 365.0,
+                "objective": "net_return_and_risk_vs_required_benchmarks",
+                "selection_benchmark_strategies": ["btc_static_75"],
+                "allocation_utility_profiles": [
+                    {
+                        "name": "fixture_profile",
+                        "drawdown_penalty": 0.50,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.0,
+                    }
+                ],
+                "allocation_class_weighting": "balanced_partial_boost",
+                "allocation_partial_class_weight_multiplier": 2.0,
+            },
+            "strict_research_gate": {
+                "enabled": True,
+                "required_benchmark_strategies": ["buy_hold"],
+                "required_partial_target_weights": [0.25, 0.50],
+                "min_partial_target_fraction": 0.0,
+                "min_partial_target_fold_fraction": 0.0,
+                "required_predicted_target_weights": [],
+                "min_predicted_target_fraction": 0.0,
+                "min_predicted_target_fold_fraction": 0.0,
+            },
+        },
+    )
+    dates = pd.bdate_range("2020-01-01", "2024-12-31")
+    close = pd.Series(
+        [100.0 + (index * 0.05) + (2.0 * math.sin(index / 3.0)) for index in range(len(dates))]
+    )
+    open_price = close.shift(1).fillna(close.iloc[0])
+    high = pd.concat([open_price, close], axis=1).max(axis=1) + 0.2
+    low = pd.concat([open_price, close], axis=1).min(axis=1) - 0.2
+    save_panel_csv(
+        pd.DataFrame(
+            {
+                "symbol": "BTC-USD",
+                "timestamp": dates,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": [1_000_000 + index for index in range(len(dates))],
+                "adj_close": close,
+                "adj_factor": 1.0,
+                "adj_open": open_price,
+                "adj_high": high,
+                "adj_low": low,
+            }
+        ),
+        tmp_path / "cache" / "panel.csv",
+    )
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_dir = latest_run_dir(tmp_path / "runs" / "integration_fixture")
+    selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
+    phase8_summary = pd.read_csv(run_dir / "phase8_run_summary.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+
+    fallback_rows = selections.loc[
+        selections["selection_source"].eq("best_active_fallback")
+    ]
+    assert not fallback_rows.empty
+    assert fallback_rows["selection_status"].eq("selected").all()
+    assert not fallback_rows["passed_gate"].astype(bool).any()
+    assert selections["selection_policy"].eq("best_active_fallback").all()
+    assert (
+        strategy_summary.loc[
+            strategy_summary["strategy"].eq("ml_indicator_tuned__long_only__cash"),
+            "avg_long_exposure",
+        ].iloc[0]
+        > 0.0
+    )
+    selected_fraction = phase8_summary.loc[
+        phase8_summary["metric"].eq("selected_fold_fraction"),
+        "value",
+    ].iloc[0]
+    assert float(selected_fraction) > 0.0
+
+
+def test_run_experiment_supports_no_candidate_regime_fallback_selection(
+    tmp_path: Path,
+) -> None:
+    strict_benchmarks = [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    config_path = _write_run_experiment_config(
+        tmp_path,
+        models=[{"name": "logistic_regression"}],
+        symbol_specs=(("BTC-USD", 100.0, 1.00),),
+        features={
+            "return_windows": [3, 5, 7],
+            "ma_windows": [3, 5, 7],
+            "vol_windows": [3, 5],
+            "momentum_window": 3,
+            "crypto_time_series_enabled": True,
+            "crypto_return_windows": [1, 3, 5],
+            "crypto_vol_windows": [3, 5],
+            "crypto_ma_windows": [3, 5],
+            "crypto_rsi_window": 3,
+            "crypto_macd_fast_window": 3,
+            "crypto_macd_slow_window": 6,
+            "crypto_macd_signal_window": 3,
+            "crypto_bollinger_window": 3,
+            "crypto_volume_window": 3,
+            "crypto_regime_features_enabled": True,
+            "crypto_regime_trend_windows": [3, 6, 12],
+            "crypto_regime_volatility_window": 3,
+            "crypto_regime_percentile_window": 12,
+            "crypto_regime_drawdown_window": 12,
+            "crypto_regime_volume_window": 3,
+        },
+        target={"horizon_days": 3, "type": "allocation_utility"},
+        ranking={
+            "mode": "long_only",
+            "long_n": 1,
+            "short_n": 1,
+            "rebalance_frequency": "bar",
+            "min_score_threshold": 0.55,
+            "cash_when_underfilled": True,
+        },
+        partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        rebalanced_partial_allocation_benchmarks={
+            "enabled": True,
+            "weights": [0.25, 0.50, 0.75],
+        },
+        walk_forward={
+            "train_years": 1,
+            "test_months": 2,
+            "step_months": 2,
+            "min_train_rows": 100,
+            "min_test_rows": 10,
+            "min_train_positive_rate": 0.0,
+            "min_test_positive_rate": 0.0,
+            "embargo_periods": 1,
+        },
+        evaluation={
+            "benchmark_strategy": "buy_hold",
+            "cost_sensitivity_bps": [35, 50],
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_mode": "direct_tiered",
+                "selection_policy": "best_active_fallback",
+                "no_candidate_fallback_regime_policy": "bull100_sideways25",
+                "thresholds": [0.50],
+                "tier_thresholds": [0.25, 0.50, 0.75],
+                "validation_months": 2,
+                "min_validation_rows": 10,
+                "min_exposure_changes": 9999,
+                "min_average_exposure_for_active": 0.0,
+                "max_average_exposure_for_active": 1.0,
+                "rolling_train_bars_grid": [120],
+                "min_holding_period_bars_grid": [0],
+                "hysteresis_margin_grid": [0.0],
+                "regime_participation_policies": [
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    }
+                ],
+                "max_annualized_turnover": 365.0,
+                "objective": "net_return_and_risk_vs_required_benchmarks",
+                "selection_benchmark_strategies": strict_benchmarks,
+                "allocation_utility_profiles": [
+                    {
+                        "name": "fixture_profile",
+                        "drawdown_penalty": 0.50,
+                        "volatility_penalty": 0.25,
+                        "risk_penalty_power": 2.0,
+                    }
+                ],
+                "allocation_score_policy": "expected_allocation",
+                "allocation_class_weighting": "balanced_partial_boost",
+                "allocation_partial_class_weight_multiplier": 2.0,
+            },
+            "strict_research_gate": {
+                "enabled": True,
+                "required_benchmark_strategies": strict_benchmarks,
+                "required_partial_target_weights": [0.25, 0.50],
+                "min_partial_target_fraction": 0.0,
+                "min_partial_target_fold_fraction": 0.0,
+                "required_predicted_target_weights": [],
+                "min_predicted_target_fraction": 0.0,
+                "min_predicted_target_fold_fraction": 0.0,
+            },
+        },
+    )
+
+    result = run_marketlab_cli("run-experiment", config_path)
+    assert_command_ok(result)
+
+    run_dir = latest_run_dir(tmp_path / "runs" / "integration_fixture")
+    selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
+    candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
+    strategy_summary = pd.read_csv(run_dir / "strategy_summary.csv")
+    strict_gate = pd.read_csv(run_dir / "strict_research_gate.csv")
+
+    fallback_rows = selections.loc[
+        selections["selection_source"].eq("deterministic_regime_fallback")
+    ]
+    assert not fallback_rows.empty
+    assert fallback_rows["selection_status"].eq("selected").all()
+    assert not fallback_rows["passed_gate"].astype(bool).any()
+    assert fallback_rows["selected_model_name"].isna().all()
+    assert fallback_rows["selected_regime_policy"].eq("bull100_sideways25").all()
+    assert fallback_rows["selected_regime_bull_floor"].eq(1.0).all()
+    assert fallback_rows["selected_regime_sideways_floor"].eq(0.25).all()
+    assert fallback_rows["selected_regime_risk_off_cap"].eq(0.25).all()
+    assert not candidates["passed_gate"].astype(bool).any()
+    assert (run_dir / "strict_research_gate.csv").exists()
+    assert (
+        strict_gate.loc[
+            strict_gate["condition"].eq("selected_walk_forward_fold_fraction"),
+            "passed",
+        ]
+        .astype(bool)
+        .all()
+    )
+    assert (
+        strategy_summary.loc[
+            strategy_summary["strategy"].eq("ml_indicator_tuned__long_only__cash"),
+            "avg_long_exposure",
+        ].iloc[0]
+        > 0.0
+    )
 
 
 def test_run_experiment_writes_regime_state_outputs(tmp_path: Path) -> None:
@@ -1426,7 +1769,12 @@ def test_run_experiment_writes_regime_state_outputs(tmp_path: Path) -> None:
     assert {"predicted_tier_weight", "prob_tier_0", "prob_tier_50"}.issubset(
         probability_diagnostics.columns
     )
-    assert {"utility_profile", "calibration_status", "regime_policy"}.issubset(
+    assert {
+        "utility_profile",
+        "calibration_status",
+        "regime_policy",
+        "allocation_score_policy",
+    }.issubset(
         tuning_candidates.columns
     )
     assert "candidate_rejections" in set(phase8_summary["section"])

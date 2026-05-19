@@ -634,7 +634,11 @@ def _ml_strategy_tuning_lines(
         selection_columns = [
             "fold_id",
             "selection_status",
+            "selection_policy",
+            "selection_source",
             "allocation_mode",
+            "allocation_score_policy",
+            "allocation_score_policy_prob100_threshold",
             "selected_model_name",
             "selected_rolling_train_bars",
             "selected_min_holding_period_bars",
@@ -651,6 +655,8 @@ def _ml_strategy_tuning_lines(
             "passed_gate",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "validation_predicted_100_fraction",
+            "validation_score_policy_triggered_100_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
             "annualized_turnover",
@@ -669,6 +675,8 @@ def _ml_strategy_tuning_lines(
             "fold_id",
             "model_name",
             "allocation_mode",
+            "allocation_score_policy",
+            "allocation_score_policy_prob100_threshold",
             "rolling_train_bars",
             "min_holding_period_bars",
             "hysteresis_margin",
@@ -687,6 +695,8 @@ def _ml_strategy_tuning_lines(
             "annualized_turnover",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "validation_predicted_100_fraction",
+            "validation_score_policy_triggered_100_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
             "active_candidate",
@@ -715,6 +725,7 @@ def _ml_strategy_tuning_lines(
             "- Rolling train candidates use only the latest configured bars inside the label-safe training slice.",
             "- Selected models are refit on the selected rolling training window before scoring the outer test fold.",
             "- The pass gate requires net excess return versus the configured selection benchmarks, activity guardrails, risk improvement, and any configured turnover budget after costs.",
+            "- `best_active_fallback` selections are diagnostic runtime selections; they keep `passed_gate=False` and do not relax the strict Phase 8 research gate.",
         ]
     )
     for artifact_path, label in [
@@ -796,7 +807,12 @@ def _allocation_utility_lines(
                 "predicted_tier_weight",
                 "mean",
             )
-        for column in ["fold_predicted_25_fraction", "fold_predicted_50_fraction"]:
+        for column in [
+            "fold_predicted_25_fraction",
+            "fold_predicted_50_fraction",
+            "fold_predicted_100_fraction",
+            "fold_score_policy_triggered_100_fraction",
+        ]:
             if column in allocation_probability_diagnostics.columns:
                 probability_aggregations[column] = (column, "max")
         if "utility_profile" in allocation_probability_diagnostics.columns:
@@ -865,7 +881,8 @@ def _allocation_utility_lines(
             f"- Target-support gate requires {', '.join(str(value) for value in config.evaluation.strict_research_gate.required_partial_target_weights) or 'no configured partial tiers'} at global fraction >= {config.evaluation.strict_research_gate.min_partial_target_fraction:g} and train/validation fold fraction >= {config.evaluation.strict_research_gate.min_partial_target_fold_fraction:g}.",
             f"- Predicted-support gate requires {', '.join(str(value) for value in config.evaluation.strict_research_gate.required_predicted_target_weights) or 'no configured partial tiers'} at OOS fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fraction:g} and selected-fold fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fold_fraction:g}.",
             f"- Candidate training uses `{config.evaluation.ml_strategy_tuning.allocation_class_weighting}` class weighting and `{config.evaluation.ml_strategy_tuning.allocation_probability_calibration}` probability calibration when training-slice support allows it.",
-            "- The trading score is expected allocation: `sum(prob_tier * tier_weight)`.",
+            f"- Allocation score policy is `{config.evaluation.ml_strategy_tuning.allocation_score_policy}` with `prob_tier_100` trigger threshold {config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold:g}.",
+            "- The default trading score is expected allocation: `sum(prob_tier * tier_weight)`. Diagnostic score policies may transform that score before tiering.",
             "- Direct-tier allocation still applies risk-off caps, minimum holding periods, hysteresis, costs, and the strict gate.",
             "- `regime_state` maps utility tiers into `risk_off`, `reduced`, and `risk_on` states before converting state probabilities back into expected allocation.",
         ]
