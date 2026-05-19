@@ -98,6 +98,14 @@ model score is expected allocation:
 score = sum(prob_tier * tier_weight)
 ```
 
+The default runtime score policy remains `expected_allocation`. The
+`bull_prob100_threshold` policy is diagnostic only: on non-risk-off runtime
+bull rows it can promote the final tiering score to `1.0` when
+`prob_tier_100 >= 0.20` and `prob_tier_100 >= prob_tier_0`. This tests whether
+score compression is suppressing full BTC participation. It does not change
+the allowed strategy tiers, fallback selection rules, or the strict Phase 8
+research gate.
+
 ## 4. Walk-Forward Training
 
 The outer walk-forward split defines the real out-of-sample test windows. Each
@@ -151,17 +159,34 @@ The research artifacts to inspect are:
 - `threshold_diagnostics.csv` for forward returns by probability threshold.
 - `ml_strategy_tuning_candidates.csv` for model, threshold, hold, hysteresis,
   turnover, and validation outcome.
-- `ml_strategy_tuning_selections.csv` for the selected candidate per fold.
+- `ml_strategy_tuning_selections.csv` for the selected candidate per fold,
+  including `selection_policy` and `selection_source` traceability.
 - `allocation_target_diagnostics.csv` for utility-label distributions by fold
   and regime.
 - `allocation_probability_diagnostics.csv` for predicted tier probabilities,
-  nearest traded tier, predicted partial-tier support, expected allocation,
-  realized utility, and realized return.
+  nearest traded tier, predicted partial-tier support, runtime regime labels,
+  expected allocation, realized utility, and realized return.
 - `feature_importance.csv` for selected-fold coefficients or tree importances.
 - `phase8_run_summary.csv` for the deterministic post-run summary of failed
   strict-gate rows, selected-fold coverage, candidate rejection reasons,
   target-tier support, predicted-tier support, benchmark deltas, and
   regime-slice active returns.
+- `phase8_selection_probe.csv` and `phase8_selection_probe_summary.csv` for
+  artifact-only selection coverage probes that simulate strict, benchmark
+  tolerance, fallback, and turnover-only diagnostic selection variants without
+  retraining models or changing the approved strict gate.
+- `phase8_bull_participation.csv` and
+  `phase8_bull_participation_summary.csv` for artifact-first attribution of
+  bull-regime underparticipation, score compression, risk-off overlap, and
+  selected-policy context.
+- `phase8_score_diagnostic.csv` and `phase8_score_diagnostic_summary.csv` for
+  score-decile, tier-confusion, model-family, and validation-vs-OOS stability
+  diagnostics.
+- `phase8_bull_counterfactual.csv`,
+  `phase8_bull_counterfactual_summary.csv`, and
+  `phase8_bull_counterfactual_gate.csv` for artifact-only bull-exposure
+  counterfactuals. These rows are diagnostic and do not replace
+  `strict_research_gate.csv`.
 
 ## 6. Long Or Cash Decision
 
@@ -263,6 +288,25 @@ larger decision intervals:
 - `btc_phase8_allocation_utility_1d_long_history`: the same daily long-history
   panel with direct tier labels over a 14-bar allocation-utility horizon.
 
+Two narrow daily long-history challenger configs are available for faster
+iteration before expanding the grid:
+
+- `btc_phase8_allocation_utility_1d_long_history_challenger`: allocation-utility
+  target with the strict gate unchanged, but only the higher-participation
+  regime policies, two train windows, two hold periods, two hysteresis margins,
+  three model families, and two utility profiles.
+- `btc_phase8_regime_state_1d_long_history_challenger`: the same narrow tuning
+  grid with the regime-state target.
+- `btc_phase8_allocation_utility_1d_long_history_fallback_diagnostic`: the
+  allocation-utility challenger surface with diagnostic runtime
+  `best_active_fallback` selection enabled.
+- `btc_phase8_allocation_utility_1d_long_history_full_tier_score_diagnostic`:
+  the bull-floor-immediate diagnostic surface with `bull_prob100_threshold`
+  scoring, balanced allocation-class weighting, and no probability
+  calibration. This tests whether the model can produce real `100%`
+  predicted-tier support in bull regimes without changing the strict success
+  definition.
+
 ## 7. Cost-Aware Candidate Selection
 
 Candidate selection is portfolio-based, not just forecast-based. Each candidate
@@ -280,6 +324,16 @@ objective. Drawdown improvement, Sharpe-like improvement, and lower annualized
 turnover are tie-breakers. Candidate selection does not use outer test-fold
 returns or outer test-fold exposure.
 
+Runtime selection is controlled by `evaluation.ml_strategy_tuning.selection_policy`:
+
+- `strict` is the default and only selects candidates that pass the full
+  validation gate.
+- `best_active_fallback` is diagnostic. It still selects strict candidates
+  first, but if a fold has none, it may select the best validation candidate
+  whose only failed checks are benchmark-excess checks. The selected fallback
+  keeps `passed_gate=false`, and the unchanged strict research gate remains the
+  definition of Phase 8 success.
+
 The configured annualized turnover budget is:
 
 ```yaml
@@ -295,6 +349,47 @@ After a run, regenerate the deterministic summary without training models:
 ```bash
 python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>
 ```
+
+Run the selection coverage probe without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>
+```
+
+Run the bull-participation attribution diagnostic without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-bull-participation --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+```
+
+The `--config` argument is needed for older artifacts that do not yet persist
+runtime regime labels. The diagnostic explains why a run missed bull upside; it
+does not change model training, runtime selection, portfolio weights, or strict
+gate pass/fail criteria.
+
+Run the score diagnostic without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs/<experiment>/<run-id>
+```
+
+This report checks whether score compression, tier confusion, or validation to
+OOS score instability explains weak BTC participation.
+
+Run the bull counterfactual diagnostic without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-bull-counterfactual --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+```
+
+The counterfactual report tests simple exposure overrides such as forcing
+runtime bull exposure to 100% or treating strict-gate bull days as buy-hold
+days. Its gate-like rows are explicitly diagnostic and cannot approve Phase 8
+or redefine the unchanged strict research gate.
+
+The fallback and turnover-only probe profiles are diagnostic only. The runtime
+`best_active_fallback` policy is also diagnostic until a regenerated OOS run
+passes the unchanged strict Phase 8 research gate.
 
 The same summary is embedded into `report.md` when Phase 8 artifacts are
 generated.

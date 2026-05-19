@@ -140,7 +140,7 @@ def _selection_rows(rows: list[dict[str, object]], selections: pd.DataFrame) -> 
         section="fold_selection",
         metric="no_valid_candidate_folds",
         value=no_valid_folds,
-        detail="folds that fell back to cash because no candidate passed",
+        detail="folds that stayed cash because no candidate was selected",
     )
 
 

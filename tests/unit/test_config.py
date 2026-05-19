@@ -108,6 +108,16 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0]
     assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0]
     assert config.evaluation.ml_strategy_tuning.max_annualized_turnover is None
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "strict"
+    assert config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy is None
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_score_policy
+        == "expected_allocation"
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold
+        == pytest.approx(0.20)
+    )
     assert [
         (
             policy.name,
@@ -193,8 +203,39 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
     assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0, 6]
     assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
     assert config.evaluation.ml_strategy_tuning.max_annualized_turnover == pytest.approx(24.0)
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "strict"
     assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == []
     assert config.target.allocation_utility_risk_penalty_power == pytest.approx(2.0)
+
+
+def test_load_config_accepts_no_candidate_fallback_regime_policy(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "no_candidate_fallback_regime_policy": "bull100_sideways25",
+                "regime_participation_policies": [
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    }
+                ],
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert (
+        config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
+        == "bull100_sideways25"
+    )
 
 
 def test_load_config_accepts_btc_regime_tiered_research_config() -> None:
@@ -423,6 +464,170 @@ def test_load_config_accepts_btc_regime_state_long_history_config() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "target_type", "selection_policy"),
+    [
+        (
+            "configs/experiment.btc_phase8_allocation_utility_1d_long_history_challenger.yaml",
+            "btc_phase8_allocation_utility_1d_long_history_challenger",
+            "allocation_utility",
+            "strict",
+        ),
+        (
+            "configs/experiment.btc_phase8_regime_state_1d_long_history_challenger.yaml",
+            "btc_phase8_regime_state_1d_long_history_challenger",
+            "regime_state",
+            "strict",
+        ),
+        (
+            "configs/experiment.btc_phase8_allocation_utility_1d_long_history_fallback_diagnostic.yaml",
+            "btc_phase8_allocation_utility_1d_long_history_fallback_diagnostic",
+            "allocation_utility",
+            "best_active_fallback",
+        ),
+        (
+            "configs/experiment.btc_phase8_allocation_utility_1d_long_history_full_tier_score_diagnostic.yaml",
+            "btc_phase8_allocation_utility_1d_long_history_full_tier_score_diagnostic",
+            "allocation_utility",
+            "best_active_fallback",
+        ),
+    ],
+)
+def test_load_config_accepts_btc_long_history_challenger_configs(
+    path: str,
+    experiment_name: str,
+    target_type: str,
+    selection_policy: str,
+) -> None:
+    config = load_config(path)
+
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "1d"
+    assert config.data.cache_dir == "artifacts/data-btc-phase8-1d-long"
+    assert config.target.type == target_type
+    assert config.evaluation.ml_strategy_tuning.allocation_mode == "direct_tiered"
+    assert config.evaluation.ml_strategy_tuning.selection_policy == selection_policy
+    if "full_tier_score" in path:
+        assert (
+            config.evaluation.ml_strategy_tuning.allocation_score_policy
+            == "bull_prob100_threshold"
+        )
+        assert (
+            config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold
+            == pytest.approx(0.20)
+        )
+        assert config.evaluation.ml_strategy_tuning.allocation_class_weighting == "balanced"
+        assert config.evaluation.ml_strategy_tuning.allocation_probability_calibration == "none"
+    assert [model.name for model in config.models] == [
+        "logistic_l1",
+        "random_forest",
+        "hist_gradient_boosting",
+    ]
+    assert config.evaluation.ml_strategy_tuning.tier_thresholds == [0.25, 0.50, 0.75]
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [730, 1095]
+    if "full_tier_score" in path:
+        assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0]
+        assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0]
+    else:
+        assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
+            18,
+            36,
+        ]
+        assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.02, 0.04]
+    expected_policy_names = (
+        ["bull100_sideways25"]
+        if "full_tier_score" in path
+        else ["bull100_sideways25", "bull100_sideways50_bear25"]
+    )
+    assert [
+        policy.name
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+    ] == expected_policy_names
+    policy_tiers = {
+        value
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+        for value in [
+            policy.bull_floor,
+            policy.sideways_floor,
+            policy.bear_floor,
+            policy.risk_off_cap,
+        ]
+        if value is not None
+    }
+    assert policy_tiers <= {0.0, 0.25, 0.50, 1.0}
+    assert [
+        profile.name
+        for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+    ] == [
+        "partial_p25",
+        "vol_sensitive_p25",
+    ]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.evaluation.strict_research_gate.required_predicted_target_weights == [
+        0.25,
+        0.50,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "fallback_policy"),
+    [
+        (
+            "configs/experiment.btc_phase8_allocation_utility_1d_long_history_regime_fallback_sideways25.yaml",
+            "btc_phase8_allocation_utility_1d_long_history_regime_fallback_sideways25",
+            "bull100_sideways25",
+        ),
+        (
+            "configs/experiment.btc_phase8_allocation_utility_1d_long_history_regime_fallback_sideways50.yaml",
+            "btc_phase8_allocation_utility_1d_long_history_regime_fallback_sideways50",
+            "bull100_sideways50_bear25",
+        ),
+    ],
+)
+def test_load_config_accepts_btc_regime_fallback_challenger_configs(
+    path: str,
+    experiment_name: str,
+    fallback_policy: str,
+) -> None:
+    config = load_config(path)
+
+    strict_benchmarks = [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.experiment_name == experiment_name
+    assert config.target.type == "allocation_utility"
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert (
+        config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
+        == fallback_policy
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_score_policy
+        == "expected_allocation"
+    )
+    assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == (
+        strict_benchmarks
+    )
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == (
+        strict_benchmarks
+    )
+
+
 def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
     config = load_config("configs/experiment.btc_paper_daily.yaml")
 
@@ -450,6 +655,16 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         ({"hysteresis_margin_grid": [0.50]}, "hysteresis_margin_grid"),
         ({"max_annualized_turnover": 0.0}, "max_annualized_turnover"),
         ({"objective": "auc"}, "ml_strategy_tuning.objective"),
+        ({"selection_policy": "loose"}, "ml_strategy_tuning.selection_policy"),
+        ({"allocation_score_policy": "magic_score"}, "allocation_score_policy"),
+        (
+            {"allocation_score_policy_prob100_threshold": 1.2},
+            "allocation_score_policy_prob100_threshold",
+        ),
+        (
+            {"allocation_score_policy_prob100_threshold": -0.1},
+            "allocation_score_policy_prob100_threshold",
+        ),
         (
             {"objective": "net_return_and_risk_vs_required_benchmarks"},
             "selection_benchmark_strategies",
@@ -458,6 +673,23 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         (
             {"selection_benchmark_strategies": ["buy_hold", "buy_hold"]},
             "selection_benchmark_strategies",
+        ),
+        (
+            {"no_candidate_fallback_regime_policy": ""},
+            "no_candidate_fallback_regime_policy",
+        ),
+        (
+            {"no_candidate_fallback_regime_policy": "missing_policy"},
+            "no_candidate_fallback_regime_policy",
+        ),
+        (
+            {
+                "no_candidate_fallback_regime_policy": "risk_off_uncapped",
+                "regime_participation_policies": [
+                    {"name": "risk_off_uncapped", "risk_off_cap": None}
+                ],
+            },
+            "risk_off_cap",
         ),
         (
             {
