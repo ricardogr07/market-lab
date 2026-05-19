@@ -30,6 +30,12 @@ from marketlab.paper.observability import (
     root_execution_context,
 )
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
+from marketlab.reports.phase8_bull_counterfactual import (
+    write_phase8_bull_counterfactual,
+)
+from marketlab.reports.phase8_bull_participation import write_phase8_bull_participation
+from marketlab.reports.phase8_score_diagnostic import write_phase8_score_diagnostic
+from marketlab.reports.phase8_selection_probe import write_phase8_selection_probe
 from marketlab.reports.phase8_summary import write_phase8_run_summary
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
 
@@ -83,6 +89,24 @@ def build_parser() -> argparse.ArgumentParser:
     phase8_summary = subparsers.add_parser("phase8-summary")
     phase8_summary.add_argument("--run-dir", required=True)
     phase8_summary.add_argument("--output")
+
+    phase8_selection_probe = subparsers.add_parser("phase8-selection-probe")
+    phase8_selection_probe.add_argument("--run-dir", required=True)
+    phase8_selection_probe.add_argument("--output-dir")
+
+    phase8_bull_participation = subparsers.add_parser("phase8-bull-participation")
+    phase8_bull_participation.add_argument("--run-dir", required=True)
+    phase8_bull_participation.add_argument("--config")
+    phase8_bull_participation.add_argument("--output-dir")
+
+    phase8_score_diagnostic = subparsers.add_parser("phase8-score-diagnostic")
+    phase8_score_diagnostic.add_argument("--run-dir", required=True)
+    phase8_score_diagnostic.add_argument("--output-dir")
+
+    phase8_bull_counterfactual = subparsers.add_parser("phase8-bull-counterfactual")
+    phase8_bull_counterfactual.add_argument("--run-dir", required=True)
+    phase8_bull_counterfactual.add_argument("--config", required=True)
+    phase8_bull_counterfactual.add_argument("--output-dir")
 
     return parser
 
@@ -246,6 +270,45 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "phase8-summary":
         print(write_phase8_run_summary(args.run_dir, output_path=args.output))
+        return 0
+
+    if args.command == "phase8-selection-probe":
+        selections_path, summary_path = write_phase8_selection_probe(
+            args.run_dir,
+            output_dir=args.output_dir,
+        )
+        print(selections_path)
+        print(summary_path)
+        return 0
+
+    if args.command == "phase8-bull-participation":
+        detail_path, summary_path = write_phase8_bull_participation(
+            args.run_dir,
+            config_path=args.config,
+            output_dir=args.output_dir,
+        )
+        print(detail_path)
+        print(summary_path)
+        return 0
+
+    if args.command == "phase8-score-diagnostic":
+        detail_path, summary_path = write_phase8_score_diagnostic(
+            args.run_dir,
+            output_dir=args.output_dir,
+        )
+        print(detail_path)
+        print(summary_path)
+        return 0
+
+    if args.command == "phase8-bull-counterfactual":
+        detail_path, summary_path, gate_path = write_phase8_bull_counterfactual(
+            args.run_dir,
+            config_path=args.config,
+            output_dir=args.output_dir,
+        )
+        print(detail_path)
+        print(summary_path)
+        print(gate_path)
         return 0
 
     load_env_file()
