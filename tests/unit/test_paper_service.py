@@ -518,6 +518,62 @@ def test_run_paper_submit_rebalances_btc_target_weight_with_gtc_order(tmp_path: 
     assert broker.submitted_orders[-1]["time_in_force"] == "gtc"
 
 
+def test_run_paper_submit_floors_fractional_sell_qty_to_available_position(
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+
+    class PrecisePositionBroker(FakeAlpacaBroker):
+        def get_position(self, symbol: str) -> dict[str, object] | None:
+            if symbol != self.symbol:
+                return None
+            return {
+                "symbol": symbol,
+                "qty": "1.485241599",
+                "market_value": "1063.36",
+            }
+
+    broker = PrecisePositionBroker(
+        symbol="QQQ",
+        equity=1074.01,
+        buying_power=10.65,
+        cash=10.65,
+        current_qty=1.485241599,
+        market_price=714.565,
+    )
+    proposal = {
+        "proposal_id": "2026-05-14-QQQ-2026-05-13",
+        "experiment_name": config.experiment_name,
+        "symbol": "QQQ",
+        "signal_date": "2026-05-13",
+        "effective_date": "2026-05-14",
+        "reference_price": 714.565,
+        "execution_mode": config.paper.execution_mode,
+        "approval_status": "approved",
+        "approval_actor": "agent",
+        "submission_status": "pending",
+        "decision_policy": "consensus_vote",
+        "decision": "cash",
+        "target_weight": 0.0,
+        "long_vote_count": 3,
+        "cash_vote_count": 3,
+        "created_at": datetime(2026, 5, 13, 20, 10, tzinfo=UTC).isoformat(),
+    }
+    PaperStateStore(config).save_proposal(proposal)
+
+    submission = run_paper_submit(
+        config,
+        now=datetime(2026, 5, 14, 4, 30, tzinfo=UTC),
+        broker=broker,
+    )["submission"]
+
+    assert submission["status"] == "submitted"
+    assert submission["side"] == "sell"
+    assert submission["qty"] == pytest.approx(1.485241)
+    assert broker.submitted_orders[-1]["qty"] == "1.485241"
+    assert float(broker.submitted_orders[-1]["qty"]) <= 1.485241599
+
+
 def test_run_paper_submit_treats_sub_dollar_long_gap_as_already_at_target(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
     broker = FakeAlpacaBroker(
