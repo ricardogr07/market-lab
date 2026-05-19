@@ -57,7 +57,7 @@ def _stderr_records(stderr: str) -> list[dict[str, object]]:
     return [
         json.loads(line)
         for line in stderr.splitlines()
-        if line.strip() != ""
+        if line.strip().startswith("{")
     ]
 
 
