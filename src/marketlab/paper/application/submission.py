@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 
 from marketlab.config import ExperimentConfig
@@ -38,23 +38,13 @@ from .reconciliation import _poll_order_status, _refresh_submission_order_status
 _FRACTIONAL_QTY_INCREMENT = Decimal("0.000001")
 
 
-def _payload_date(value: object) -> date:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(str(value)[:10])
-
-
 def _scheduled_submission_local_time(
     config: ExperimentConfig,
-    proposal: dict[str, object],
     *,
     local_now: datetime,
 ) -> datetime:
     submission_clock = _clock_value(config.paper.submission_time)
-    submission_date = _payload_date(proposal.get("signal_date", proposal["effective_date"]))
-    return datetime.combine(submission_date, submission_clock, tzinfo=local_now.tzinfo)
+    return datetime.combine(local_now.date(), submission_clock, tzinfo=local_now.tzinfo)
 
 
 def _submission_delta_qty(*, desired_qty: float, current_qty: float) -> float:
@@ -198,7 +188,6 @@ class SubmissionService:
             local_now = _local_now(config, request.now)
             scheduled_submission = _scheduled_submission_local_time(
                 config,
-                proposal,
                 local_now=local_now,
             )
             if local_now < scheduled_submission:
