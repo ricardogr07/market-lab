@@ -35,6 +35,12 @@ docker compose -f docker/compose.mcp.yml up -d --build
 docker compose --env-file .env -f docker/compose.paper.yml up -d --build
 ```
 
+- BTC paper-review workflow:
+
+```bash
+docker compose --env-file .env.btc-paper -f docker/compose.btc-paper.yml up -d --build
+```
+
 On Linux, export the host UID/GID before starting either sidecar so the bind-mounted `workspace/` and `artifacts/` directories stay writable inside the container, then run the matching compose command:
 
 ```bash
@@ -43,7 +49,7 @@ export MARKETLAB_GID="$(id -g)"
 docker compose -f docker/compose.mcp.yml up -d --build
 ```
 
-This creates a long-lived container named `marketlab-mcp` for the research sidecar or `marketlab-paper-mcp` for the paper-review sidecar. The MCP server itself is not started as a daemon. Each Copilot session starts its own foreground stdio process through `docker exec -i`.
+This creates a long-lived container named `marketlab-mcp` for the research sidecar, `marketlab-paper-mcp` for the ETF paper-review sidecar, or `marketlab-btc-paper-mcp` for the isolated BTC paper-review sidecar. The MCP server itself is not started as a daemon. Each Copilot session starts its own foreground stdio process through `docker exec -i`.
 
 ## Add The VS Code MCP Config
 
@@ -67,6 +73,8 @@ The sample defines four servers:
 - `marketlab-paper-docker-online`: paper-review sidecar plus `--allow-network`
 
 Use `marketlab-docker-offline` for normal cached-panel or cached-raw workflows. Use `marketlab-paper-docker-offline` when you want Copilot to inspect the same proposal, approval, and submission state that the paper scheduler and agent containers are writing under `/app/repo/artifacts`.
+
+For BTC paper review, use the same stdio shape with container name `marketlab-btc-paper-mcp`, `--artifact-root /app/repo/artifacts`, and `configs/experiment.btc_paper_daily.yaml` after starting `docker/compose.btc-paper.yml`. Keep a separate local server entry for that flow if you need it, rather than repointing the QQQ/VOO paper entry.
 
 If the paper config enables `paper.notifications.telegram.enabled`, the paper compose stack also needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. `marketlab-paper-mcp` needs the same env because MCP approvals use the shared paper approval service and should emit the same notification side effects as the CLI and agent worker.
 
@@ -139,7 +147,7 @@ After copying `.vscode/mcp.json` and reloading VS Code:
 ## Troubleshooting
 
 - If VS Code cannot start the server, run `docker ps` and verify the container name is exactly `marketlab-mcp`.
-- If the paper entry cannot start, verify the paper stack is up and the container name is exactly `marketlab-paper-mcp`.
+- If the paper entry cannot start, verify the paper stack is up and the container name is exactly `marketlab-paper-mcp` for ETF paper or `marketlab-btc-paper-mcp` for BTC paper.
 - If Copilot connects but job planning says network is required, switch to the online server or preload the raw cache / prepared panel.
 - If config writes fail on Linux, make sure `MARKETLAB_UID` and `MARKETLAB_GID` match `id -u` and `id -g` before starting the compose sidecar.
 - If config writes fail, verify the host `workspace/` and `artifacts/` directories exist and are writable on the host.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes canonical market data, trailing features, weekly modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, a ranking strategy, three baseline strategies including periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input scaffolding, additive factor-attribution and covariance diagnostics, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Black-Litterman assumptions artifacts, a Docker-deployable MCP server surface, backtests, and reviewable artifacts.
+MarketLab is a package-first research toolkit for reproducible market experiments across ETF and crypto research lanes. The current implementation includes canonical market data, trailing and crypto-specific features, weekly, daily, and intraday modeling datasets, walk-forward fold generation, additive guardrail and embargo controls, skipped-fold diagnostics, a lightweight model registry, the `train-models` command, ranking-aware fold evaluation and downside diagnostics, calibration and threshold diagnostics, ranking and tiered-allocation strategies, periodic allocation baselines, executable long-only mean-variance, risk-parity, and Black-Litterman baselines, optimizer input scaffolding, additive factor-attribution and covariance diagnostics, unified `run-experiment` baseline-plus-ML comparison, fold and model summaries, exposure-aware strategy analytics artifacts, benchmark-relative reporting artifacts, turnover and cost-sensitivity diagnostics, Phase 8 BTC/crypto diagnostics, local ETF and BTC paper loops, a Docker-deployable MCP server surface, backtests, and reviewable artifacts.
 
 This document ties the current pieces together and records the working rules that should guide later iterations.
 
@@ -10,22 +10,24 @@ This document ties the current pieces together and records the working rules tha
 
 - In scope now:
   - canonical market panel preparation
-  - trailing feature engineering
-  - weekly modeling dataset generation
+  - trailing feature engineering, crypto time-series features, indicator-stack features, and regime features
+  - weekly, daily, and intraday modeling dataset generation
   - walk-forward fold generation with additive guardrails, embargo controls, and skipped-fold diagnostics
   - model registry for configured estimators
   - walk-forward `train-models` execution and artifact generation
-  - score-to-weight ranking strategies for ML portfolios, including long-short, long-only, confidence-gated cash-underfilled variants, and additive exposure caps
+  - score-to-weight ranking and tiered-allocation strategies for ML portfolios, including long-short, long-only, confidence-gated cash-underfilled variants, additive exposure caps, and BTC partial-exposure tiers
   - fold and model summary artifacts
   - ranking-aware model evaluation artifacts with downside diagnostics
   - calibration, score-histogram, and threshold-sweep diagnostics plus review plots
-  - `buy_hold`, `sma`, config-defined allocation baselines, the executable `mean_variance`, `risk_parity`, and `black_litterman` optimized baselines, plus additive factor and covariance diagnostics for review
+  - `buy_hold`, `sma`, config-defined allocation baselines, indicator-stack and chart-pattern baselines, static/rebalanced BTC partial-exposure baselines, the executable `mean_variance`, `risk_parity`, and `black_litterman` optimized baselines, plus additive factor and covariance diagnostics for review
   - unified `run-experiment` comparison across baselines and ML strategies on a shared OOS window
   - daily backtest with turnover-based costs
   - metrics, exposure-aware, benchmark-relative, and cost-sensitivity strategy analytics CSVs, plots, and Markdown reporting
+  - Phase 8 artifact-only diagnostics for strict-gate review, selection probes, bull participation, score behavior, and bull-exposure counterfactuals
+  - Phase 7 ETF paper trading plus isolated BTC paper state and Docker sidecars
   - required PR CI for lint, docs, packaging, unit tests, and offline integration tests
   - Docker packaging for the installed CLI plus a manual GitHub Actions Docker runner
-  - a stdio MCP server with sandboxed config authoring, queued workflow control, and artifact inspection
+  - a stdio MCP server with sandboxed config authoring, queued workflow control, artifact inspection, and paper proposal review
   - release automation with a monthly-batching Release PR and a PyPI publish path
   - fixture-backed tests and a real-data E2E runner that validates baseline, training, experiment, and analytics artifact sets
 - Deferred to later sprints:
@@ -37,6 +39,9 @@ This document ties the current pieces together and records the working rules tha
 - Local repo execution:
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
   - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
+  - `python scripts/run_marketlab.py run-experiment --config configs/experiment.crypto_ts_ml_2024_ytd.yaml`
+  - `python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>`
+  - `python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>`
 - Installed package bootstrap:
   - `marketlab --version`
   - `marketlab list-configs`
@@ -47,6 +52,8 @@ This document ties the current pieces together and records the working rules tha
 - Dockerized MCP sidecar:
   - `docker compose -f docker/compose.mcp.yml up -d --build`
   - `docker exec -i marketlab-mcp marketlab-mcp --workspace-root /app/workspace --artifact-root /app/artifacts --repo-root /app/repo`
+  - `docker compose --env-file .env -f docker/compose.paper.yml up -d --build`
+  - `docker compose --env-file .env.btc-paper -f docker/compose.btc-paper.yml up -d --build`
   - Codex helper snippet: `docs/codex.config.toml.example`
   - workspace helper file: `.vscode/mcp.json.example`
   - documented clients: Codex and VS Code stable with GitHub Copilot Chat
@@ -72,6 +79,8 @@ The repo uses a `src/` layout. That means `python -m marketlab.cli ...` is not a
 The installed package uses bundled example config templates so a pip-installed user can bootstrap a working run config without needing the repository checkout. That keeps the distribution self-contained while preserving the repo-local launcher as the default development path.
 
 The Docker image deliberately uses the installed package entrypoints instead of the repo-local launcher. That split keeps local development pointed at the source tree while the container validates the packaged CLI and MCP paths.
+
+The BTC paper compose stack is intentionally separate from the ETF paper stack. It uses `marketlab-btc-paper-*` container names, `.env.btc-paper`, and a host `artifacts-btc-paper` mount so BTC paper proposals cannot share the QQQ/VOO approval inbox or state directory.
 
 ## Validation Flow
 
@@ -790,6 +799,17 @@ Best practice:
 - Keep the exposure policy explicit: default `long_short` uses `+0.5` total long and `-0.5` total short, while `long_only` uses `+1.0` total long exposure with any missing slots left in cash only when configured.
 - Treat the tracked `configs/experiment.voo_long_only.ytd.yaml` example as a directional timing configuration, not as a cross-sectional ranking benchmark.
 
+### Crypto And BTC Strategy Modules
+
+- `src/marketlab/strategies/indicator_stack.py` builds deterministic long/cash indicator baselines from trailing bar data.
+- `src/marketlab/strategies/chart_patterns.py` and `pattern_*` helpers implement chart-pattern research and overlays without subjective drawing.
+- `src/marketlab/strategies/tiered_allocation.py` maps BTC model scores into allowed `0%`, `25%`, `50%`, and `100%` exposure tiers with risk-off caps, holding periods, and hysteresis.
+- `src/marketlab/strategies/static_partial.py` and `rebalanced_partial.py` provide BTC/cash benchmark families so mostly-cash strategies cannot pass only by avoiding BTC drawdowns.
+
+Best practice:
+- Keep these strategies research-only until the documented Phase 8 strict gate passes.
+- Treat diagnostic fallbacks and counterfactuals as artifact review, not as production selection policy.
+
 ### `src/marketlab/backtest/engine.py`
 
 - Joins target weights to adjusted open and close data.
@@ -856,6 +876,24 @@ Best practice:
 
 Best practice:
 - Report modules should only render artifacts from already-computed outputs.
+
+### `src/marketlab/reports/phase8_*.py`
+
+- Rebuild Phase 8 run summaries, selection probes, bull participation diagnostics, score diagnostics, and bull counterfactuals from persisted artifacts.
+- Keep diagnostic outputs artifact-only: no model retraining, no strategy-weight rewrites, and no paper-deployment approval side effects.
+- Preserve the strict research gate as the source of truth for Phase 8 pass/fail review.
+
+### `src/marketlab/paper/*`
+
+- `paper/service.py` remains the compatibility facade for the paper command surface.
+- `paper/application/*` owns the phase-oriented services for decision, approval, submission, and reconciliation.
+- `paper/contracts.py` carries typed request and result contracts used by CLI, scheduler, agent, and MCP adapters.
+- `paper/persistence/*` provides filesystem and SQLite persistence implementations while preserving JSON artifacts as the review contract.
+- `paper/agent.py`, `paper/scheduler.py`, and MCP paper tools are entry adapters over the shared services.
+
+Best practice:
+- Keep ETF and BTC paper state roots isolated.
+- Do not let LLM approval paths invent trades or resize model-produced target exposure.
 
 ### `tests/`
 

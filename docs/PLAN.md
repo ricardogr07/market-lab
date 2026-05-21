@@ -2,7 +2,7 @@
 
 ## Current State
 
-Phases 1 through 6 are complete.
+Phases 1 through 7 are complete, and Phase 8 is active as a research-first crypto/BTC lane.
 
 MarketLab is a public research MVP with:
 
@@ -13,6 +13,8 @@ MarketLab is a public research MVP with:
 - release automation and a batched release path
 - richer Phase 5 baseline, diagnostics, and scenario-pack coverage
 - a Phase 7 local paper-trading MVP for a configurable daily single-ETF timing loop
+- Phase 8 crypto/BTC research configs, diagnostics, and strict paper-gating methodology
+- an isolated BTC paper stack that stays separated from the QQQ/VOO paper state
 
 The project now supports a small, reviewable end-to-end research workflow rather than a local-only scaffold.
 
@@ -32,6 +34,11 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab paper-submit --config ...`
 - `marketlab paper-scheduler --config ...`
 - `marketlab paper-report --config ... --start ... --end ...`
+- `marketlab phase8-summary --run-dir ...`
+- `marketlab phase8-selection-probe --run-dir ...`
+- `marketlab phase8-bull-participation --run-dir ... --config ...`
+- `marketlab phase8-score-diagnostic --run-dir ...`
+- `marketlab phase8-bull-counterfactual --run-dir ... --config ...`
 
 Current workflow surface:
 
@@ -47,6 +54,8 @@ Current workflow surface:
 - sandboxed config authoring, async job control, and run-artifact inspection for MCP clients
 - local file-backed paper-trading proposals, approvals, and submission state
 - local Docker Compose scheduling for the daily single-ETF paper loop
+- isolated BTC paper proposal, approval, and submission state under `artifacts/btc-paper` / `artifacts-btc-paper`
+- artifact-only Phase 8 diagnostic commands for post-run review
 
 ## Phase 4 Outcomes Worth Keeping
 
@@ -81,6 +90,22 @@ Priority direction:
 - tracked `QQQ` plus alternate `VOO` paper configs
 - month-run paper reporting against consensus, per-model paths, `buy_hold`, and `sma`
 - local Docker Compose scheduler and agent worker plus the Phase 7 operations runbook
+
+## Phase 8 Direction
+
+Phase 8 is a research lane for crypto and BTC timing, not a production trading lane. It extends the package-first research workflow with intraday bars, indicator-stack baselines, deterministic chart-pattern detectors, direct time-series ML, allocation-utility targets, BTC tiered exposure, and strict benchmark-relative diagnostics.
+
+Current Phase 8 rules:
+
+- use checked-in configs for repeatable BTC and crypto experiments
+- keep BTC exposure decisions limited to `0%`, `25%`, `50%`, or `100%`
+- compare selected strategies against BTC buy-and-hold plus static and rebalanced BTC/cash benchmarks
+- treat Phase 8 diagnostic commands as artifact review only
+- keep crypto/BTC paper work blocked unless the strict research gate passes
+
+## Phase 9 Boundary
+
+Phase 9 is an isolated BTC paper experiment, not an extension of the QQQ/VOO paper inbox. It uses `configs/experiment.btc_paper_daily.yaml`, `.env.btc-paper.example`, `docker/compose.btc-paper.yml`, `marketlab-btc-paper-mcp`, separate scheduler and agent container names, and separate artifact roots. The LLM approval role remains approve/reject only; it cannot invent trades or resize target exposure.
 
 ## Deferred
 

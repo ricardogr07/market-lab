@@ -12,6 +12,7 @@ This audit complements:
 - [Service-Extraction Readiness Rules](service-extraction-readiness.md) for the
   decision checklist used before adding service, port, or adapter boundaries
 - [Phase 7 Paper Trading](paper-trading.md) for the local paper runtime
+- [BTC Phase 8 Methodology](btc-phase8-methodology.md) for the current BTC research gate and isolated paper boundary
 - `CLOUD_MIGRATION_PLAN.md` at the repo root for the later hosted deployment path
 
 ## Locked Design Posture
@@ -116,6 +117,9 @@ Do not do:
 Targets:
 
 - `src/marketlab/paper/service.py`
+- `src/marketlab/paper/application/*`
+- `src/marketlab/paper/contracts.py`
+- `src/marketlab/paper/persistence/*`
 - `src/marketlab/paper/agent.py`
 - `src/marketlab/paper/scheduler.py`
 - `src/marketlab/paper/alpaca.py`
@@ -125,27 +129,23 @@ Targets:
 Current assessment:
 
 - this is the highest-risk part of the codebase for the next phase
-- `paper/service.py` is the main orchestration hotspot and currently carries too many responsibilities
-- `paper/agent.py` mixes worker control, provider policy, prompting, fallback behavior, and approval orchestration
-- scheduler and agent loops are acceptable as local adapters, but they should not own business rules
-- the current filesystem-first state model is workable for the laptop flow, but it is too tightly coupled to orchestration logic for a future transactional runtime
+- the first service split has landed: decision, approval, submission, and reconciliation now live behind application-service classes while `paper/service.py` remains the compatibility facade
+- persistence has explicit filesystem and SQLite implementations, but file-backed JSON artifacts still remain the review and debugging contract
+- `paper/agent.py`, scheduler, CLI, and MCP are acceptable local adapters as long as they keep delegating to application services
+- the BTC paper path is intentionally isolated from QQQ/VOO state, but it still shares the same approve/reject-only control-plane shape
 
 Keep:
 
 - explicit phase language: `decision`, `agent_approve`, `submit`, `reconcile`
 - reviewable artifacts and deterministic fallback semantics
 - adapters for local scheduler and local agent loops
+- separate ETF and BTC paper state roots
 
 Harden:
 
-- split phase orchestration into application services:
-  - `DecisionService`
-  - `ApprovalService`
-  - `SubmissionService`
-  - `ReconciliationService`
-- move Alpaca, Telegram, artifact writing, and provider calls behind explicit interfaces
+- keep moving Alpaca, Telegram, artifact writing, broker submission, and provider calls behind explicit interfaces
 - make scheduler, CLI, MCP, and agent worker thin entry adapters over the same one-shot service contracts
-- define typed request/response objects for each phase instead of relying on raw dicts and ad hoc file payloads
+- keep typed request/response objects for each phase rather than adding new raw dict payloads
 - preserve current paper-state artifact semantics while transactional persistence is being introduced, so parity can be proven before any source-of-truth transition
 
 ### MCP And Ops Tooling
@@ -161,7 +161,7 @@ Current assessment:
 
 - MCP is correctly positioned as an ops and review surface, not the execution backend
 - `mcp/jobs.py` is a local in-process queue for repo workflows; it should not become the production control-plane model
-- MCP tools should stay thin and call application services rather than growing their own runtime logic
+- MCP tools stay thin today and paper approval/status calls route through the shared paper service layer
 
 Keep:
 
@@ -190,7 +190,7 @@ Targets:
 Current assessment:
 
 - the repo has meaningful behavioral coverage, especially around the paper path
-- static typing is not enforced today; that is a real gap for the next phase
+- static typing is enforced through the current tox/CI typecheck lane for selected package surfaces
 - many tests still prove behavior through filesystem artifacts, which is useful, but not enough for a future DB-backed control plane
 
 Keep:
@@ -200,7 +200,7 @@ Keep:
 
 Harden:
 
-- add a real type-check gate to tox and CI
+- keep the type-check gate aligned with new typed paper modules when package surfaces move
 - add contract tests for phase services, repositories, and adapters
 - keep artifact parity tests while adding persistence-agnostic service tests
 - prepare for multi-adapter testing of the same repository contracts

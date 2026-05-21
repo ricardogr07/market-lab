@@ -1,16 +1,17 @@
 # MarketLab
 
-MarketLab is a package-first research toolkit for reproducible market experiments over a fixed ETF universe. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly and daily supervised timing rows, walk-forward folds, trained models, rank-based ML strategies, periodic allocation baselines, executable mean-variance and risk-parity baselines, shared out-of-sample experiments, reviewable artifact summaries, and a local Alpaca paper-trading MVP for a configurable daily single-ETF timing loop.
+MarketLab is a package-first research toolkit for reproducible market experiments across ETF and crypto research lanes. The current implementation includes a working baseline-plus-ML workflow, a Docker-deployable MCP server, weekly, daily, and intraday supervised timing rows, walk-forward folds, trained models, rank-based and tiered ML strategies, periodic allocation baselines, executable mean-variance, risk-parity, and Black-Litterman baselines, shared out-of-sample experiments, reviewable artifact summaries, Phase 8 BTC/crypto diagnostics, and local Alpaca paper-trading MVPs for isolated ETF and BTC paper loops.
 
 See [docs/architecture.md](docs/architecture.md) for the system map, data contracts, execution flow, and extension rules.
 See [docs/solid-architecture-audit.md](docs/solid-architecture-audit.md) for the SOLID-first technical-debt audit and the pre-cloud persistence-hardening roadmap.
 See [docs/service-extraction-readiness.md](docs/service-extraction-readiness.md) for the checklist used before extracting services, ports, or adapters.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
 See [docs/paper-trading.md](docs/paper-trading.md) for the Phase 7 daily single-ETF paper-trading loop and local Docker Compose shape.
+See [docs/crypto-hourly-trend.md](docs/crypto-hourly-trend.md) and [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) for the Phase 8 crypto/BTC research lanes and strict paper-gating methodology.
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
 See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
 See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
-See [docs/PLAN.md](docs/PLAN.md) for the current project status and Phase 6 direction.
+See [docs/PLAN.md](docs/PLAN.md) for the current project status, Phase 8 direction, and Phase 9 boundary.
 
 ## Current Commands
 
@@ -24,6 +25,11 @@ python scripts/run_marketlab.py paper-decision --config configs/experiment.qqq_p
 python scripts/run_marketlab.py paper-agent-approve --config configs/experiment.qqq_paper_daily.yaml --once
 python scripts/run_marketlab.py paper-scheduler --config configs/experiment.qqq_paper_daily.yaml --once
 python scripts/run_marketlab.py paper-report --config configs/experiment.qqq_paper_daily.yaml --start 2026-04-13 --end 2026-05-15
+python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-bull-participation --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-bull-counterfactual --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 ```
 
 `python scripts/run_marketlab.py ...` is the canonical local invocation path because it always resolves to the source tree under `src/`.
@@ -47,6 +53,11 @@ marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-ro
 - `paper-submit`: reconcile the approved proposal against the Alpaca paper account, refresh any previously submitted broker status, and persist either a submitted buy-side notional `DAY` market order, a submitted sell-side fractional `DAY` market order, a no-op, or a skipped submission.
 - `paper-scheduler`: run the long-lived local paper loop for the configured decision and submission windows.
 - `paper-report`: build a month-run paper report comparing the realized paper path, the consensus path, each model path, `buy_hold`, and `sma`.
+- `phase8-summary`: rebuild the deterministic Phase 8 strict-gate run summary from persisted artifacts.
+- `phase8-selection-probe`: run artifact-only selection coverage probes without retraining or changing the approved strict gate.
+- `phase8-bull-participation`: attribute bull-regime underparticipation from persisted Phase 8 artifacts and, when needed, the matching config.
+- `phase8-score-diagnostic`: inspect score compression, tier confusion, model-family behavior, and validation-vs-OOS score stability.
+- `phase8-bull-counterfactual`: write artifact-only bull-exposure counterfactuals that remain diagnostics, not deployment approvals.
 
 ## Artifact Outputs
 
@@ -312,6 +323,37 @@ Interpretation rules:
 Treat this config as a timing study, not as a cross-sectional ranking experiment. Compare its ML outputs primarily against `buy_hold` and `sma`, and do not read the results as evidence about cross-sectional ranking skill.
 
 The separate Phase 7 paper-trading path is now a configurable single-ETF loop. The tracked unattended-month config is `configs/experiment.qqq_paper_daily.yaml`, and `configs/experiment.voo_paper_daily.yaml` ships as the first alternate comparison config.
+
+## Phase 8 Crypto And BTC Research
+
+Phase 8 adds research-only crypto and BTC lanes that reuse the same package-first execution path while adding intraday timing, deterministic indicator and chart-pattern baselines, direct time-series ML, allocation-utility targets, tiered BTC exposure, and strict benchmark-relative acceptance gates.
+
+The tracked crypto research configs include:
+
+- `configs/experiment.crypto_hourly_trend.yaml`
+- `configs/experiment.crypto_15m_signal_week.yaml`
+- `configs/experiment.crypto_15m_patterns_week.yaml`
+- `configs/experiment.crypto_15m_patterns_day.yaml`
+- `configs/experiment.crypto_5m_patterns_day.yaml`
+- `configs/experiment.crypto_pattern_exit_tuned_2024_ytd.yaml`
+- `configs/experiment.crypto_pattern_meta_label_2024_ytd.yaml`
+- `configs/experiment.crypto_pattern_meta_tuned_2024_ytd.yaml`
+- `configs/experiment.crypto_ts_ml_2024_ytd.yaml`
+- `configs/experiment.crypto_indicator_ml_tuned_6h_2024_ytd.yaml`
+- `configs/experiment.crypto_indicator_ml_tuned_12h_2024_ytd.yaml`
+- `configs/experiment.crypto_indicator_ml_tuned_24h_2024_ytd.yaml`
+
+The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review.
+
+BTC paper uses its own tracked config and Docker shape:
+
+- `configs/experiment.btc_paper_daily.yaml`
+- `.env.btc-paper.example`
+- `docker/compose.btc-paper.yml`
+- `marketlab-btc-paper-mcp`, `marketlab-btc-paper-scheduler`, and `marketlab-btc-paper-agent`
+- `../artifacts-btc-paper` mounted to `/app/repo/artifacts`
+
+The Phase 8 diagnostic commands read persisted run artifacts and write review CSVs. They do not retrain models, change strategy weights, or approve Phase 9 paper deployment.
 
 ## Lightweight Model Comparison Set
 

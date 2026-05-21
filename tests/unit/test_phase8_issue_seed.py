@@ -31,4 +31,31 @@ def test_phase8_docs_are_linked_from_mkdocs_nav() -> None:
     nav_text = Path("mkdocs.yml").read_text(encoding="utf-8")
 
     assert "Phase 8 Crypto Hourly Trend: crypto-hourly-trend.md" in nav_text
+    assert "BTC Phase 8 Methodology: btc-phase8-methodology.md" in nav_text
     assert Path("docs/crypto-hourly-trend.md").exists()
+    assert Path("docs/btc-phase8-methodology.md").exists()
+
+
+def test_top_level_docs_describe_current_phase8_and_btc_paper_surface() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    plan = Path("docs/PLAN.md").read_text(encoding="utf-8")
+
+    for content in (readme, plan):
+        assert "Phase 8" in content
+        assert "phase8-summary" in content
+        assert "phase8-selection-probe" in content
+        assert "phase8-bull-counterfactual" in content
+        assert "configs/experiment.btc_paper_daily.yaml" in content
+        assert "docker/compose.btc-paper.yml" in content
+        assert "marketlab-btc-paper-mcp" in content
+
+
+def test_mcp_docs_describe_btc_paper_sidecar_without_changing_samples() -> None:
+    mcp_server = Path("docs/mcp-server.md").read_text(encoding="utf-8")
+    codex = Path("docs/codex-mcp.md").read_text(encoding="utf-8")
+    vscode = Path("docs/mcp-vscode-copilot.md").read_text(encoding="utf-8")
+
+    for content in (mcp_server, codex, vscode):
+        assert "docker/compose.btc-paper.yml" in content
+        assert "marketlab-btc-paper-mcp" in content
+        assert "/app/repo/artifacts" in content
