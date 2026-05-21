@@ -17,6 +17,9 @@ The tracked config is:
 - `configs/experiment.crypto_15m_patterns_week.yaml`
 - `configs/experiment.crypto_15m_patterns_day.yaml`
 - `configs/experiment.crypto_5m_patterns_day.yaml`
+- `configs/experiment.crypto_pattern_exit_tuned_2024_ytd.yaml`
+- `configs/experiment.crypto_pattern_meta_label_2024_ytd.yaml`
+- `configs/experiment.crypto_pattern_meta_tuned_2024_ytd.yaml`
 - `configs/experiment.crypto_ts_ml_2024_ytd.yaml`
 - `configs/experiment.crypto_indicator_ml_tuned_6h_2024_ytd.yaml`
 - `configs/experiment.crypto_indicator_ml_tuned_12h_2024_ytd.yaml`
@@ -344,3 +347,8 @@ stays blocked.
 Future crypto shadow-paper work must define provider and broker ports separately
 from the existing Alpaca ETF paper services. The Phase 7 paper bot remains daily,
 single-ETF, long/cash, and Alpaca-paper specific.
+
+BTC paper is tracked separately from this generic crypto research lane. Its
+config is `configs/experiment.btc_paper_daily.yaml`, its compose file is
+`docker/compose.btc-paper.yml`, and it must remain isolated from the QQQ/VOO
+paper inbox and artifacts.

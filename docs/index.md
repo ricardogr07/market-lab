@@ -7,7 +7,12 @@ This site is the canonical home for MarketLab's public documentation.
 - [SOLID-First Architecture Audit](solid-architecture-audit.md)
 - [Service-Extraction Readiness Rules](service-extraction-readiness.md)
 - [Phase 5 Scenario Pack](phase5-scenarios.md)
+- [Phase 7 Paper Trading](paper-trading.md)
 - [Phase 8 Crypto Hourly Trend Signals](crypto-hourly-trend.md)
+- [BTC Phase 8 Methodology](btc-phase8-methodology.md)
+- [MCP Server](mcp-server.md)
+- [Codex MCP](codex-mcp.md)
+- [VS Code Copilot MCP](mcp-vscode-copilot.md)
 - [Plan](PLAN.md)
 
 The root `README.md` remains the repository-facing entrypoint, while the deeper public docs live here.

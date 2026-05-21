@@ -76,6 +76,7 @@ Example helper files:
 
 - `docker/compose.mcp.yml`
 - `docker/compose.paper.yml`
+- `docker/compose.btc-paper.yml`
 - `docs/codex.config.toml.example`
 - `.vscode/mcp.json.example`
 
@@ -104,6 +105,13 @@ docker exec -i marketlab-mcp \
 ```
 
 This is the intended bridge for generic MCP clients. The client owns the stdio session lifetime; the container just provides the packaged `marketlab-mcp` executable plus the mounted workspace and artifact volumes.
+
+Paper review sidecars use the same stdio server contract with different container names and artifact roots:
+
+- ETF paper review: `marketlab-paper-mcp` with `--artifact-root /app/repo/artifacts`
+- BTC paper review: `marketlab-btc-paper-mcp` with `../artifacts-btc-paper` mounted to `/app/repo/artifacts`
+
+The MCP paper tools remain review-and-approval tools only. Order submission continues through the CLI-backed scheduler path.
 
 For the Codex setup flow, see [Codex MCP Setup](codex-mcp.md).
 For the supported VS Code stable + GitHub Copilot setup, see [VS Code Copilot MCP Setup](mcp-vscode-copilot.md).

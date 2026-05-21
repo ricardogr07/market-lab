@@ -35,6 +35,12 @@ docker compose -f docker/compose.mcp.yml up -d --build
 docker compose --env-file .env -f docker/compose.paper.yml up -d --build
 ```
 
+- BTC paper-review workflow:
+
+```bash
+docker compose --env-file .env.btc-paper -f docker/compose.btc-paper.yml up -d --build
+```
+
 On Linux, export the host UID/GID before starting either sidecar so the bind-mounted `workspace/` and `artifacts/` directories stay writable inside the container, then run the matching compose command:
 
 ```bash
@@ -43,7 +49,7 @@ export MARKETLAB_GID="$(id -g)"
 docker compose -f docker/compose.mcp.yml up -d --build
 ```
 
-This creates a long-lived container named `marketlab-mcp` for the research sidecar or `marketlab-paper-mcp` for the paper-review sidecar. The MCP server itself is not started as a daemon. Each Codex session starts its own foreground stdio process through `docker exec -i`.
+This creates a long-lived container named `marketlab-mcp` for the research sidecar, `marketlab-paper-mcp` for the ETF paper-review sidecar, or `marketlab-btc-paper-mcp` for the isolated BTC paper-review sidecar. The MCP server itself is not started as a daemon. Each Codex session starts its own foreground stdio process through `docker exec -i`.
 
 If Docker access fails on Windows with a named-pipe permission error, fix Docker Desktop / daemon access first. Codex cannot attach the MCP server until `docker ps` works for the current user.
 
@@ -63,6 +69,8 @@ The example defines four servers:
 - `marketlab_paper_online`: paper-review sidecar plus `--allow-network`
 
 Use `marketlab` for normal cached-panel or cached-raw workflows. Use `marketlab_paper` when you want MCP to inspect the same proposal, approval, and submission state that the paper scheduler and agent containers are writing under `/app/repo/artifacts`.
+
+For BTC paper review, reuse the same sample shape with container name `marketlab-btc-paper-mcp`, the same `--artifact-root /app/repo/artifacts`, and the config path `configs/experiment.btc_paper_daily.yaml` after starting `docker/compose.btc-paper.yml`. Keep this in a separate user-local MCP server entry if you need it regularly so BTC approval state cannot be confused with the QQQ/VOO paper sidecar.
 
 If the paper config enables `paper.notifications.telegram.enabled`, the paper compose stack also needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. `marketlab-paper-mcp` needs the same env because MCP approvals call the shared paper approval service and should emit the same notification side effects as the CLI and agent worker.
 
@@ -131,7 +139,7 @@ After updating `~/.codex/config.toml`, start a new Codex session in this repo an
 - If Codex does not show the server in `/mcp`, restart Codex after editing `~/.codex/config.toml`.
 - If `/debug-config` does not show the new server, check for a syntax error in `config.toml`.
 - If Codex cannot start the server, run `docker ps` and verify the container name is exactly `marketlab-mcp`.
-- If the paper entry does not start, verify the paper stack is up and the container name is exactly `marketlab-paper-mcp`.
+- If the paper entry does not start, verify the paper stack is up and the container name is exactly `marketlab-paper-mcp` for ETF paper or `marketlab-btc-paper-mcp` for BTC paper.
 - If Docker access fails with a Windows named-pipe permission error, fix Docker daemon access for the current user before retrying.
 - If config writes fail on Linux, make sure `MARKETLAB_UID` and `MARKETLAB_GID` match `id -u` and `id -g` before starting the compose sidecar.
 - If job planning says network is required, switch to `marketlab_online` or preload the raw cache / prepared panel.
