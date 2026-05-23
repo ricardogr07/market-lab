@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import os
 from dataclasses import dataclass
 from typing import Callable
 
@@ -46,27 +48,40 @@ def _logistic_regression() -> ClassifierMixin:
     )
 
 
+def _uses_logistic_l1_ratio_api() -> bool:
+    penalty = inspect.signature(LogisticRegression).parameters.get("penalty")
+    return penalty is not None and penalty.default == "deprecated"
+
+
+def _logistic_l1_parameters(*, solver: str, max_iter: int) -> dict[str, object]:
+    parameters: dict[str, object] = {
+        "solver": solver,
+        "max_iter": max_iter,
+        "random_state": 7,
+    }
+    if _uses_logistic_l1_ratio_api():
+        parameters["l1_ratio"] = 1.0
+    else:
+        parameters["penalty"] = "l1"
+    return parameters
+
+
+def _parallel_n_jobs() -> int:
+    os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 1))
+    return -1
+
+
 def _logistic_l1() -> ClassifierMixin:
     return make_pipeline(
         StandardScaler(),
-        LogisticRegression(
-            penalty="l1",
-            solver="liblinear",
-            max_iter=1000,
-            random_state=7,
-        ),
+        LogisticRegression(**_logistic_l1_parameters(solver="liblinear", max_iter=1000)),
     )
 
 
 def _logistic_l1_multiclass() -> ClassifierMixin:
     return make_pipeline(
         StandardScaler(),
-        LogisticRegression(
-            penalty="l1",
-            solver="saga",
-            max_iter=2000,
-            random_state=7,
-        ),
+        LogisticRegression(**_logistic_l1_parameters(solver="saga", max_iter=2000)),
     )
 
 
@@ -74,7 +89,7 @@ def _random_forest() -> ClassifierMixin:
     return RandomForestClassifier(
         n_estimators=200,
         min_samples_leaf=3,
-        n_jobs=-1,
+        n_jobs=_parallel_n_jobs(),
         random_state=7,
     )
 
@@ -83,7 +98,7 @@ def _extra_trees() -> ClassifierMixin:
     return ExtraTreesClassifier(
         n_estimators=200,
         min_samples_leaf=3,
-        n_jobs=-1,
+        n_jobs=_parallel_n_jobs(),
         random_state=7,
     )
 

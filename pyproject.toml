@@ -105,7 +105,7 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.pytest_tmp -p no:cacheprovider"
+addopts = "--basetemp=artifacts/pytest-tmp -p no:cacheprovider -p no:asyncio"
 markers = [
   "real_data: opt-in tests that download real market data.",
   "network: tests that depend on external network access.",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
