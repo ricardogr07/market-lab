@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import warnings
+
 import pandas as pd
 import pytest
 
@@ -84,6 +87,37 @@ def test_regime_state_models_fit_and_score_expected_allocation(
         "prob_tier_100",
     ]
     assert probabilities.sum(axis=1).round(6).eq(1.0).all()
+
+
+@pytest.mark.parametrize(
+    ("target_type", "target"),
+    [
+        ("direction", TARGET),
+        ("allocation_utility", pd.Series([0, 1, 1, 2, 3, 3], dtype=int)),
+    ],
+)
+def test_logistic_l1_models_fit_without_future_warnings(
+    target_type: str,
+    target: pd.Series,
+) -> None:
+    _, estimator = build_model_estimator("logistic_l1", target_type)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        estimator.fit(FEATURES, target)
+
+
+@pytest.mark.parametrize("model_name", ["extra_trees", "random_forest"])
+def test_parallel_tree_models_configure_loky_cpu_count(
+    model_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOKY_MAX_CPU_COUNT", raising=False)
+
+    _, estimator = build_model_estimator(model_name, "direction")
+
+    assert estimator.n_jobs == -1
+    assert os.environ["LOKY_MAX_CPU_COUNT"] == str(os.cpu_count() or 1)
 
 
 def test_unknown_model_name_raises_clear_error() -> None:
