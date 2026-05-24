@@ -34,6 +34,8 @@ from marketlab.reports.phase8_bull_counterfactual import (
     write_phase8_bull_counterfactual,
 )
 from marketlab.reports.phase8_bull_participation import write_phase8_bull_participation
+from marketlab.reports.phase8_grid_compare import write_phase8_grid_comparison
+from marketlab.reports.phase8_methodology import write_phase8_methodology_review
 from marketlab.reports.phase8_score_diagnostic import write_phase8_score_diagnostic
 from marketlab.reports.phase8_selection_probe import write_phase8_selection_probe
 from marketlab.reports.phase8_summary import write_phase8_run_summary
@@ -107,6 +109,16 @@ def build_parser() -> argparse.ArgumentParser:
     phase8_bull_counterfactual.add_argument("--run-dir", required=True)
     phase8_bull_counterfactual.add_argument("--config", required=True)
     phase8_bull_counterfactual.add_argument("--output-dir")
+
+    phase8_methodology_review = subparsers.add_parser("phase8-methodology-review")
+    phase8_methodology_review.add_argument("--run-dir", required=True)
+    phase8_methodology_review.add_argument("--output")
+
+    phase8_grid_compare = subparsers.add_parser("phase8-grid-compare")
+    phase8_grid_compare.add_argument("--runs-root", default="artifacts/runs")
+    phase8_grid_compare.add_argument("--run-dir", action="append")
+    phase8_grid_compare.add_argument("--output")
+    phase8_grid_compare.add_argument("--experiment-prefix", default="btc_phase8")
 
     return parser
 
@@ -309,6 +321,21 @@ def main(argv: list[str] | None = None) -> int:
         print(detail_path)
         print(summary_path)
         print(gate_path)
+        return 0
+
+    if args.command == "phase8-methodology-review":
+        print(write_phase8_methodology_review(args.run_dir, output_path=args.output))
+        return 0
+
+    if args.command == "phase8-grid-compare":
+        print(
+            write_phase8_grid_comparison(
+                runs_root=args.runs_root,
+                run_dirs=args.run_dir,
+                output_path=args.output,
+                experiment_prefix=args.experiment_prefix,
+            )
+        )
         return 0
 
     load_env_file()

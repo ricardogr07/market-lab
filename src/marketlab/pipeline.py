@@ -49,6 +49,7 @@ from marketlab.reports.analytics import (
     build_turnover_costs,
 )
 from marketlab.reports.markdown import write_markdown_report
+from marketlab.reports.phase8_methodology import build_phase8_methodology_review
 from marketlab.reports.phase8_summary import build_phase8_run_summary
 from marketlab.reports.plots import (
     plot_calibration_curves,
@@ -197,6 +198,7 @@ class ExperimentArtifacts:
     regime_slice_diagnostics_path: Path | None = None
     strict_research_gate_path: Path | None = None
     phase8_run_summary_path: Path | None = None
+    phase8_methodology_review_path: Path | None = None
     pattern_price_overlay_plot_path: Path | None = None
     pattern_detections_plot_path: Path | None = None
     pattern_detection_windows_plot_path: Path | None = None
@@ -1241,6 +1243,8 @@ def _persist_experiment_outputs(
 
     phase8_run_summary: pd.DataFrame | None = None
     phase8_run_summary_path: Path | None = None
+    phase8_methodology_review: pd.DataFrame | None = None
+    phase8_methodology_review_path: Path | None = None
     if (
         config.evaluation.strict_research_gate.enabled
         or ml_strategy_tuning_candidates is not None
@@ -1250,6 +1254,9 @@ def _persist_experiment_outputs(
         phase8_run_summary = build_phase8_run_summary(artifact_run_dir)
         phase8_run_summary_path = artifact_run_dir / "phase8_run_summary.csv"
         phase8_run_summary.to_csv(phase8_run_summary_path, index=False)
+        phase8_methodology_review = build_phase8_methodology_review(artifact_run_dir)
+        phase8_methodology_review_path = artifact_run_dir / "phase8_methodology_review.csv"
+        phase8_methodology_review.to_csv(phase8_methodology_review_path, index=False)
 
     cumulative_plot_path: Path | None = None
     drawdown_plot_path: Path | None = None
@@ -1379,6 +1386,7 @@ def _persist_experiment_outputs(
             regime_slice_diagnostics=regime_slice_diagnostics,
             strict_research_gate=strict_research_gate,
             phase8_run_summary=phase8_run_summary,
+            phase8_methodology_review=phase8_methodology_review,
             fold_diagnostics=fold_diagnostics,
             threshold_diagnostics=threshold_diagnostics,
             calibration_curves_plot_path=calibration_curves_plot_path,
@@ -1415,6 +1423,7 @@ def _persist_experiment_outputs(
             regime_slice_diagnostics_path=regime_slice_diagnostics_path,
             strict_research_gate_path=strict_research_gate_path,
             phase8_run_summary_path=phase8_run_summary_path,
+            phase8_methodology_review_path=phase8_methodology_review_path,
             pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
             pattern_detections_plot_path=pattern_detections_plot_path,
             pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,
@@ -1473,6 +1482,7 @@ def _persist_experiment_outputs(
         regime_slice_diagnostics_path=regime_slice_diagnostics_path,
         strict_research_gate_path=strict_research_gate_path,
         phase8_run_summary_path=phase8_run_summary_path,
+        phase8_methodology_review_path=phase8_methodology_review_path,
         pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
         pattern_detections_plot_path=pattern_detections_plot_path,
         pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,

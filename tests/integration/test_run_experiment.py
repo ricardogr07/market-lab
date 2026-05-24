@@ -1227,6 +1227,7 @@ def test_run_experiment_writes_allocation_utility_outputs(
     tuning_candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
     tuning_selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
     phase8_summary = pd.read_csv(run_dir / "phase8_run_summary.csv")
+    phase8_methodology = pd.read_csv(run_dir / "phase8_methodology_review.csv")
     strict_gate = pd.read_csv(run_dir / "strict_research_gate.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
@@ -1269,6 +1270,11 @@ def test_run_experiment_writes_allocation_utility_outputs(
     }.issubset(tuning_selections.columns)
     assert "selected_fold_fraction" in set(phase8_summary["metric"])
     assert {
+        "deployment_gate",
+        "risk_allocation_gate",
+        "target_support_gate",
+    }.issubset(set(phase8_methodology["methodology_gate"]))
+    assert {
         "partial_target_25_global_fraction",
         "partial_target_50_fold_fraction",
         "predicted_target_25_global_fraction",
@@ -1297,6 +1303,7 @@ def test_run_experiment_writes_allocation_utility_outputs(
     assert {"feature", "importance_type", "importance"}.issubset(feature_importance.columns)
     assert "## Allocation Utility Diagnostics" in report_text
     assert "## Phase 8 Run Summary" in report_text
+    assert "## Phase 8 Methodology Review" in report_text
     assert "Target-support gate requires" in report_text
     assert "Predicted-support gate requires" in report_text
     assert "Allocation score policy" in report_text

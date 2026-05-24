@@ -42,6 +42,7 @@ This document ties the current pieces together and records the working rules tha
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.crypto_ts_ml_2024_ytd.yaml`
   - `python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>`
   - `python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>`
+  - `python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>`
 - Installed package bootstrap:
   - `marketlab --version`
   - `marketlab list-configs`
@@ -879,7 +880,7 @@ Best practice:
 
 ### `src/marketlab/reports/phase8_*.py`
 
-- Rebuild Phase 8 run summaries, selection probes, bull participation diagnostics, score diagnostics, and bull counterfactuals from persisted artifacts.
+- Rebuild Phase 8 run summaries, selection probes, bull participation diagnostics, score diagnostics, bull counterfactuals, and consolidated methodology reviews from persisted artifacts.
 - Keep diagnostic outputs artifact-only: no model retraining, no strategy-weight rewrites, and no paper-deployment approval side effects.
 - Preserve the strict research gate as the source of truth for Phase 8 pass/fail review.
 

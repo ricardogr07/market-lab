@@ -491,6 +491,12 @@ def test_load_config_accepts_btc_regime_state_long_history_config() -> None:
             "allocation_utility",
             "best_active_fallback",
         ),
+        (
+            "configs/experiment.btc_phase8_methodology_review.yaml",
+            "btc_phase8_methodology_review",
+            "allocation_utility",
+            "strict",
+        ),
     ],
 )
 def test_load_config_accepts_btc_long_history_challenger_configs(
@@ -529,17 +535,28 @@ def test_load_config_accepts_btc_long_history_challenger_configs(
     if "full_tier_score" in path:
         assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0]
         assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0]
+    elif "methodology_review" in path:
+        assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
+            0,
+            18,
+        ]
+        assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
     else:
         assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
             18,
             36,
         ]
         assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.02, 0.04]
-    expected_policy_names = (
-        ["bull100_sideways25"]
-        if "full_tier_score" in path
-        else ["bull100_sideways25", "bull100_sideways50_bear25"]
-    )
+    if "full_tier_score" in path:
+        expected_policy_names = ["bull100_sideways25"]
+    elif "methodology_review" in path:
+        expected_policy_names = [
+            "model_only",
+            "bull50_sideways25",
+            "bull100_sideways25",
+        ]
+    else:
+        expected_policy_names = ["bull100_sideways25", "bull100_sideways50_bear25"]
     assert [
         policy.name
         for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
@@ -626,6 +643,82 @@ def test_load_config_accepts_btc_regime_fallback_challenger_configs(
     assert config.evaluation.strict_research_gate.required_benchmark_strategies == (
         strict_benchmarks
     )
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "score_policy", "selection_benchmarks"),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml",
+            "btc_phase8_bull_capture_rebalanced_gate",
+            "expected_allocation",
+            ["buy_hold", "btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml",
+            "btc_phase8_bull_capture_prob100_grid",
+            "bull_prob100_threshold",
+            ["buy_hold", "btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_capture_static_audit.yaml",
+            "btc_phase8_bull_capture_static_audit",
+            "expected_allocation",
+            [
+                "buy_hold",
+                "btc_static_25",
+                "btc_static_50",
+                "btc_static_75",
+                "btc_rebalanced_25",
+                "btc_rebalanced_50",
+                "btc_rebalanced_75",
+            ],
+        ),
+    ],
+)
+def test_load_config_accepts_phase8_btc_bull_capture_grid_configs(
+    path: str,
+    experiment_name: str,
+    score_policy: str,
+    selection_benchmarks: list[str],
+) -> None:
+    config = load_config(path)
+
+    strict_benchmarks = [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "1d"
+    assert config.target.type == "allocation_utility"
+    assert config.paper.enabled is False
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert config.evaluation.ml_strategy_tuning.allocation_score_policy == score_policy
+    assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == (
+        selection_benchmarks
+    )
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == (
+        strict_benchmarks
+    )
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [730, 1095]
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0, 18]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
+    assert [model.name for model in config.models] == [
+        "logistic_l1",
+        "random_forest",
+        "hist_gradient_boosting",
+    ]
+    if score_policy == "bull_prob100_threshold":
+        assert (
+            config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold
+            == pytest.approx(0.16)
+        )
 
 
 def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:

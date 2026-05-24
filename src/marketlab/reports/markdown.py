@@ -998,6 +998,52 @@ def _phase8_run_summary_lines(
     return lines
 
 
+def _phase8_methodology_review_lines(
+    phase8_methodology_review: pd.DataFrame | None,
+    report_path: Path,
+    phase8_methodology_review_path: Path | None,
+) -> list[str]:
+    if phase8_methodology_review is None or phase8_methodology_review.empty:
+        return []
+
+    display_columns = [
+        "methodology_gate",
+        "section",
+        "metric",
+        "passed",
+        "value",
+        "required",
+        "diagnostic_only",
+        "detail",
+    ]
+    lines = [
+        _markdown_table(
+            _display_frame(
+                phase8_methodology_review.loc[
+                    :,
+                    [
+                        column
+                        for column in display_columns
+                        if column in phase8_methodology_review.columns
+                    ],
+                ].head(100)
+            )
+        ),
+        "",
+        "- The deployment gate is still the unchanged `strict_research_gate.csv` overall row.",
+        "- Counterfactual rows are diagnostic only and do not approve BTC paper deployment.",
+    ]
+    if phase8_methodology_review_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                phase8_methodology_review_path,
+                "Phase 8 methodology review",
+            )
+        )
+    return lines
+
+
 def _signal_inspection_lines(
     config: ExperimentConfig,
     report_path: Path,
@@ -1171,6 +1217,7 @@ def write_markdown_report(
     regime_slice_diagnostics: pd.DataFrame | None = None,
     strict_research_gate: pd.DataFrame | None = None,
     phase8_run_summary: pd.DataFrame | None = None,
+    phase8_methodology_review: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     calibration_curves_plot_path: Path | None = None,
@@ -1204,6 +1251,7 @@ def write_markdown_report(
     regime_slice_diagnostics_path: Path | None = None,
     strict_research_gate_path: Path | None = None,
     phase8_run_summary_path: Path | None = None,
+    phase8_methodology_review_path: Path | None = None,
     pattern_price_overlay_plot_path: Path | None = None,
     pattern_detections_plot_path: Path | None = None,
     pattern_detection_windows_plot_path: Path | None = None,
@@ -1367,6 +1415,16 @@ def write_markdown_report(
     )
     if phase8_run_summary_lines:
         content_lines.extend(_section("Phase 8 Run Summary", phase8_run_summary_lines))
+
+    phase8_methodology_review_lines = _phase8_methodology_review_lines(
+        phase8_methodology_review,
+        output_path,
+        phase8_methodology_review_path,
+    )
+    if phase8_methodology_review_lines:
+        content_lines.extend(
+            _section("Phase 8 Methodology Review", phase8_methodology_review_lines)
+        )
 
     signal_inspection_lines = _signal_inspection_lines(
         config,

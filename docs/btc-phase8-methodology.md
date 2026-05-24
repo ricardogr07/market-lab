@@ -187,6 +187,13 @@ The research artifacts to inspect are:
   `phase8_bull_counterfactual_gate.csv` for artifact-only bull-exposure
   counterfactuals. These rows are diagnostic and do not replace
   `strict_research_gate.csv`.
+- `phase8_methodology_review.csv` for the consolidated methodology view that
+  separates the unchanged deployment gate from risk-allocation, benchmark
+  family, target-support, signal-validity, bull-participation, and
+  diagnostic-only counterfactual evidence.
+- `phase8_btc_grid_comparison.csv` for the cross-run BTC Phase 8 comparison of
+  strict-gate status, bull-upside capture, downside capture, score validity,
+  counterfactual hypotheses, and conservative artifact-pruning recommendations.
 
 ## 6. Long Or Cash Decision
 
@@ -306,6 +313,22 @@ iteration before expanding the grid:
   calibration. This tests whether the model can produce real `100%`
   predicted-tier support in bull regimes without changing the strict success
   definition.
+- `btc_phase8_methodology_review`: the focused next daily allocation-utility
+  methodology run. It keeps the strict gate unchanged, includes buy-hold plus
+  static and rebalanced partial BTC benchmarks in candidate selection, and
+  treats bull-participation floors as validation-selected candidate parameters
+  rather than paper-trading overrides or counterfactual approvals.
+- `btc_phase8_bull_capture_rebalanced_gate`: the next rebalanced-benchmark
+  bull-capture grid. It uses diagnostic `best_active_fallback` selection,
+  expected-allocation scoring, the existing sklearn trio, and validation-chosen
+  bull participation floors while leaving the strict deployment gate unchanged.
+- `btc_phase8_bull_capture_prob100_grid`: the next score-mapping grid. It uses
+  `bull_prob100_threshold` scoring at 0.16 with no probability calibration to
+  test whether 100% BTC exposure is being suppressed by score mapping.
+- `btc_phase8_bull_capture_static_audit`: the full benchmark-family audit grid.
+  It includes buy-hold, static BTC/cash, and rebalanced BTC/cash benchmarks in
+  validation selection so the selected candidates face the same benchmark
+  family that the strict gate requires.
 
 ## 7. Cost-Aware Candidate Selection
 
@@ -391,8 +414,34 @@ The fallback and turnover-only probe profiles are diagnostic only. The runtime
 `best_active_fallback` policy is also diagnostic until a regenerated OOS run
 passes the unchanged strict Phase 8 research gate.
 
-The same summary is embedded into `report.md` when Phase 8 artifacts are
-generated.
+Build the consolidated methodology review without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>
+```
+
+The methodology review makes the current research state explicit: a run may
+improve drawdown and Sharpe and beat rebalanced BTC/cash benchmarks while still
+failing deployment because it lags buy-and-hold, lags static partial BTC
+benchmarks, lacks enough selected-fold coverage, has weak score-to-outcome
+relationships, or misses positive BTC bull-regime upside. Counterfactual rows
+can identify hypotheses for the next validation-selected rule, but they remain
+diagnostic-only and cannot approve Phase 8 or redefine the unchanged strict
+research gate.
+
+The Phase 8 run summary and methodology review are embedded into `report.md`
+when Phase 8 artifacts are generated.
+
+Compare completed BTC Phase 8 runs without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs --output artifacts/runs/phase8_btc_grid_comparison.csv
+```
+
+This comparison report is the main handoff into the BTC bull-upside methodology
+notes in [Phase 8 BTC Bull Upside](phase8/BTC/bull-upside-methodology.md). It
+also surfaces incomplete artifact directories as pruning candidates, but the
+CLI never deletes or moves files.
 
 ## 8. Strict Research Gate
 

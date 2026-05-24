@@ -32,8 +32,10 @@ def test_phase8_docs_are_linked_from_mkdocs_nav() -> None:
 
     assert "Phase 8 Crypto Hourly Trend: crypto-hourly-trend.md" in nav_text
     assert "BTC Phase 8 Methodology: btc-phase8-methodology.md" in nav_text
+    assert "BTC Phase 8 Bull Upside: phase8/BTC/bull-upside-methodology.md" in nav_text
     assert Path("docs/crypto-hourly-trend.md").exists()
     assert Path("docs/btc-phase8-methodology.md").exists()
+    assert Path("docs/phase8/BTC/bull-upside-methodology.md").exists()
 
 
 def test_top_level_docs_describe_current_phase8_and_btc_paper_surface() -> None:
@@ -44,7 +46,9 @@ def test_top_level_docs_describe_current_phase8_and_btc_paper_surface() -> None:
         assert "Phase 8" in content
         assert "phase8-summary" in content
         assert "phase8-selection-probe" in content
+        assert "phase8-methodology-review" in content
         assert "phase8-bull-counterfactual" in content
+        assert "phase8-grid-compare" in content
         assert "configs/experiment.btc_paper_daily.yaml" in content
         assert "docker/compose.btc-paper.yml" in content
         assert "marketlab-btc-paper-mcp" in content
