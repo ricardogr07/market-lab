@@ -366,6 +366,8 @@ class MLStrategyTuningConfig:
     allocation_score_policy: str = "expected_allocation"
     allocation_score_policy_prob100_threshold: float = 0.20
     allocation_score_policy_prob100_threshold_grid: list[float] = field(default_factory=list)
+    selection_validation_cost_bps: list[float] = field(default_factory=list)
+    guarded_gate_bull_risk_off_override: bool = False
     allocation_score_transforms: list[AllocationScoreTransformConfig] = field(
         default_factory=lambda: [AllocationScoreTransformConfig()]
     )
@@ -998,6 +1000,30 @@ def _validate_config(config: ExperimentConfig) -> None:
     ml_tuning.allocation_score_policy_prob100_threshold_grid = (
         validated_prob100_threshold_grid
     )
+    validated_selection_validation_cost_bps: list[float] = []
+    seen_selection_validation_cost_bps: set[float] = set()
+    for cost_bps in ml_tuning.selection_validation_cost_bps:
+        try:
+            cost_value = float(cost_bps)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must contain finite non-negative values."
+            ) from exc
+        if not math.isfinite(cost_value) or cost_value < 0.0:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must contain finite non-negative values."
+            )
+        if cost_value in seen_selection_validation_cost_bps:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must not contain duplicate values."
+            )
+        seen_selection_validation_cost_bps.add(cost_value)
+        validated_selection_validation_cost_bps.append(cost_value)
+    ml_tuning.selection_validation_cost_bps = validated_selection_validation_cost_bps
+    if not isinstance(ml_tuning.guarded_gate_bull_risk_off_override, bool):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.guarded_gate_bull_risk_off_override must be a boolean."
+        )
     seen_score_transform_names: set[str] = set()
     for transform in ml_tuning.allocation_score_transforms:
         transform.name = str(transform.name).strip()
@@ -1043,7 +1069,11 @@ def _validate_config(config: ExperimentConfig) -> None:
             )
         seen_selection_benchmarks.add(benchmark_name)
     if (
-        ml_tuning.objective == "net_return_and_risk_vs_required_benchmarks"
+        ml_tuning.objective
+        in {
+            "net_return_and_risk_vs_required_benchmarks",
+            "net_return_risk_score_validity_vs_required_benchmarks",
+        }
         and not ml_tuning.selection_benchmark_strategies
     ):
         raise ValueError(

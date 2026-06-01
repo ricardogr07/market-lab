@@ -192,6 +192,22 @@ def _selection_rows(rows: list[dict[str, object]], selections: pd.DataFrame) -> 
                 ),
                 detail="selected walk-forward folds authorized by raw validation score ordering",
             )
+    if "validation_guarded_gate_bull_risk_off_override_authorized" in selections.columns:
+        selected = selections.loc[statuses.eq("selected")]
+        if not selected.empty:
+            _append(
+                rows,
+                section="guarded_gate_bull_risk_off_override",
+                metric="selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+                value=float(
+                    selected[
+                        "validation_guarded_gate_bull_risk_off_override_authorized"
+                    ]
+                    .map(_truthy)
+                    .mean()
+                ),
+                detail="selected walk-forward folds authorized by raw validation score ordering",
+            )
 
 
 def _fallback_candidate_reasons(row: pd.Series) -> list[str]:
@@ -202,6 +218,15 @@ def _fallback_candidate_reasons(row: pd.Series) -> list[str]:
         reasons.append("non_positive_buy_hold_excess")
     if _numeric(row.get("min_benchmark_excess_cumulative_return")) <= 0.0:
         reasons.append("non_positive_required_benchmark_excess")
+    if (
+        _numeric(
+            row.get(
+                "min_selection_validation_cost_benchmark_excess_cumulative_return"
+            )
+        )
+        <= 0.0
+    ):
+        reasons.append("non_positive_validation_cost_benchmark_excess")
     if _numeric(row.get("min_validation_predicted_target_fraction")) <= 0.0:
         reasons.append("missing_predicted_partial_tier_support")
     if _numeric(row.get("sharpe_like_delta")) <= 0.0 and _numeric(row.get("drawdown_delta")) < 0.0:
@@ -259,6 +284,7 @@ def _candidate_reason_rows(rows: list[dict[str, object]], candidates: pd.DataFra
         "validation_gate_bull_average_exposure",
         "validation_gate_bull_underexposed_positive_benchmark_fraction",
         "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
     ):
         if column not in candidates.columns:
             continue
@@ -308,6 +334,35 @@ def _candidate_reason_rows(rows: list[dict[str, object]], candidates: pd.DataFra
                 rows,
                 section="score_policy_repair",
                 metric=f"score_policy_repair_denied_reason_{reason}",
+                value=int(count),
+                detail="validation candidate denial count",
+            )
+    if "validation_guarded_gate_bull_risk_off_override_authorized" in candidates.columns:
+        _append(
+            rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+            value=float(
+                candidates[
+                    "validation_guarded_gate_bull_risk_off_override_authorized"
+                ]
+                .map(_truthy)
+                .mean()
+            ),
+            detail="validation candidates authorized by raw score/forward-return ordering",
+        )
+    if "guarded_gate_bull_risk_off_override_denied_reason" in candidates.columns:
+        denied_reasons = (
+            candidates["guarded_gate_bull_risk_off_override_denied_reason"]
+            .dropna()
+            .astype(str)
+        )
+        denied_reasons = denied_reasons.loc[denied_reasons.str.strip().ne("")]
+        for reason, count in denied_reasons.value_counts().sort_index().items():
+            _append(
+                rows,
+                section="guarded_gate_bull_risk_off_override",
+                metric=f"guarded_gate_bull_risk_off_override_denied_reason_{reason}",
                 value=int(count),
                 detail="validation candidate denial count",
             )
@@ -391,6 +446,34 @@ def _predicted_support_rows(rows: list[dict[str, object]], probability_diagnosti
                 probability_diagnostics["score_policy_repair_authorized"].map(_truthy).mean()
             ),
             detail="outer OOS rows carrying validation-authorized repair context",
+        )
+    if "guarded_gate_bull_risk_off_override_triggered" in probability_diagnostics.columns:
+        _append(
+            rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="guarded_gate_bull_risk_off_override_triggered_fraction",
+            value=float(
+                probability_diagnostics[
+                    "guarded_gate_bull_risk_off_override_triggered"
+                ]
+                .map(_truthy)
+                .mean()
+            ),
+            detail="outer OOS rows lifted to 100% after the risk-off cap",
+        )
+    if "guarded_gate_bull_risk_off_override_authorized" in probability_diagnostics.columns:
+        _append(
+            rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="guarded_gate_bull_risk_off_override_authorized_fraction",
+            value=float(
+                probability_diagnostics[
+                    "guarded_gate_bull_risk_off_override_authorized"
+                ]
+                .map(_truthy)
+                .mean()
+            ),
+            detail="outer OOS rows carrying validation-authorized override context",
         )
 
 

@@ -270,6 +270,30 @@ def _score_decile_rows(
             value=float(working["score_policy_repair_authorized"].map(_truthy).mean()),
             detail="selected OOS rows carrying validation-authorized repair context",
         )
+    if "guarded_gate_bull_risk_off_override_triggered" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="guarded_gate_bull_risk_off_override_triggered_fraction",
+            value=float(
+                working["guarded_gate_bull_risk_off_override_triggered"]
+                .map(_truthy)
+                .mean()
+            ),
+            detail="selected OOS rows lifted to 100% after the risk-off cap",
+        )
+    if "guarded_gate_bull_risk_off_override_authorized" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="guarded_gate_bull_risk_off_override_authorized_fraction",
+            value=float(
+                working["guarded_gate_bull_risk_off_override_authorized"]
+                .map(_truthy)
+                .mean()
+            ),
+            detail="selected OOS rows carrying validation-authorized override context",
+        )
 
 
 def _confusion_rows_for_group(
@@ -459,6 +483,7 @@ def _candidate_rows(
         "validation_gate_bull_average_exposure",
         "validation_gate_bull_underexposed_positive_benchmark_fraction",
         "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "validation_score_transform_applied_fraction",
     ):
         if column in working.columns:
@@ -486,6 +511,7 @@ def _candidate_rows(
             "validation_gate_bull_average_exposure",
             "validation_gate_bull_underexposed_positive_benchmark_fraction",
             "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
             "validation_score_transform_applied_fraction",
         ):
             if column in group.columns:
@@ -559,6 +585,7 @@ def _candidate_rows(
         "validation_gate_bull_average_exposure",
         "validation_gate_bull_underexposed_positive_benchmark_fraction",
         "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
     ):
         if column not in working.columns:
             continue
@@ -595,6 +622,20 @@ def _candidate_rows(
             metric="validation_score_policy_repair_authorized_fraction",
             value=float(
                 working["validation_score_policy_repair_authorized"].map(_truthy).mean()
+            ),
+            detail="validation candidates authorized by raw score/forward-return ordering",
+        )
+    if "validation_guarded_gate_bull_risk_off_override_authorized" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="guarded_gate_bull_risk_off_override",
+            metric="validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+            value=float(
+                working[
+                    "validation_guarded_gate_bull_risk_off_override_authorized"
+                ]
+                .map(_truthy)
+                .mean()
             ),
             detail="validation candidates authorized by raw score/forward-return ordering",
         )

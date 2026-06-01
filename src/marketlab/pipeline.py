@@ -49,6 +49,7 @@ from marketlab.reports.analytics import (
     build_monthly_returns,
     build_strategy_summary,
     build_turnover_costs,
+    reprice_performance,
 )
 from marketlab.reports.markdown import write_markdown_report
 from marketlab.reports.phase8_methodology import build_phase8_methodology_review
@@ -144,6 +145,7 @@ ML_TUNED_STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
 BENCHMARK_SELECTION_FAILURE_REASONS = {
     "non_positive_buy_hold_excess",
     "non_positive_required_benchmark_excess",
+    "non_positive_validation_cost_benchmark_excess",
 }
 SCORE_VALIDITY_FAILURE_REASONS = {
     "negative_score_forward_return_correlation",
@@ -2925,6 +2927,23 @@ def _score_policy_repair_authorization(
     return True, ""
 
 
+def _guarded_gate_bull_risk_off_override_authorization(
+    *,
+    enabled: bool,
+    validation_raw_score_forward_return_correlation: object,
+) -> tuple[bool, str]:
+    if not enabled:
+        return False, ""
+    if pd.isna(validation_raw_score_forward_return_correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    correlation = float(validation_raw_score_forward_return_correlation)
+    if not math.isfinite(correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    if correlation < 0.0:
+        return False, "negative_validation_raw_score_forward_return_correlation"
+    return True, ""
+
+
 def _apply_allocation_score_transform(
     *,
     rows: pd.DataFrame,
@@ -3426,6 +3445,11 @@ def _allocation_score_policy_prob100_threshold_candidates(
     return [float(tuning.allocation_score_policy_prob100_threshold)]
 
 
+def _selection_validation_cost_bps(config: ExperimentConfig) -> list[float]:
+    configured = config.evaluation.ml_strategy_tuning.selection_validation_cost_bps
+    return configured or [float(config.portfolio.costs.bps_per_trade)]
+
+
 def _allocation_score_transform_candidates(
     config: ExperimentConfig,
 ) -> list[AllocationScoreTransformConfig]:
@@ -3440,6 +3464,9 @@ def _prediction_frame_with_allocation_score_policy(
     prob100_threshold: float,
     score_policy_repair_authorized: bool = False,
     score_policy_repair_denied_reason: str = "",
+    guarded_gate_bull_risk_off_override_enabled: bool = False,
+    guarded_gate_bull_risk_off_override_authorized: bool = False,
+    guarded_gate_bull_risk_off_override_denied_reason: str = "",
     score_transform: AllocationScoreTransformConfig | None = None,
 ) -> pd.DataFrame:
     working = predictions.copy()
@@ -3488,6 +3515,27 @@ def _prediction_frame_with_allocation_score_policy(
         working["predicted_tier_weight"] = working["score"].map(
             lambda value: nearest_tier(float(value))
         )
+    working["guarded_gate_bull_risk_off_override_authorized"] = bool(
+        guarded_gate_bull_risk_off_override_authorized
+    )
+    working["guarded_gate_bull_risk_off_override_denied_reason"] = (
+        guarded_gate_bull_risk_off_override_denied_reason
+    )
+    guarded_override_triggered = pd.Series(False, index=working.index, dtype=bool)
+    if (
+        guarded_gate_bull_risk_off_override_enabled
+        and guarded_gate_bull_risk_off_override_authorized
+    ):
+        guarded_override_triggered = (
+            working.get(
+                "gate_bull",
+                pd.Series(False, index=working.index, dtype=bool),
+            ).map(_truthy)
+            & working.apply(_allocation_regime_label, axis=1).eq("risk_off")
+        )
+    working["guarded_gate_bull_risk_off_override_triggered"] = (
+        guarded_override_triggered.to_numpy(dtype=bool)
+    )
     return working
 
 
@@ -3600,6 +3648,7 @@ def _candidate_failure_reasons(
     benchmark_relative_selection: bool,
     missing_selection_benchmarks: list[str],
     benchmark_excess_values: list[float],
+    validation_cost_benchmark_gate_ok: bool,
     risk_gate_ok: bool,
     score_validity_ok: bool = True,
 ) -> str:
@@ -3618,6 +3667,8 @@ def _candidate_failure_reasons(
                 reasons.append("non_positive_required_benchmark_excess")
         else:
             reasons.append("non_positive_buy_hold_excess")
+    if not validation_cost_benchmark_gate_ok:
+        reasons.append("non_positive_validation_cost_benchmark_excess")
     if not risk_gate_ok:
         reasons.append("risk_not_improved")
     if not score_validity_ok:
@@ -3784,11 +3835,20 @@ def _select_ml_strategy_candidate(candidates: list[dict[str, object]]) -> dict[s
     if not candidates:
         raise ValueError("ML strategy candidate selection requires at least one candidate.")
 
-    def _selection_score(row: dict[str, object]) -> tuple[float, float, float, float, float]:
+    def _selection_score(
+        row: dict[str, object],
+    ) -> tuple[float, float, float, float, float, float]:
+        min_validation_cost_benchmark_excess = row.get(
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
+            pd.NA,
+        )
         min_benchmark_excess = row.get("min_benchmark_excess_cumulative_return", pd.NA)
         if pd.isna(min_benchmark_excess):
             min_benchmark_excess = row["excess_cumulative_return"]
+        if pd.isna(min_validation_cost_benchmark_excess):
+            min_validation_cost_benchmark_excess = min_benchmark_excess
         return (
+            float(min_validation_cost_benchmark_excess),
             float(min_benchmark_excess),
             float(row["excess_cumulative_return"]),
             float(row["drawdown_delta"]),
@@ -3859,6 +3919,9 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
         "score_transform_applied",
         "score",
         *probability_columns,
@@ -3873,6 +3936,8 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "fold_predicted_100_fraction",
         "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
         "fold_score_transform_applied_fraction",
     ]
     if predictions.empty:
@@ -3896,6 +3961,12 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         working["score_policy_repair_authorized"] = False
     if "score_policy_repair_denied_reason" not in working.columns:
         working["score_policy_repair_denied_reason"] = ""
+    if "guarded_gate_bull_risk_off_override_authorized" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_authorized"] = False
+    if "guarded_gate_bull_risk_off_override_denied_reason" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_denied_reason"] = ""
+    if "guarded_gate_bull_risk_off_override_triggered" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_triggered"] = False
     if "score_transform_applied" not in working.columns:
         working["score_transform_applied"] = False
     for column, value in _score_transform_metadata(AllocationScoreTransformConfig()).items():
@@ -3949,6 +4020,26 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         .reset_index()
     )
     working = working.merge(trigger_support, on="fold_id", how="left")
+    guarded_override_authorization = (
+        working.groupby("fold_id")["guarded_gate_bull_risk_off_override_authorized"]
+        .agg(
+            fold_guarded_gate_bull_risk_off_override_authorized_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(guarded_override_authorization, on="fold_id", how="left")
+    guarded_override_trigger_support = (
+        working.groupby("fold_id")["guarded_gate_bull_risk_off_override_triggered"]
+        .agg(
+            fold_guarded_gate_bull_risk_off_override_triggered_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(guarded_override_trigger_support, on="fold_id", how="left")
     transform_support = (
         working.groupby("fold_id")["score_transform_applied"]
         .agg(
@@ -4139,6 +4230,9 @@ def _build_ml_strategy_tuning_outputs(
         "selection_benchmark_strategies",
         "selection_benchmark_excess_cumulative_returns",
         "min_benchmark_excess_cumulative_return",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
         "validation_predicted_100_fraction",
@@ -4148,10 +4242,14 @@ def _build_ml_strategy_tuning_outputs(
         "validation_score_policy_repair_authorized",
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
         "validation_gate_bull_average_exposure",
         "validation_gate_bull_underexposed_positive_benchmark_fraction",
         "validation_gate_bull_underexposed_positive_benchmark_return_sum",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
         "validation_score_transform_applied_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
@@ -4203,6 +4301,9 @@ def _build_ml_strategy_tuning_outputs(
         "selection_benchmark_strategies",
         "selection_benchmark_excess_cumulative_returns",
         "min_benchmark_excess_cumulative_return",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
         "validation_predicted_100_fraction",
@@ -4212,10 +4313,14 @@ def _build_ml_strategy_tuning_outputs(
         "validation_score_policy_repair_authorized",
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
         "validation_gate_bull_average_exposure",
         "validation_gate_bull_underexposed_positive_benchmark_fraction",
         "validation_gate_bull_underexposed_positive_benchmark_return_sum",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
         "validation_score_transform_applied_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
@@ -4253,6 +4358,9 @@ def _build_ml_strategy_tuning_outputs(
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
         "score_transform_applied",
         "score",
         "prob_tier_0",
@@ -4270,6 +4378,8 @@ def _build_ml_strategy_tuning_outputs(
         "fold_predicted_100_fraction",
         "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
         "fold_score_transform_applied_fraction",
     ]
     feature_importance_columns = [
@@ -4348,6 +4458,14 @@ def _build_ml_strategy_tuning_outputs(
     feature_importance_frames: list[pd.DataFrame] = []
     panel_timestamps = pd.to_datetime(panel["timestamp"])
     fallback_regime_policy = _no_candidate_fallback_regime_policy(config)
+    selection_validation_cost_bps = _selection_validation_cost_bps(config)
+    baseline_performance_by_cost = {
+        float(cost_bps): reprice_performance(baseline_performance, float(cost_bps))
+        for cost_bps in {
+            float(config.portfolio.costs.bps_per_trade),
+            *selection_validation_cost_bps,
+        }
+    }
 
     def _deterministic_fallback_selection(
         *,
@@ -4423,6 +4541,11 @@ def _build_ml_strategy_tuning_outputs(
             "selection_benchmark_strategies": ",".join(selection_benchmark_names),
             "selection_benchmark_excess_cumulative_returns": pd.NA,
             "min_benchmark_excess_cumulative_return": pd.NA,
+            "selection_validation_cost_bps": ",".join(
+                f"{cost_bps:g}" for cost_bps in selection_validation_cost_bps
+            ),
+            "selection_validation_cost_benchmark_excess_cumulative_returns": pd.NA,
+            "min_selection_validation_cost_benchmark_excess_cumulative_return": pd.NA,
             "validation_predicted_25_fraction": pd.NA,
             "validation_predicted_50_fraction": pd.NA,
             "validation_predicted_100_fraction": pd.NA,
@@ -4436,10 +4559,18 @@ def _build_ml_strategy_tuning_outputs(
                 if tuning.allocation_score_policy == "gate_bull_prob100_threshold"
                 else ""
             ),
+            "validation_guarded_gate_bull_risk_off_override_authorized": False,
+            "guarded_gate_bull_risk_off_override_authorized": False,
+            "guarded_gate_bull_risk_off_override_denied_reason": (
+                "regime_policy_fallback_no_valid_candidate"
+                if tuning.guarded_gate_bull_risk_off_override
+                else ""
+            ),
             "validation_gate_bull_average_exposure": pd.NA,
             "validation_gate_bull_underexposed_positive_benchmark_fraction": pd.NA,
             "validation_gate_bull_underexposed_positive_benchmark_return_sum": pd.NA,
             "validation_score_policy_triggered_100_fraction": pd.NA,
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction": pd.NA,
             "validation_score_transform_applied_fraction": pd.NA,
             "min_validation_predicted_target_fraction": pd.NA,
             "sharpe_like_delta": pd.NA,
@@ -4499,6 +4630,32 @@ def _build_ml_strategy_tuning_outputs(
                     continue
                 selection_benchmark_returns[benchmark_name] = float(
                     benchmark_window_metrics["cumulative_return"]
+                )
+            selection_benchmark_returns_by_cost: dict[float, dict[str, float]] = {}
+            missing_selection_benchmarks_by_cost: dict[float, list[str]] = {}
+            for cost_bps in selection_validation_cost_bps:
+                cost_benchmark_returns: dict[str, float] = {}
+                cost_missing_benchmarks: list[str] = []
+                cost_performance = baseline_performance_by_cost[float(cost_bps)]
+                for benchmark_name in selection_benchmark_names:
+                    try:
+                        benchmark_window_metrics = _strategy_metrics_for_window(
+                            performance=cost_performance,
+                            strategy_name=benchmark_name,
+                            window_dates=validation_dates,
+                            periods_per_year=config.evaluation.periods_per_year,
+                        )
+                    except RuntimeError:
+                        cost_missing_benchmarks.append(benchmark_name)
+                        continue
+                    cost_benchmark_returns[benchmark_name] = float(
+                        benchmark_window_metrics["cumulative_return"]
+                    )
+                selection_benchmark_returns_by_cost[float(cost_bps)] = (
+                    cost_benchmark_returns
+                )
+                missing_selection_benchmarks_by_cost[float(cost_bps)] = (
+                    cost_missing_benchmarks
                 )
 
             for model_spec in config.models:
@@ -4563,6 +4720,17 @@ def _build_ml_strategy_tuning_outputs(
                                 ]
                             ),
                         )
+                        (
+                            guarded_gate_bull_risk_off_override_authorized,
+                            guarded_gate_bull_risk_off_override_denied_reason,
+                        ) = _guarded_gate_bull_risk_off_override_authorization(
+                            enabled=tuning.guarded_gate_bull_risk_off_override,
+                            validation_raw_score_forward_return_correlation=(
+                                base_score_validity_metrics[
+                                    "validation_raw_score_forward_return_correlation"
+                                ]
+                            ),
+                        )
                         candidate_thresholds: list[
                             tuple[
                                 float,
@@ -4613,6 +4781,15 @@ def _build_ml_strategy_tuning_outputs(
                                     score_policy_repair_denied_reason=(
                                         score_policy_repair_denied_reason
                                     ),
+                                    guarded_gate_bull_risk_off_override_enabled=(
+                                        tuning.guarded_gate_bull_risk_off_override
+                                    ),
+                                    guarded_gate_bull_risk_off_override_authorized=(
+                                        guarded_gate_bull_risk_off_override_authorized
+                                    ),
+                                    guarded_gate_bull_risk_off_override_denied_reason=(
+                                        guarded_gate_bull_risk_off_override_denied_reason
+                                    ),
                                     score_transform=score_transform,
                                 )
                             )
@@ -4650,6 +4827,13 @@ def _build_ml_strategy_tuning_outputs(
                                 )
                             else:
                                 validation_score_policy_triggered_100_fraction = pd.NA
+                            validation_guarded_gate_bull_risk_off_override_triggered_fraction = float(
+                                validation_predictions[
+                                    "guarded_gate_bull_risk_off_override_triggered"
+                                ]
+                                .astype(bool)
+                                .mean()
+                            )
                             if "score_transform_applied" in validation_predictions.columns:
                                 validation_score_transform_applied_fraction = float(
                                     validation_predictions[
@@ -4698,11 +4882,20 @@ def _build_ml_strategy_tuning_outputs(
                                         )
                                         if weights.empty:
                                             continue
-                                        performance = run_backtest(
-                                            panel=validation_panel,
-                                            weights=weights,
-                                            cost_bps=config.portfolio.costs.bps_per_trade,
-                                        )
+                                        performance_by_cost = {
+                                            float(cost_bps): run_backtest(
+                                                panel=validation_panel,
+                                                weights=weights,
+                                                cost_bps=float(cost_bps),
+                                            )
+                                            for cost_bps in {
+                                                float(config.portfolio.costs.bps_per_trade),
+                                                *selection_validation_cost_bps,
+                                            }
+                                        }
+                                        performance = performance_by_cost[
+                                            float(config.portfolio.costs.bps_per_trade)
+                                        ]
                                         metrics = compute_strategy_metrics(
                                             performance,
                                             periods_per_year=config.evaluation.periods_per_year,
@@ -4757,6 +4950,63 @@ def _build_ml_strategy_tuning_outputs(
                                                 ]
                                                 if value
                                             )
+                                        validation_cost_benchmark_excess_values: list[float] = []
+                                        validation_cost_benchmark_excess_summary_parts: list[
+                                            str
+                                        ] = []
+                                        for cost_bps in selection_validation_cost_bps:
+                                            cost_metrics = compute_strategy_metrics(
+                                                performance_by_cost[float(cost_bps)],
+                                                periods_per_year=(
+                                                    config.evaluation.periods_per_year
+                                                ),
+                                            ).iloc[0]
+                                            cost_excess_returns = {
+                                                name: float(
+                                                    cost_metrics["cumulative_return"]
+                                                )
+                                                - benchmark_return
+                                                for name, benchmark_return in (
+                                                    selection_benchmark_returns_by_cost[
+                                                        float(cost_bps)
+                                                    ].items()
+                                                )
+                                            }
+                                            validation_cost_benchmark_excess_values.extend(
+                                                cost_excess_returns.values()
+                                            )
+                                            validation_cost_benchmark_excess_summary_parts.extend(
+                                                f"{float(cost_bps):g}:{name}:{cost_excess_returns[name]:.12g}"
+                                                for name in selection_benchmark_names
+                                                if name in cost_excess_returns
+                                            )
+                                            validation_cost_benchmark_excess_summary_parts.extend(
+                                                f"{float(cost_bps):g}:{name}:missing"
+                                                for name in missing_selection_benchmarks_by_cost[
+                                                    float(cost_bps)
+                                                ]
+                                            )
+                                        min_validation_cost_benchmark_excess_return = (
+                                            min(
+                                                validation_cost_benchmark_excess_values
+                                            )
+                                            if validation_cost_benchmark_excess_values
+                                            else pd.NA
+                                        )
+                                        validation_cost_benchmark_gate_ok = (
+                                            not any(
+                                                missing_selection_benchmarks_by_cost.values()
+                                            )
+                                            and bool(
+                                                validation_cost_benchmark_excess_values
+                                            )
+                                            and all(
+                                                excess > 0.0
+                                                for excess in (
+                                                    validation_cost_benchmark_excess_values
+                                                )
+                                            )
+                                        )
                                         sharpe_delta = (
                                             float(metrics["sharpe_like"]) - buy_hold_sharpe
                                         )
@@ -4806,6 +5056,9 @@ def _build_ml_strategy_tuning_outputs(
                                                 missing_selection_benchmarks
                                             ),
                                             benchmark_excess_values=benchmark_excess_values,
+                                            validation_cost_benchmark_gate_ok=(
+                                                validation_cost_benchmark_gate_ok
+                                            ),
                                             risk_gate_ok=risk_gate_ok,
                                             score_validity_ok=score_validity_ok,
                                         )
@@ -4814,6 +5067,7 @@ def _build_ml_strategy_tuning_outputs(
                                             and turnover_budget_ok
                                             and predicted_support_ok
                                             and benchmark_gate_ok
+                                            and validation_cost_benchmark_gate_ok
                                             and risk_gate_ok
                                             and score_validity_ok
                                         )
@@ -4920,6 +5174,16 @@ def _build_ml_strategy_tuning_outputs(
                                             "min_benchmark_excess_cumulative_return": (
                                                 min_benchmark_excess_return
                                             ),
+                                            "selection_validation_cost_bps": ",".join(
+                                                f"{cost_bps:g}"
+                                                for cost_bps in selection_validation_cost_bps
+                                            ),
+                                            "selection_validation_cost_benchmark_excess_cumulative_returns": ";".join(
+                                                validation_cost_benchmark_excess_summary_parts
+                                            ),
+                                            "min_selection_validation_cost_benchmark_excess_cumulative_return": (
+                                                min_validation_cost_benchmark_excess_return
+                                            ),
                                             "validation_predicted_25_fraction": (
                                                 validation_predicted_25_fraction
                                             ),
@@ -4939,9 +5203,21 @@ def _build_ml_strategy_tuning_outputs(
                                             "score_policy_repair_denied_reason": (
                                                 score_policy_repair_denied_reason
                                             ),
+                                            "validation_guarded_gate_bull_risk_off_override_authorized": (
+                                                guarded_gate_bull_risk_off_override_authorized
+                                            ),
+                                            "guarded_gate_bull_risk_off_override_authorized": (
+                                                guarded_gate_bull_risk_off_override_authorized
+                                            ),
+                                            "guarded_gate_bull_risk_off_override_denied_reason": (
+                                                guarded_gate_bull_risk_off_override_denied_reason
+                                            ),
                                             **gate_bull_metrics,
                                             "validation_score_policy_triggered_100_fraction": (
                                                 validation_score_policy_triggered_100_fraction
+                                            ),
+                                            "validation_guarded_gate_bull_risk_off_override_triggered_fraction": (
+                                                validation_guarded_gate_bull_risk_off_override_triggered_fraction
                                             ),
                                             "validation_score_transform_applied_fraction": (
                                                 validation_score_transform_applied_fraction
@@ -5032,6 +5308,11 @@ def _build_ml_strategy_tuning_outputs(
                     "selection_benchmark_strategies": ",".join(selection_benchmark_names),
                     "selection_benchmark_excess_cumulative_returns": pd.NA,
                     "min_benchmark_excess_cumulative_return": pd.NA,
+                    "selection_validation_cost_bps": ",".join(
+                        f"{cost_bps:g}" for cost_bps in selection_validation_cost_bps
+                    ),
+                    "selection_validation_cost_benchmark_excess_cumulative_returns": pd.NA,
+                    "min_selection_validation_cost_benchmark_excess_cumulative_return": pd.NA,
                     "validation_predicted_25_fraction": pd.NA,
                     "validation_predicted_50_fraction": pd.NA,
                     "validation_predicted_100_fraction": pd.NA,
@@ -5046,10 +5327,18 @@ def _build_ml_strategy_tuning_outputs(
                         == "gate_bull_prob100_threshold"
                         else ""
                     ),
+                    "validation_guarded_gate_bull_risk_off_override_authorized": False,
+                    "guarded_gate_bull_risk_off_override_authorized": False,
+                    "guarded_gate_bull_risk_off_override_denied_reason": (
+                        "no_valid_candidate"
+                        if tuning.guarded_gate_bull_risk_off_override
+                        else ""
+                    ),
                     "validation_gate_bull_average_exposure": pd.NA,
                     "validation_gate_bull_underexposed_positive_benchmark_fraction": pd.NA,
                     "validation_gate_bull_underexposed_positive_benchmark_return_sum": pd.NA,
                     "validation_score_policy_triggered_100_fraction": pd.NA,
+                    "validation_guarded_gate_bull_risk_off_override_triggered_fraction": pd.NA,
                     "validation_score_transform_applied_fraction": pd.NA,
                     "min_validation_predicted_target_fraction": pd.NA,
                     "sharpe_like_delta": pd.NA,
@@ -5079,6 +5368,16 @@ def _build_ml_strategy_tuning_outputs(
         selected_score_policy_repair_denied_reason = (
             str(selected["score_policy_repair_denied_reason"])
             if pd.notna(selected["score_policy_repair_denied_reason"])
+            else ""
+        )
+        selected_guarded_gate_bull_risk_off_override_authorized = bool(
+            selected["validation_guarded_gate_bull_risk_off_override_authorized"]
+        )
+        selected_guarded_gate_bull_risk_off_override_denied_reason = (
+            str(selected["guarded_gate_bull_risk_off_override_denied_reason"])
+            if pd.notna(
+                selected["guarded_gate_bull_risk_off_override_denied_reason"]
+            )
             else ""
         )
         selected_score_transform = AllocationScoreTransformConfig(
@@ -5191,6 +5490,15 @@ def _build_ml_strategy_tuning_outputs(
                 ),
                 score_policy_repair_denied_reason=(
                     selected_score_policy_repair_denied_reason
+                ),
+                guarded_gate_bull_risk_off_override_enabled=(
+                    tuning.guarded_gate_bull_risk_off_override
+                ),
+                guarded_gate_bull_risk_off_override_authorized=(
+                    selected_guarded_gate_bull_risk_off_override_authorized
+                ),
+                guarded_gate_bull_risk_off_override_denied_reason=(
+                    selected_guarded_gate_bull_risk_off_override_denied_reason
                 ),
                 score_transform=selected_score_transform,
             )
@@ -5349,6 +5657,15 @@ def _build_ml_strategy_tuning_outputs(
                 "min_benchmark_excess_cumulative_return": selected[
                     "min_benchmark_excess_cumulative_return"
                 ],
+                "selection_validation_cost_bps": selected[
+                    "selection_validation_cost_bps"
+                ],
+                "selection_validation_cost_benchmark_excess_cumulative_returns": selected[
+                    "selection_validation_cost_benchmark_excess_cumulative_returns"
+                ],
+                "min_selection_validation_cost_benchmark_excess_cumulative_return": selected[
+                    "min_selection_validation_cost_benchmark_excess_cumulative_return"
+                ],
                 "validation_predicted_25_fraction": selected[
                     "validation_predicted_25_fraction"
                 ],
@@ -5380,6 +5697,19 @@ def _build_ml_strategy_tuning_outputs(
                     if selection_status == "selected"
                     else ""
                 ),
+                "validation_guarded_gate_bull_risk_off_override_authorized": selected[
+                    "validation_guarded_gate_bull_risk_off_override_authorized"
+                ],
+                "guarded_gate_bull_risk_off_override_authorized": (
+                    selected_guarded_gate_bull_risk_off_override_authorized
+                    if selection_status == "selected"
+                    else False
+                ),
+                "guarded_gate_bull_risk_off_override_denied_reason": (
+                    selected_guarded_gate_bull_risk_off_override_denied_reason
+                    if selection_status == "selected"
+                    else ""
+                ),
                 "validation_gate_bull_average_exposure": selected[
                     "validation_gate_bull_average_exposure"
                 ],
@@ -5391,6 +5721,9 @@ def _build_ml_strategy_tuning_outputs(
                 ],
                 "validation_score_policy_triggered_100_fraction": selected[
                     "validation_score_policy_triggered_100_fraction"
+                ],
+                "validation_guarded_gate_bull_risk_off_override_triggered_fraction": selected[
+                    "validation_guarded_gate_bull_risk_off_override_triggered_fraction"
                 ],
                 "validation_score_transform_applied_fraction": selected[
                     "validation_score_transform_applied_fraction"
@@ -5417,6 +5750,7 @@ def _build_ml_strategy_tuning_outputs(
             [
                 "fold_id",
                 "passed_gate",
+                "min_selection_validation_cost_benchmark_excess_cumulative_return",
                 "min_benchmark_excess_cumulative_return",
                 "excess_cumulative_return",
                 "drawdown_delta",
@@ -5430,6 +5764,7 @@ def _build_ml_strategy_tuning_outputs(
             ],
             ascending=[
                 True,
+                False,
                 False,
                 False,
                 False,

@@ -77,6 +77,10 @@ PHASE8_GRID_COMPARISON_COLUMNS = [
     "score_policy_triggered_100_fraction",
     "score_policy_repair_authorized_fraction",
     "selected_validation_score_policy_repair_authorized_fraction",
+    "guarded_gate_bull_risk_off_override_triggered_fraction",
+    "guarded_gate_bull_risk_off_override_authorized_fraction",
+    "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+    "candidate_min_selection_validation_cost_benchmark_excess_cumulative_return",
     "selected_regime_gate_bull_floor_mode",
     "score_target_weight_correlation",
     "score_forward_return_correlation",
@@ -443,6 +447,34 @@ def _run_row(run_dir: Path) -> dict[str, object]:
                 phase8_summary,
                 "selected_validation_score_policy_repair_authorized_fraction",
                 section="score_policy_repair",
+            )
+        ),
+        "guarded_gate_bull_risk_off_override_triggered_fraction": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "guarded_gate_bull_risk_off_override_triggered_fraction",
+                section="guarded_gate_bull_risk_off_override",
+            )
+        ),
+        "guarded_gate_bull_risk_off_override_authorized_fraction": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "guarded_gate_bull_risk_off_override_authorized_fraction",
+                section="guarded_gate_bull_risk_off_override",
+            )
+        ),
+        "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction": _numeric_or_na(
+            _summary_value(
+                phase8_summary,
+                "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+                section="guarded_gate_bull_risk_off_override",
+            )
+        ),
+        "candidate_min_selection_validation_cost_benchmark_excess_cumulative_return": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "min_selection_validation_cost_benchmark_excess_cumulative_return_min",
+                section="candidate_score_validity",
             )
         ),
         "selected_regime_gate_bull_floor_mode": _numeric_or_na(

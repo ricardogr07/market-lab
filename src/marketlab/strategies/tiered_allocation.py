@@ -160,24 +160,25 @@ def _apply_regime_policy(
     row: pd.Series,
     policy: RegimeParticipationPolicy | None,
 ) -> float:
-    if policy is None:
-        return target_weight
-
-    regime = _regime_label(row)
-    if regime == "risk_off":
-        if policy.risk_off_cap is None:
-            adjusted_weight = target_weight
+    adjusted_weight = target_weight
+    if policy is not None:
+        regime = _regime_label(row)
+        if regime == "risk_off":
+            if policy.risk_off_cap is None:
+                adjusted_weight = target_weight
+            else:
+                adjusted_weight = min(target_weight, float(policy.risk_off_cap))
+        elif regime == "bull":
+            adjusted_weight = max(target_weight, float(policy.bull_floor))
+        elif regime == "bear":
+            adjusted_weight = max(target_weight, float(policy.bear_floor))
         else:
-            adjusted_weight = min(target_weight, float(policy.risk_off_cap))
-    elif regime == "bull":
-        adjusted_weight = max(target_weight, float(policy.bull_floor))
-    elif regime == "bear":
-        adjusted_weight = max(target_weight, float(policy.bear_floor))
-    else:
-        adjusted_weight = max(target_weight, float(policy.sideways_floor))
+            adjusted_weight = max(target_weight, float(policy.sideways_floor))
 
-    if policy.gate_bull_floor is not None and _truthy(row.get("gate_bull", False)):
-        adjusted_weight = max(adjusted_weight, float(policy.gate_bull_floor))
+        if policy.gate_bull_floor is not None and _truthy(row.get("gate_bull", False)):
+            adjusted_weight = max(adjusted_weight, float(policy.gate_bull_floor))
+    if _truthy(row.get("guarded_gate_bull_risk_off_override_triggered", False)):
+        adjusted_weight = max(adjusted_weight, 1.0)
     return adjusted_weight
 
 

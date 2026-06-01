@@ -669,6 +669,8 @@ def _ml_strategy_tuning_lines(
             "passed_gate",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "selection_validation_cost_bps",
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
             "validation_predicted_100_fraction",
             "validation_score_forward_return_correlation",
             "validation_raw_score_forward_return_correlation",
@@ -676,9 +678,13 @@ def _ml_strategy_tuning_lines(
             "validation_score_policy_repair_authorized",
             "score_policy_repair_authorized",
             "score_policy_repair_denied_reason",
+            "validation_guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_denied_reason",
             "validation_gate_bull_average_exposure",
             "validation_gate_bull_underexposed_positive_benchmark_fraction",
             "validation_score_policy_triggered_100_fraction",
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
             "validation_score_transform_applied_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
@@ -725,6 +731,8 @@ def _ml_strategy_tuning_lines(
             "annualized_turnover",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "selection_validation_cost_bps",
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
             "validation_predicted_100_fraction",
             "validation_score_forward_return_correlation",
             "validation_raw_score_forward_return_correlation",
@@ -732,9 +740,13 @@ def _ml_strategy_tuning_lines(
             "validation_score_policy_repair_authorized",
             "score_policy_repair_authorized",
             "score_policy_repair_denied_reason",
+            "validation_guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_denied_reason",
             "validation_gate_bull_average_exposure",
             "validation_gate_bull_underexposed_positive_benchmark_fraction",
             "validation_score_policy_triggered_100_fraction",
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
             "validation_score_transform_applied_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
@@ -764,8 +776,10 @@ def _ml_strategy_tuning_lines(
             "- Rolling train candidates use only the latest configured bars inside the label-safe training slice.",
             "- Selected models are refit on the selected rolling training window before scoring the outer test fold.",
             "- The pass gate requires net excess return versus the configured selection benchmarks, activity guardrails, risk improvement, and any configured turnover budget after costs.",
+            "- Configured selection validation costs are evaluated on the same candidate weights; candidates rank by their worst benchmark excess across those costs.",
             "- `best_active_fallback` selections are diagnostic runtime selections; they keep `passed_gate=False` and do not relax the strict Phase 8 research gate.",
             "- `gate_bull_prob100_threshold` can promote a completed-bar `gate_bull` row to 100% only when the raw validation expected-allocation score has finite non-negative forward-return correlation. Repaired scores never authorize their own promotion.",
+            "- The research-only guarded gate-bull risk-off override can lift a completed-bar `gate_bull` conflict row to 100% after the risk-off cap only when raw validation score ordering is finite and non-negative.",
         ]
     )
     for artifact_path, label in [
@@ -853,6 +867,8 @@ def _allocation_utility_lines(
             "fold_predicted_100_fraction",
             "fold_score_policy_repair_authorized_fraction",
             "fold_score_policy_triggered_100_fraction",
+            "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+            "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
             "fold_score_transform_applied_fraction",
             "selected_regime_gate_bull_floor",
         ]:
@@ -871,6 +887,16 @@ def _allocation_utility_lines(
         if "score_policy_repair_denied_reason" in allocation_probability_diagnostics.columns:
             probability_aggregations["score_policy_repair_denied_reason"] = (
                 "score_policy_repair_denied_reason",
+                "first",
+            )
+        if (
+            "guarded_gate_bull_risk_off_override_denied_reason"
+            in allocation_probability_diagnostics.columns
+        ):
+            probability_aggregations[
+                "guarded_gate_bull_risk_off_override_denied_reason"
+            ] = (
+                "guarded_gate_bull_risk_off_override_denied_reason",
                 "first",
             )
         if "selected_regime_gate_bull_floor" in allocation_probability_diagnostics.columns:
@@ -952,6 +978,7 @@ def _allocation_utility_lines(
             f"- Allocation score transforms are evaluated as research-only candidate score mappings: `{score_transform_names}`.",
             "- The default trading score is expected allocation: `sum(prob_tier * tier_weight)`. Diagnostic score policies may transform that score before tiering.",
             "- The `gate_bull_prob100_threshold` research repair is authorized only by finite non-negative raw validation score/forward-return correlation and only affects completed-bar `gate_bull` rows on the next effective allocation.",
+            f"- Guarded gate-bull risk-off override is `{config.evaluation.ml_strategy_tuning.guarded_gate_bull_risk_off_override}` and is authorized only by finite non-negative raw validation score ordering.",
             "- Direct-tier allocation still applies risk-off caps, minimum holding periods, hysteresis, costs, and the strict gate.",
             "- `regime_state` maps utility tiers into `risk_off`, `reduced`, and `risk_on` states before converting state probabilities back into expected allocation.",
         ]
