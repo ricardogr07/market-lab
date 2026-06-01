@@ -69,6 +69,7 @@ def _write_bull_participation_artifacts(run_dir: Path) -> None:
             ],
             "selected_regime_bull_floor": [1.0, 1.0, pd.NA],
             "selected_regime_risk_off_cap": [0.25, 0.25, pd.NA],
+            "selected_regime_gate_bull_floor": [1.0, 1.0, pd.NA],
         }
     ).to_csv(run_dir / "ml_strategy_tuning_selections.csv", index=False)
 
@@ -95,6 +96,7 @@ def test_build_phase8_bull_participation_summarizes_prediction_compression_and_b
         "value",
     ] == pytest.approx(2 / 3)
     assert by_metric.loc["selection_source_best_active_fallback_folds", "value"] == 1
+    assert by_metric.loc["selected_regime_gate_bull_floor_mode", "value"] == 1.0
 
     confusion = detail.loc[
         detail["metric"].eq("target_vs_predicted_tier_fraction")

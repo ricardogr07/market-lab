@@ -108,6 +108,18 @@ def _write_complete_run(run_dir: Path, *, strategy_return: float) -> None:
                 "value": 0.10,
                 "detail": "",
             },
+            {
+                "section": "fold_selection",
+                "metric": "selected_regime_gate_bull_floor_mode",
+                "value": 1.0,
+                "detail": "",
+            },
+            {
+                "section": "score_policy_repair",
+                "metric": "selected_validation_score_policy_repair_authorized_fraction",
+                "value": 0.75,
+                "detail": "",
+            },
         ]
     ).to_csv(run_dir / "phase8_run_summary.csv", index=False)
     pd.DataFrame(
@@ -223,6 +235,48 @@ def _write_complete_run(run_dir: Path, *, strategy_return: float) -> None:
                 "value": True,
                 "detail": "",
             },
+            {
+                "section": "candidate_score_validity",
+                "metric": "validation_score_forward_return_correlation_mean",
+                "value": -0.10,
+                "detail": "",
+            },
+            {
+                "section": "candidate_score_validity",
+                "metric": "validation_score_forward_return_correlation_min",
+                "value": -0.30,
+                "detail": "",
+            },
+            {
+                "section": "candidate_score_validity",
+                "metric": "validation_raw_score_forward_return_correlation_min",
+                "value": -0.40,
+                "detail": "",
+            },
+            {
+                "section": "score_policy_repair",
+                "metric": "score_policy_triggered_100_fraction",
+                "value": 0.15,
+                "detail": "",
+            },
+            {
+                "section": "score_policy_repair",
+                "metric": "score_policy_repair_authorized_fraction",
+                "value": 0.75,
+                "detail": "",
+            },
+            {
+                "section": "candidate_score_validity",
+                "metric": "negative_validation_score_forward_return_correlation_candidates",
+                "value": 2,
+                "detail": "",
+            },
+            {
+                "section": "candidate_score_validity",
+                "metric": "validation_gate_bull_underexposed_positive_benchmark_fraction_mean",
+                "value": 0.50,
+                "detail": "",
+            },
         ]
     ).to_csv(run_dir / "phase8_score_diagnostic_summary.csv", index=False)
     pd.DataFrame(
@@ -316,6 +370,13 @@ def test_build_phase8_grid_comparison_summarizes_complete_and_incomplete_runs(
     assert latest["active_return_vs_buy_hold"] == 2.0
     assert latest["bull_upside_capture_ratio"] == 0.65
     assert latest["gate_bull_underexposed_positive_benchmark_return_sum"] == 5.0
+    assert latest["selected_regime_gate_bull_floor_mode"] == 1.0
+    assert latest["candidate_validation_score_forward_return_correlation_min"] == -0.30
+    assert latest["candidate_validation_raw_score_forward_return_correlation_min"] == -0.40
+    assert latest["score_policy_triggered_100_fraction"] == 0.15
+    assert latest["score_policy_repair_authorized_fraction"] == 0.75
+    assert latest["selected_validation_score_policy_repair_authorized_fraction"] == 0.75
+    assert latest["negative_validation_score_forward_return_correlation_candidates"] == 2
     assert latest["recommended_artifact_action"] == "keep_latest_complete"
     assert bool(latest["latest_complete_for_experiment"]) is True
     assert incomplete["artifact_status"] == "incomplete"

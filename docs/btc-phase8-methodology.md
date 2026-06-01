@@ -106,6 +106,12 @@ score compression is suppressing full BTC participation. It does not change
 the allowed strategy tiers, fallback selection rules, or the strict Phase 8
 research gate.
 
+Score-transform grids are also research-only candidate parameters. They apply
+after model probability scoring and before tier mapping, hysteresis, and regime
+participation policy. The Phase 8 score-repair configs use completed-bar
+runtime regime labels to boost only runtime-bull scores; they do not change
+target labels, paper behavior, or the strict deployment gate.
+
 ## 4. Walk-Forward Training
 
 The outer walk-forward split defines the real out-of-sample test windows. Each
@@ -329,6 +335,22 @@ iteration before expanding the grid:
   It includes buy-hold, static BTC/cash, and rebalanced BTC/cash benchmarks in
   validation selection so the selected candidates face the same benchmark
   family that the strict gate requires.
+- `btc_phase8_bull_floor_score_boost_fallback`: the score-repair successor to
+  the first buy-hold-beating bull-floor fallback branch. It evaluates identity
+  plus runtime-bull score boosts with sigmoid calibration.
+- `btc_phase8_bull_floor_score_boost_uncalibrated`: the same score-transform
+  grid without probability calibration, isolating whether calibration is
+  compressing full-participation scores.
+- `btc_phase8_bull_floor_score_boost_long_train`: the same score-transform grid
+  with longer rolling train windows.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity`: a research-only
+  completed-bar `gate_bull` 100% tier repair. It authorizes promotion from raw
+  validation expected-allocation score ordering before applying promotion.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity_uncalibrated`: the
+  same non-circular gate-bull repair without probability calibration.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover`: the
+  same non-circular gate-bull repair with longer holding periods and a lower
+  turnover cap.
 
 ## 7. Cost-Aware Candidate Selection
 
@@ -399,6 +421,17 @@ python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs
 This report checks whether score compression, tier confusion, or validation to
 OOS score instability explains weak BTC participation.
 
+Run the target diagnostic without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-target-diagnostic --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+```
+
+This report checks whether current target and prediction rows are mixing BTC
+bull-continuation participation with drawdown-defense behavior. The `--config`
+argument adds strict-gate bull labels for the run window; it does not retrain
+models or change portfolio weights.
+
 Run the bull counterfactual diagnostic without retraining models:
 
 ```bash
@@ -413,6 +446,14 @@ or redefine the unchanged strict research gate.
 The fallback and turnover-only probe profiles are diagnostic only. The runtime
 `best_active_fallback` policy is also diagnostic until a regenerated OOS run
 passes the unchanged strict Phase 8 research gate.
+
+The `gate_bull_prob100_threshold` score policy is also research-only. It may
+promote a completed-bar `gate_bull` row to 100% only when raw validation
+expected-allocation scores have finite non-negative forward-return correlation,
+`prob_tier_100` passes its threshold, and `prob_tier_100 >= prob_tier_0`.
+Authorization is computed before promotion. Negative-correlation fallback
+folds keep expected-allocation scores and persist the denial reason. This rule
+does not change the strict research gate or approve paper deployment.
 
 Build the consolidated methodology review without retraining models:
 
@@ -439,9 +480,10 @@ python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs -
 ```
 
 This comparison report is the main handoff into the BTC bull-upside methodology
-notes in [Phase 8 BTC Bull Upside](phase8/BTC/bull-upside-methodology.md). It
-also surfaces incomplete artifact directories as pruning candidates, but the
-CLI never deletes or moves files.
+notes in [Phase 8 BTC Bull Upside](phase8/BTC/bull-upside-methodology.md) and
+the current [Target/Score Pivot](phase8/BTC/target-score-pivot.md). It also
+surfaces incomplete artifact directories as pruning candidates, but the CLI
+never deletes or moves files.
 
 ## 8. Strict Research Gate
 

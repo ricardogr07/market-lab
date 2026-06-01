@@ -72,8 +72,19 @@ PHASE8_GRID_COMPARISON_COLUMNS = [
     "predicted_tier_25_fraction",
     "predicted_tier_50_fraction",
     "predicted_tier_100_fraction",
+    "selected_score_transform_mode",
+    "score_transform_applied_fraction",
+    "score_policy_triggered_100_fraction",
+    "score_policy_repair_authorized_fraction",
+    "selected_validation_score_policy_repair_authorized_fraction",
+    "selected_regime_gate_bull_floor_mode",
     "score_target_weight_correlation",
     "score_forward_return_correlation",
+    "candidate_validation_score_forward_return_correlation_mean",
+    "candidate_validation_score_forward_return_correlation_min",
+    "candidate_validation_raw_score_forward_return_correlation_min",
+    "negative_validation_score_forward_return_correlation_candidates",
+    "validation_gate_bull_underexposed_positive_benchmark_fraction_mean",
     "score_realized_utility_correlation",
     "any_selected_oos_predicted_tier_100",
     "gate_bull_average_long_exposure",
@@ -401,11 +412,86 @@ def _run_row(run_dir: Path) -> dict[str, object]:
         "predicted_tier_100_fraction": _numeric_or_na(
             _summary_value(score_summary, "predicted_tier_100_fraction")
         ),
+        "selected_score_transform_mode": _summary_value(
+            phase8_summary,
+            "selected_score_transform_mode",
+            section="score_transform",
+        ),
+        "score_transform_applied_fraction": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "score_transform_applied_fraction",
+                section="score_transform",
+            )
+        ),
+        "score_policy_triggered_100_fraction": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "score_policy_triggered_100_fraction",
+                section="score_policy_repair",
+            )
+        ),
+        "score_policy_repair_authorized_fraction": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "score_policy_repair_authorized_fraction",
+                section="score_policy_repair",
+            )
+        ),
+        "selected_validation_score_policy_repair_authorized_fraction": _numeric_or_na(
+            _summary_value(
+                phase8_summary,
+                "selected_validation_score_policy_repair_authorized_fraction",
+                section="score_policy_repair",
+            )
+        ),
+        "selected_regime_gate_bull_floor_mode": _numeric_or_na(
+            _summary_value(
+                phase8_summary,
+                "selected_regime_gate_bull_floor_mode",
+                section="fold_selection",
+            )
+        ),
         "score_target_weight_correlation": _numeric_or_na(
             _summary_value(score_summary, "score_target_weight_correlation")
         ),
         "score_forward_return_correlation": _numeric_or_na(
             _summary_value(score_summary, "score_forward_return_correlation")
+        ),
+        "candidate_validation_score_forward_return_correlation_mean": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "validation_score_forward_return_correlation_mean",
+                section="candidate_score_validity",
+            )
+        ),
+        "candidate_validation_score_forward_return_correlation_min": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "validation_score_forward_return_correlation_min",
+                section="candidate_score_validity",
+            )
+        ),
+        "candidate_validation_raw_score_forward_return_correlation_min": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "validation_raw_score_forward_return_correlation_min",
+                section="candidate_score_validity",
+            )
+        ),
+        "negative_validation_score_forward_return_correlation_candidates": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "negative_validation_score_forward_return_correlation_candidates",
+                section="candidate_score_validity",
+            )
+        ),
+        "validation_gate_bull_underexposed_positive_benchmark_fraction_mean": _numeric_or_na(
+            _summary_value(
+                score_summary,
+                "validation_gate_bull_underexposed_positive_benchmark_fraction_mean",
+                section="candidate_score_validity",
+            )
         ),
         "score_realized_utility_correlation": _numeric_or_na(
             _summary_value(score_summary, "score_realized_utility_correlation")

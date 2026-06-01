@@ -236,6 +236,40 @@ def _score_decile_rows(
             value=float(predicted_100.mean()),
             detail="selected OOS prediction rows",
         )
+    if "allocation_score_transform" in working.columns:
+        transforms = working["allocation_score_transform"].dropna().astype(str)
+        if not transforms.empty:
+            _append_summary(
+                summary_rows,
+                section="score_transform",
+                metric="selected_score_transform_mode",
+                value=transforms.mode().iloc[0],
+                detail="mode among selected OOS prediction rows",
+            )
+    if "score_transform_applied" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="score_transform",
+            metric="score_transform_applied_fraction",
+            value=float(working["score_transform_applied"].map(_truthy).mean()),
+            detail="selected OOS prediction rows",
+        )
+    if "score_policy_triggered_100" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="score_policy_repair",
+            metric="score_policy_triggered_100_fraction",
+            value=float(working["score_policy_triggered_100"].map(_truthy).mean()),
+            detail="selected OOS rows promoted to the 100% tier by score policy",
+        )
+    if "score_policy_repair_authorized" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="score_policy_repair",
+            metric="score_policy_repair_authorized_fraction",
+            value=float(working["score_policy_repair_authorized"].map(_truthy).mean()),
+            detail="selected OOS rows carrying validation-authorized repair context",
+        )
 
 
 def _confusion_rows_for_group(
@@ -342,6 +376,21 @@ def _candidate_selected_mask(candidates: pd.DataFrame, selections: pd.DataFrame)
         ("min_holding_period_bars", "selected_min_holding_period_bars"),
         ("hysteresis_margin", "selected_hysteresis_margin"),
         ("regime_policy", "selected_regime_policy"),
+        ("regime_gate_bull_floor", "selected_regime_gate_bull_floor"),
+        ("allocation_score_transform", "selected_allocation_score_transform"),
+        (
+            "score_transform_bull_multiplier",
+            "selected_score_transform_bull_multiplier",
+        ),
+        ("score_transform_bull_addend", "selected_score_transform_bull_addend"),
+        (
+            "score_transform_risk_off_score_cap",
+            "selected_score_transform_risk_off_score_cap",
+        ),
+        (
+            "score_transform_non_bull_score_cap",
+            "selected_score_transform_non_bull_score_cap",
+        ),
         ("threshold", "selected_threshold"),
         ("tier_min_threshold", "selected_tier_min_threshold"),
         ("tier_half_threshold", "selected_tier_half_threshold"),
@@ -404,6 +453,13 @@ def _candidate_rows(
         "validation_predicted_100_fraction",
         "min_validation_predicted_target_fraction",
         "min_benchmark_excess_cumulative_return",
+        "validation_score_forward_return_correlation",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_target_correlation",
+        "validation_gate_bull_average_exposure",
+        "validation_gate_bull_underexposed_positive_benchmark_fraction",
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+        "validation_score_transform_applied_fraction",
     ):
         if column in working.columns:
             working[column] = working[column].map(_numeric)
@@ -424,6 +480,13 @@ def _candidate_rows(
             "validation_predicted_100_fraction",
             "min_validation_predicted_target_fraction",
             "min_benchmark_excess_cumulative_return",
+            "validation_score_forward_return_correlation",
+            "validation_raw_score_forward_return_correlation",
+            "validation_score_target_correlation",
+            "validation_gate_bull_average_exposure",
+            "validation_gate_bull_underexposed_positive_benchmark_fraction",
+            "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+            "validation_score_transform_applied_fraction",
         ):
             if column in group.columns:
                 values = group[column].dropna()
@@ -489,6 +552,52 @@ def _candidate_rows(
         value="validation_predicted_100_fraction" in working.columns,
         detail="current candidate artifacts may only persist required partial-tier support",
     )
+    for column in (
+        "validation_score_forward_return_correlation",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_target_correlation",
+        "validation_gate_bull_average_exposure",
+        "validation_gate_bull_underexposed_positive_benchmark_fraction",
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+    ):
+        if column not in working.columns:
+            continue
+        values = working[column].dropna()
+        if values.empty:
+            continue
+        _append_summary(
+            summary_rows,
+            section="candidate_score_validity",
+            metric=f"{column}_mean",
+            value=float(values.mean()),
+            detail="validation candidate mean",
+        )
+        _append_summary(
+            summary_rows,
+            section="candidate_score_validity",
+            metric=f"{column}_min",
+            value=float(values.min()),
+            detail="validation candidate minimum",
+        )
+    if "validation_score_forward_return_correlation" in working.columns:
+        correlations = working["validation_score_forward_return_correlation"]
+        _append_summary(
+            summary_rows,
+            section="candidate_score_validity",
+            metric="negative_validation_score_forward_return_correlation_candidates",
+            value=int(correlations.lt(0.0).sum()),
+            detail="validation candidates with score/forward-return correlation < 0",
+        )
+    if "validation_score_policy_repair_authorized" in working.columns:
+        _append_summary(
+            summary_rows,
+            section="score_policy_repair",
+            metric="validation_score_policy_repair_authorized_fraction",
+            value=float(
+                working["validation_score_policy_repair_authorized"].map(_truthy).mean()
+            ),
+            detail="validation candidates authorized by raw score/forward-return ordering",
+        )
 
 
 def _model_family_oos_rows(

@@ -107,6 +107,48 @@ def test_crypto_regime_features_are_trailing_only() -> None:
         assert baseline_features.iloc[:-1][column].equals(modified_features.iloc[:-1][column])
 
 
+def test_crypto_regime_signal_features_are_opt_in_and_trailing_only() -> None:
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "crypto_hourly_panel.csv"
+    baseline = load_panel_csv(fixture_path)
+    modified = baseline.copy()
+    modified.loc[modified.index[-1], "adj_close"] *= 3.0
+    modified.loc[modified.index[-1], "volume"] *= 5.0
+
+    kwargs = {
+        "return_windows": [1, 3],
+        "ma_windows": [3],
+        "vol_windows": [3],
+        "momentum_window": 3,
+        "crypto_regime_features_enabled": True,
+        "crypto_regime_trend_windows": [3, 6],
+        "crypto_regime_volatility_window": 3,
+        "crypto_regime_percentile_window": 6,
+        "crypto_regime_drawdown_window": 6,
+        "crypto_regime_volume_window": 3,
+    }
+    without_signals = add_feature_set(baseline, **kwargs)
+    baseline_features = add_feature_set(
+        baseline,
+        **kwargs,
+        crypto_regime_signal_features_enabled=True,
+    )
+    modified_features = add_feature_set(
+        modified,
+        **kwargs,
+        crypto_regime_signal_features_enabled=True,
+    )
+
+    signal_columns = [
+        "crypto_regime_bull_participation_signal",
+        "crypto_regime_drawdown_defense_signal",
+    ]
+    for column in signal_columns:
+        assert column not in without_signals.columns
+        assert column in baseline_features.columns
+        assert set(baseline_features[column].dropna().unique()) <= {0, 1}
+        assert baseline_features.iloc[:-1][column].equals(modified_features.iloc[:-1][column])
+
+
 def test_indicator_stack_ml_features_are_trailing_only() -> None:
     fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "crypto_hourly_panel.csv"
     baseline = load_panel_csv(fixture_path)

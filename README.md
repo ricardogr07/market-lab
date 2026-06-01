@@ -29,7 +29,9 @@ python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experim
 python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>
 python scripts/run_marketlab.py phase8-bull-participation --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-target-diagnostic --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-bull-counterfactual --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+python scripts/run_marketlab.py phase8-regime-policy-sweep --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>
 python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs --output artifacts/runs/phase8_btc_grid_comparison.csv
 ```
@@ -59,7 +61,9 @@ marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-ro
 - `phase8-selection-probe`: run artifact-only selection coverage probes without retraining or changing the approved strict gate.
 - `phase8-bull-participation`: attribute bull-regime underparticipation from persisted Phase 8 artifacts and, when needed, the matching config.
 - `phase8-score-diagnostic`: inspect score compression, tier confusion, model-family behavior, and validation-vs-OOS score stability.
+- `phase8-target-diagnostic`: inspect target and prediction behavior across bull-continuation and drawdown-defense rows without retraining.
 - `phase8-bull-counterfactual`: write artifact-only bull-exposure counterfactuals that remain diagnostics, not deployment approvals.
+- `phase8-regime-policy-sweep`: test completed-bar BTC regime exposure policies against persisted run artifacts before launching another expensive training batch.
 - `phase8-methodology-review`: consolidate strict-gate, benchmark-family, score-validity, bull-participation, and counterfactual diagnostics into one methodology review CSV.
 - `phase8-grid-compare`: compare completed BTC Phase 8 runs across strict-gate status, bull-upside capture, downside capture, score validity, counterfactual hypotheses, and conservative artifact-pruning recommendations.
 
@@ -347,7 +351,7 @@ The tracked crypto research configs include:
 - `configs/experiment.crypto_indicator_ml_tuned_12h_2024_ytd.yaml`
 - `configs/experiment.crypto_indicator_ml_tuned_24h_2024_ytd.yaml`
 
-The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review. `configs/experiment.btc_phase8_methodology_review.yaml` records the current strict methodology review. The next BTC bull-upside grid is tracked in `configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml`, `configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml`, and `configs/experiment.btc_phase8_bull_capture_static_audit.yaml`; see [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md).
+The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review. `configs/experiment.btc_phase8_methodology_review.yaml` records the strict methodology review, and the current target/score, regime-policy, and score-transform experiments are tracked from [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md).
 
 BTC paper uses its own tracked config and Docker shape:
 

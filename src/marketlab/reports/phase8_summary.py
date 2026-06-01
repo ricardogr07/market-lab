@@ -142,6 +142,56 @@ def _selection_rows(rows: list[dict[str, object]], selections: pd.DataFrame) -> 
         value=no_valid_folds,
         detail="folds that stayed cash because no candidate was selected",
     )
+    if "selected_regime_gate_bull_floor" in selections.columns:
+        values = (
+            selections.loc[statuses.eq("selected"), "selected_regime_gate_bull_floor"]
+            .map(_numeric)
+            .dropna()
+        )
+        if not values.empty:
+            _append(
+                rows,
+                section="fold_selection",
+                metric="selected_regime_gate_bull_floor_mode",
+                value=float(values.mode().iloc[0]),
+                detail="mode among selected walk-forward folds",
+            )
+    if "selected_allocation_score_transform" in selections.columns:
+        selected = selections.loc[statuses.eq("selected")].copy()
+        selected_transforms = (
+            selected["selected_allocation_score_transform"].dropna().astype(str)
+        )
+        if not selected_transforms.empty:
+            mode = selected_transforms.mode().iloc[0]
+            _append(
+                rows,
+                section="score_transform",
+                metric="selected_score_transform_mode",
+                value=mode,
+                detail="mode among selected walk-forward folds",
+            )
+            for transform_name, count in selected_transforms.value_counts().sort_index().items():
+                _append(
+                    rows,
+                    section="score_transform",
+                    metric=f"selected_score_transform_{transform_name}_folds",
+                    value=int(count),
+                    detail="selected walk-forward fold count",
+                )
+    if "validation_score_policy_repair_authorized" in selections.columns:
+        selected = selections.loc[statuses.eq("selected")]
+        if not selected.empty:
+            _append(
+                rows,
+                section="score_policy_repair",
+                metric="selected_validation_score_policy_repair_authorized_fraction",
+                value=float(
+                    selected["validation_score_policy_repair_authorized"]
+                    .map(_truthy)
+                    .mean()
+                ),
+                detail="selected walk-forward folds authorized by raw validation score ordering",
+            )
 
 
 def _fallback_candidate_reasons(row: pd.Series) -> list[str]:
@@ -202,6 +252,65 @@ def _candidate_reason_rows(rows: list[dict[str, object]], candidates: pd.DataFra
             value=int(count),
             detail="counted per failed candidate reason",
         )
+    for column in (
+        "validation_score_forward_return_correlation",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_target_correlation",
+        "validation_gate_bull_average_exposure",
+        "validation_gate_bull_underexposed_positive_benchmark_fraction",
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum",
+    ):
+        if column not in candidates.columns:
+            continue
+        values = candidates[column].map(_numeric).dropna()
+        if values.empty:
+            continue
+        _append(
+            rows,
+            section="score_validity",
+            metric=f"{column}_mean",
+            value=float(values.mean()),
+            detail="validation candidate mean",
+        )
+        _append(
+            rows,
+            section="score_validity",
+            metric=f"{column}_min",
+            value=float(values.min()),
+            detail="validation candidate minimum",
+        )
+    if "validation_score_forward_return_correlation" in candidates.columns:
+        correlations = candidates["validation_score_forward_return_correlation"].map(
+            _numeric
+        )
+        _append(
+            rows,
+            section="score_validity",
+            metric="negative_validation_score_forward_return_correlation_candidates",
+            value=int(correlations.lt(0.0).sum()),
+            detail="validation candidates with score/forward-return correlation < 0",
+        )
+    if "validation_score_policy_repair_authorized" in candidates.columns:
+        _append(
+            rows,
+            section="score_policy_repair",
+            metric="validation_score_policy_repair_authorized_fraction",
+            value=float(
+                candidates["validation_score_policy_repair_authorized"].map(_truthy).mean()
+            ),
+            detail="validation candidates authorized by raw score/forward-return ordering",
+        )
+    if "score_policy_repair_denied_reason" in candidates.columns:
+        denied_reasons = candidates["score_policy_repair_denied_reason"].dropna().astype(str)
+        denied_reasons = denied_reasons.loc[denied_reasons.str.strip().ne("")]
+        for reason, count in denied_reasons.value_counts().sort_index().items():
+            _append(
+                rows,
+                section="score_policy_repair",
+                metric=f"score_policy_repair_denied_reason_{reason}",
+                value=int(count),
+                detail="validation candidate denial count",
+            )
 
 
 def _target_support_rows(rows: list[dict[str, object]], target_diagnostics: pd.DataFrame) -> None:
@@ -264,6 +373,24 @@ def _predicted_support_rows(rows: list[dict[str, object]], probability_diagnosti
             metric=f"predicted_tier_{_tier_label(weight)}_fraction",
             value=fraction,
             detail="outer OOS predicted tier support",
+        )
+    if "score_policy_triggered_100" in probability_diagnostics.columns:
+        _append(
+            rows,
+            section="score_policy_repair",
+            metric="score_policy_triggered_100_fraction",
+            value=float(probability_diagnostics["score_policy_triggered_100"].map(_truthy).mean()),
+            detail="outer OOS rows promoted to the 100% tier by score policy",
+        )
+    if "score_policy_repair_authorized" in probability_diagnostics.columns:
+        _append(
+            rows,
+            section="score_policy_repair",
+            metric="score_policy_repair_authorized_fraction",
+            value=float(
+                probability_diagnostics["score_policy_repair_authorized"].map(_truthy).mean()
+            ),
+            detail="outer OOS rows carrying validation-authorized repair context",
         )
 
 

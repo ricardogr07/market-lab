@@ -3,16 +3,111 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from marketlab.config import ExperimentConfig, RegimeParticipationPolicyConfig
+from marketlab.config import (
+    AllocationScoreTransformConfig,
+    ExperimentConfig,
+    RegimeParticipationPolicyConfig,
+)
 from marketlab.pipeline import (
+    _allocation_score_policy_prob100_threshold_candidates,
+    _allocation_score_transform_candidates,
     _apply_allocation_score_policy,
+    _apply_allocation_score_transform,
     _deterministic_regime_fallback_weights_for_rows,
     _latest_training_rows,
     _predicted_tier_support,
+    _prediction_frame_with_allocation_score_policy,
+    _score_policy_repair_authorization,
+    _score_validity_metrics,
     _select_ml_strategy_candidate,
     _select_ml_strategy_candidate_for_policy,
     _strict_research_gate,
 )
+
+
+def test_prob100_threshold_candidates_use_grid_only_for_prob100_policy() -> None:
+    config = ExperimentConfig()
+    tuning = config.evaluation.ml_strategy_tuning
+    tuning.allocation_score_policy = "bull_prob100_threshold"
+    tuning.allocation_score_policy_prob100_threshold = 0.20
+    tuning.allocation_score_policy_prob100_threshold_grid = [0.36, 0.20, 0.36]
+
+    assert _allocation_score_policy_prob100_threshold_candidates(config) == [0.20, 0.36]
+
+    tuning.allocation_score_policy = "expected_allocation"
+    assert _allocation_score_policy_prob100_threshold_candidates(config) == [0.20]
+
+    tuning.allocation_score_policy = "gate_bull_prob100_threshold"
+    assert _allocation_score_policy_prob100_threshold_candidates(config) == [0.20, 0.36]
+
+
+def test_score_transform_candidates_default_to_identity() -> None:
+    config = ExperimentConfig()
+
+    candidates = _allocation_score_transform_candidates(config)
+
+    assert [(candidate.name, candidate.bull_multiplier, candidate.bull_addend) for candidate in candidates] == [
+        ("identity", 1.0, 0.0)
+    ]
+
+
+def test_allocation_score_transform_boosts_only_runtime_bull_and_caps_non_bull() -> None:
+    rows = pd.DataFrame(
+        {
+            "crypto_regime_risk_off": [0, 1, 0, 0],
+            "crypto_regime_trend_state": [1, 1, 0, -1],
+        },
+        index=[10, 11, 12, 13],
+    )
+    scores = pd.Series([0.44, 0.44, 0.44, 0.44], index=rows.index)
+
+    transformed, applied = _apply_allocation_score_transform(
+        rows=rows,
+        score_series=scores,
+        score_transform=AllocationScoreTransformConfig(
+            name="bull_shift_18",
+            bull_multiplier=1.0,
+            bull_addend=0.18,
+            risk_off_score_cap=0.25,
+            non_bull_score_cap=0.50,
+        ),
+    )
+
+    assert transformed.tolist() == pytest.approx([0.62, 0.25, 0.44, 0.44])
+    assert applied.tolist() == [True, True, False, False]
+
+
+def test_prediction_frame_applies_selected_score_transform_before_tiering() -> None:
+    predictions = pd.DataFrame(
+        {
+            "score": [0.64, 0.44],
+            "raw_expected_allocation_score": [0.64, 0.44],
+            "crypto_regime_risk_off": [0, 0],
+            "crypto_regime_trend_state": [1, 0],
+            "prob_tier_0": [0.10, 0.10],
+            "prob_tier_100": [0.20, 0.20],
+        }
+    )
+
+    transformed = _prediction_frame_with_allocation_score_policy(
+        predictions=predictions,
+        allocation_score_policy="expected_allocation",
+        prob100_threshold=0.20,
+        score_transform=AllocationScoreTransformConfig(
+            name="bull_shift_18",
+            bull_multiplier=1.0,
+            bull_addend=0.18,
+            non_bull_score_cap=0.50,
+        ),
+    )
+
+    assert transformed["allocation_score_transform"].tolist() == [
+        "bull_shift_18",
+        "bull_shift_18",
+    ]
+    assert transformed["score"].tolist() == pytest.approx([0.82, 0.44])
+    assert transformed["predicted_tier_weight"].tolist() == pytest.approx([1.0, 0.50])
+    assert transformed["score_transform_applied"].tolist() == [True, False]
 
 
 def test_strict_research_gate_requires_cost_regime_and_exposure_checks() -> None:
@@ -147,6 +242,118 @@ def test_allocation_score_policy_keeps_expected_score_when_threshold_fails() -> 
     assert triggered.tolist() == [False, False]
 
 
+def test_gate_bull_score_policy_requires_completed_bar_gate_and_raw_authorization() -> None:
+    rows = pd.DataFrame(
+        {
+            "gate_bull": [True, False, True],
+            "crypto_regime_risk_off": [0, 0, 1],
+            "crypto_regime_trend_state": [0, 1, -1],
+        }
+    )
+    scores = pd.Series([0.42, 0.42, 0.42])
+    probabilities = pd.DataFrame(
+        {
+            "prob_tier_0": [0.10, 0.10, 0.10],
+            "prob_tier_100": [0.30, 0.30, 0.30],
+        }
+    )
+
+    denied_scores, denied_triggered = _apply_allocation_score_policy(
+        rows=rows,
+        score_series=scores,
+        probability_frame=probabilities,
+        allocation_score_policy="gate_bull_prob100_threshold",
+        prob100_threshold=0.20,
+        score_policy_repair_authorized=False,
+    )
+    final_scores, triggered = _apply_allocation_score_policy(
+        rows=rows,
+        score_series=scores,
+        probability_frame=probabilities,
+        allocation_score_policy="gate_bull_prob100_threshold",
+        prob100_threshold=0.20,
+        score_policy_repair_authorized=True,
+    )
+
+    assert denied_scores.tolist() == [0.42, 0.42, 0.42]
+    assert denied_triggered.tolist() == [False, False, False]
+    assert final_scores.tolist() == [1.0, 0.42, 1.0]
+    assert triggered.tolist() == [True, False, True]
+
+
+@pytest.mark.parametrize(
+    ("correlation", "authorized", "denied_reason"),
+    [
+        (0.20, True, ""),
+        (0.0, True, ""),
+        (-0.01, False, "negative_validation_raw_score_forward_return_correlation"),
+        (pd.NA, False, "non_finite_validation_raw_score_forward_return_correlation"),
+    ],
+)
+def test_gate_bull_score_policy_authorization_uses_finite_non_negative_raw_correlation(
+    correlation: object,
+    authorized: bool,
+    denied_reason: str,
+) -> None:
+    assert _score_policy_repair_authorization(
+        allocation_score_policy="gate_bull_prob100_threshold",
+        validation_raw_score_forward_return_correlation=correlation,
+    ) == (authorized, denied_reason)
+
+
+def test_post_repair_correlation_cannot_authorize_gate_bull_repair() -> None:
+    predictions = pd.DataFrame(
+        {
+            "score": [0.0, 1.0, 1.0],
+            "raw_expected_allocation_score": [0.9, 0.5, 0.1],
+            "forward_return": [0.0, 0.5, 1.0],
+            "target_weight": [0.0, 0.5, 1.0],
+        }
+    )
+
+    metrics = _score_validity_metrics(predictions)
+    authorized, denied_reason = _score_policy_repair_authorization(
+        allocation_score_policy="gate_bull_prob100_threshold",
+        validation_raw_score_forward_return_correlation=metrics[
+            "validation_raw_score_forward_return_correlation"
+        ],
+    )
+
+    assert metrics["validation_score_forward_return_correlation"] > 0.0
+    assert metrics["validation_raw_score_forward_return_correlation"] < 0.0
+    assert authorized is False
+    assert denied_reason == "negative_validation_raw_score_forward_return_correlation"
+
+
+def test_prediction_frame_records_denied_gate_bull_repair_without_promoting() -> None:
+    predictions = pd.DataFrame(
+        {
+            "score": [0.42],
+            "raw_expected_allocation_score": [0.42],
+            "gate_bull": [True],
+            "prob_tier_0": [0.10],
+            "prob_tier_100": [0.30],
+        }
+    )
+
+    transformed = _prediction_frame_with_allocation_score_policy(
+        predictions=predictions,
+        allocation_score_policy="gate_bull_prob100_threshold",
+        prob100_threshold=0.20,
+        score_policy_repair_authorized=False,
+        score_policy_repair_denied_reason=(
+            "negative_validation_raw_score_forward_return_correlation"
+        ),
+    )
+
+    assert transformed["score"].tolist() == [0.42]
+    assert transformed["score_policy_triggered_100"].tolist() == [False]
+    assert transformed["score_policy_repair_authorized"].tolist() == [False]
+    assert transformed["score_policy_repair_denied_reason"].tolist() == [
+        "negative_validation_raw_score_forward_return_correlation"
+    ]
+
+
 def test_deterministic_regime_fallback_weights_map_test_regime_labels() -> None:
     panel_dates = pd.date_range("2026-01-01", periods=6, freq="D")
     panel = pd.DataFrame(
@@ -182,6 +389,43 @@ def test_deterministic_regime_fallback_weights_map_test_regime_labels() -> None:
     assert weights["weight"].tolist() == [0.25, 1.0, 0.50, 0.25, 0.0]
     assert weights["symbol"].eq("BTC-USD").all()
     assert weights["strategy"].eq("ml_indicator_tuned__long_only__cash").all()
+
+
+def test_deterministic_regime_fallback_applies_gate_bull_floor_after_risk_off() -> None:
+    panel_dates = pd.date_range("2026-01-01", periods=4, freq="D")
+    panel = pd.DataFrame(
+        {
+            "symbol": ["BTC-USD"] * len(panel_dates),
+            "timestamp": panel_dates,
+        }
+    )
+    rows = pd.DataFrame(
+        {
+            "signal_date": panel_dates[:3],
+            "effective_date": panel_dates[1:],
+            "crypto_regime_risk_off": [1, 0, 0],
+            "crypto_regime_trend_state": [1, 0, -1],
+            "gate_bull": [True, True, False],
+        }
+    )
+    policy = RegimeParticipationPolicyConfig(
+        name="gate_bull_override",
+        bull_floor=0.75,
+        sideways_floor=0.25,
+        bear_floor=0.0,
+        risk_off_cap=0.25,
+        gate_bull_floor=1.0,
+    )
+
+    weights = _deterministic_regime_fallback_weights_for_rows(
+        panel=panel,
+        rows=rows,
+        frequency="bar",
+        strategy_name="ml_indicator_tuned__long_only__cash",
+        policy=policy,
+    )
+
+    assert weights["weight"].tolist() == [1.0, 1.0, 0.0]
 
 
 def test_deterministic_regime_fallback_weights_require_regime_columns() -> None:
@@ -632,7 +876,7 @@ def test_strict_research_gate_fails_when_selected_fold_fraction_is_low() -> None
     assert bool(gate.loc[gate["condition"] == "overall", "passed"].iloc[0]) is False
 
 
-def test_strict_gate_counts_deterministic_regime_fallback_rows_as_selected() -> None:
+def test_strict_gate_counts_regime_policy_fallback_rows_as_selected() -> None:
     config = ExperimentConfig()
     config.evaluation.strict_research_gate.enabled = True
     config.evaluation.strict_research_gate.min_selected_fold_fraction = 0.75
@@ -643,7 +887,7 @@ def test_strict_gate_counts_deterministic_regime_fallback_rows_as_selected() -> 
         {
             "fold_id": [1, 2, 3, 4],
             "selection_status": ["selected", "selected", "selected", "selected"],
-            "selection_source": ["deterministic_regime_fallback"] * 4,
+            "selection_source": ["regime_policy_fallback"] * 4,
             "passed_gate": [False, False, False, False],
             "selected_model_name": [pd.NA, pd.NA, pd.NA, pd.NA],
             "selected_regime_policy": ["bull100_sideways25"] * 4,
@@ -891,6 +1135,53 @@ def test_runtime_selection_policy_rejects_non_benchmark_fallback_failures() -> N
 
     assert selected is None
     assert source == "none"
+
+
+def test_score_validity_selection_rejects_negative_correlation_until_fallback() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="negative_score_order",
+                passed_gate=False,
+                failure_reasons="negative_score_forward_return_correlation",
+                min_benchmark_excess=0.20,
+                excess_return=0.30,
+            ),
+            _runtime_selection_candidate(
+                model_name="benchmark_only",
+                passed_gate=False,
+                failure_reasons="non_positive_required_benchmark_excess",
+                min_benchmark_excess=-0.02,
+                excess_return=0.05,
+            ),
+        ],
+        selection_policy="best_active_fallback",
+        allow_score_validity_fallback=True,
+    )
+
+    assert selected is not None
+    assert selected["model_name"] == "benchmark_only"
+    assert source == "best_active_fallback"
+
+
+def test_score_validity_selection_falls_back_when_only_negative_score_order_exists() -> None:
+    selected, source = _select_ml_strategy_candidate_for_policy(
+        [
+            _runtime_selection_candidate(
+                model_name="negative_score_order",
+                passed_gate=False,
+                failure_reasons="negative_score_forward_return_correlation",
+                min_benchmark_excess=0.20,
+                excess_return=0.30,
+            ),
+        ],
+        selection_policy="best_active_fallback",
+        allow_score_validity_fallback=True,
+    )
+
+    assert selected is not None
+    assert selected["model_name"] == "negative_score_order"
+    assert source == "best_active_fallback"
 
 
 def test_runtime_selection_policy_strict_does_not_fallback() -> None:

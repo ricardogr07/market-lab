@@ -36,9 +36,13 @@ from marketlab.reports.phase8_bull_counterfactual import (
 from marketlab.reports.phase8_bull_participation import write_phase8_bull_participation
 from marketlab.reports.phase8_grid_compare import write_phase8_grid_comparison
 from marketlab.reports.phase8_methodology import write_phase8_methodology_review
+from marketlab.reports.phase8_regime_policy_sweep import (
+    write_phase8_regime_policy_sweep,
+)
 from marketlab.reports.phase8_score_diagnostic import write_phase8_score_diagnostic
 from marketlab.reports.phase8_selection_probe import write_phase8_selection_probe
 from marketlab.reports.phase8_summary import write_phase8_run_summary
+from marketlab.reports.phase8_target_diagnostic import write_phase8_target_diagnostic
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
 
 LOGGER = logging.getLogger(__name__)
@@ -105,10 +109,20 @@ def build_parser() -> argparse.ArgumentParser:
     phase8_score_diagnostic.add_argument("--run-dir", required=True)
     phase8_score_diagnostic.add_argument("--output-dir")
 
+    phase8_target_diagnostic = subparsers.add_parser("phase8-target-diagnostic")
+    phase8_target_diagnostic.add_argument("--run-dir", required=True)
+    phase8_target_diagnostic.add_argument("--config")
+    phase8_target_diagnostic.add_argument("--output-dir")
+
     phase8_bull_counterfactual = subparsers.add_parser("phase8-bull-counterfactual")
     phase8_bull_counterfactual.add_argument("--run-dir", required=True)
     phase8_bull_counterfactual.add_argument("--config", required=True)
     phase8_bull_counterfactual.add_argument("--output-dir")
+
+    phase8_regime_policy_sweep = subparsers.add_parser("phase8-regime-policy-sweep")
+    phase8_regime_policy_sweep.add_argument("--run-dir", required=True)
+    phase8_regime_policy_sweep.add_argument("--config", required=True)
+    phase8_regime_policy_sweep.add_argument("--output-dir")
 
     phase8_methodology_review = subparsers.add_parser("phase8-methodology-review")
     phase8_methodology_review.add_argument("--run-dir", required=True)
@@ -312,6 +326,16 @@ def main(argv: list[str] | None = None) -> int:
         print(summary_path)
         return 0
 
+    if args.command == "phase8-target-diagnostic":
+        detail_path, summary_path = write_phase8_target_diagnostic(
+            args.run_dir,
+            config_path=args.config,
+            output_dir=args.output_dir,
+        )
+        print(detail_path)
+        print(summary_path)
+        return 0
+
     if args.command == "phase8-bull-counterfactual":
         detail_path, summary_path, gate_path = write_phase8_bull_counterfactual(
             args.run_dir,
@@ -321,6 +345,16 @@ def main(argv: list[str] | None = None) -> int:
         print(detail_path)
         print(summary_path)
         print(gate_path)
+        return 0
+
+    if args.command == "phase8-regime-policy-sweep":
+        detail_path, summary_path = write_phase8_regime_policy_sweep(
+            args.run_dir,
+            config_path=args.config,
+            output_dir=args.output_dir,
+        )
+        print(detail_path)
+        print(summary_path)
         return 0
 
     if args.command == "phase8-methodology-review":

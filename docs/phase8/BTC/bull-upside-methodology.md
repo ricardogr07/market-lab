@@ -1,12 +1,12 @@
 # BTC Phase 8 Bull-Upside Methodology
 
-This document captures the current BTC Phase 8 research state and the next
-methodological step for improving bull-market upside capture without weakening
-the strict research gate.
+This document records the completed BTC Phase 8 bull-capture allocation grid
+and the resulting research pivot. The strict research gate remains the only
+deployment pass condition.
 
 ## Current State
 
-The latest completed local methodology run is:
+The latest completed baseline methodology run is:
 
 ```text
 artifacts/runs/btc_phase8_methodology_review/20260522T162012Z
@@ -24,57 +24,88 @@ It confirms that the current strict methodology is not deployment-ready:
 | Score validity | Score-to-target, score-to-forward-return, and score-to-realized-utility correlations were negative. |
 | Predicted tiers | Selected OOS predictions collapsed to 25% exposure and produced no 100% tier support. |
 
-The diagnostic counterfactuals are useful but not approval evidence. Forcing
-runtime bull days to 100% exposure returned 75.3241 with 0.4502 average exposure,
-and treating strict-gate bull days as buy-hold returned 58.9625 with 0.5164
-average exposure. Those rows show that upside exists in the run window; they do
-not show that the validation-selected model can identify it without look-ahead.
+The diagnostic counterfactuals remain hypothesis evidence only. Forcing runtime
+bull days to 100% exposure returned 75.3241 with 0.4502 average exposure, and
+treating strict-gate bull days as buy-hold returned 58.9625 with 0.5164 average
+exposure. Those rows show that upside exists in the run window; they do not show
+that the validation-selected model can identify it without look-ahead.
 
-## What Has Been Tested
+## Completed Bull-Capture Matrix
 
-The completed BTC Phase 8 experiments currently show three distinct failure
-modes:
+The previous next-run matrix is now complete in
+`artifacts/runs/phase8_btc_grid_comparison.csv`.
 
-| Experiment family | Best observed role | Main limitation |
-| --- | --- | --- |
-| Strict methodology review | Preserves the unchanged gate and exposes target/score failure clearly. | Too little exposure; almost every fold stays cash. |
-| Bull-floor immediate diagnostic | Improves absolute return and risk profile versus strict cash-heavy runs. | Still lags buy-and-hold and static BTC/cash benchmarks. |
-| Full-tier score diagnostic | Tests 100% tier score support. | Still compresses selected OOS predictions and misses bull upside. |
-| Fallback diagnostics | Improves selection coverage. | Does not solve buy-and-hold underperformance. |
-| Allocation and regime-state challengers | Explores alternate labels. | No evidence yet that they produce deployable BTC participation. |
+| Config | Run ID | Strict gate | Active return vs buy-hold | Selected fold fraction | Predicted 100% tier | Score validity |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| `configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml` | `20260524T194740Z` | Failed | -10.1846 | 1.0000 | 0.0000 | Negative score/outcome correlations. |
+| `configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml` | `20260524T221456Z` | Failed | -10.4788 | 0.9333 | 0.1927 | 100% predictions appeared, but score/outcome correlations stayed negative. |
+| `configs/experiment.btc_phase8_bull_capture_static_audit.yaml` | `20260524T232741Z` | Failed | -10.1846 | 1.0000 | 0.0000 | Negative score/outcome correlations. |
 
-The financial interpretation is straightforward: the current system behaves
-more like a low-exposure risk filter than a BTC bull-capture strategy. That can
-be valuable only if it preserves a large enough portion of upside while
-materially reducing drawdown. Current artifacts do not satisfy that tradeoff.
+The matrix improved selection coverage relative to the cash-heavy methodology
+review, but it did not solve the research problem:
 
-## Next Run Matrix
+- every completed run failed the unchanged strict gate
+- active return versus buy-and-hold stayed deeply negative
+- gate-bull active return stayed negative
+- positive gate-bull days were still materially underexposed
+- target support stayed concentrated in 25% and 50% labels
+- selected OOS 100% prediction support was absent or insufficient
+- score-to-target, score-to-forward-return, and score-to-realized-utility
+  correlations stayed negative
 
-Run the next grid before adding new model families. The current failure is not
-yet proven to be a scikit-learn model limitation; the artifacts first need to
-separate selection objective, score mapping, and regime-floor effects.
+Allocation-grid tuning is therefore no longer the next best path. The current
+evidence points to a target/score definition problem: the labels and scores do
+not reliably separate BTC bull-continuation participation from drawdown-defense
+behavior.
 
-| Config | Purpose | Expected question |
-| --- | --- | --- |
-| `configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml` | Rebalanced benchmark selection with bull floors in the validation grid. | Can the strategy beat smoother BTC/cash benchmarks while keeping enough bull exposure? |
-| `configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml` | Lower `prob_tier_100` trigger to 0.16 and remove probability calibration. | Is 100% exposure being suppressed by score mapping/calibration rather than by the labels? |
-| `configs/experiment.btc_phase8_bull_capture_static_audit.yaml` | Include static and rebalanced benchmarks in selection. | Does any candidate survive when the validation objective matches the full strict benchmark family? |
+## Pivot
 
-Run one experiment at a time because each BTC long-history run is expensive:
+The next methodology work is tracked in
+[BTC Phase 8 Target/Score Pivot](target-score-pivot.md).
+
+The pivot adds one artifact-only diagnostic and three runnable configs:
+
+- `phase8-target-diagnostic` to inspect target and prediction behavior by
+  runtime regime, gate-bull rows, forward-return sign, target tier, predicted
+  tier, drawdown, and realized utility
+- `phase8-regime-policy-sweep` to test completed-bar runtime and gate-bull
+  exposure policies against persisted artifacts before launching another
+  expensive BTC training batch
+- `configs/experiment.btc_phase8_target_return_capture_utility.yaml`
+- `configs/experiment.btc_phase8_bull_signal_feature_utility.yaml`
+- `configs/experiment.btc_phase8_regime_state_bull_signal.yaml`
+
+The first target/score batch found one useful branch:
+`btc_phase8_bull_floor_signal_return_capture_fallback` beat buy-and-hold by
+`+0.1227`, but still failed the strict gate and produced no selected OOS 100%
+predicted tiers. The next repair batch adds research-only score transforms to
+that branch:
+
+- `configs/experiment.btc_phase8_bull_floor_score_boost_fallback.yaml`
+- `configs/experiment.btc_phase8_bull_floor_score_boost_uncalibrated.yaml`
+- `configs/experiment.btc_phase8_bull_floor_score_boost_long_train.yaml`
+
+Run the pivot batch one experiment at a time because each BTC long-history run
+is expensive:
 
 ```bash
-python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml
-python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml
-python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_capture_static_audit.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_target_return_capture_utility.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_signal_feature_utility.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_regime_state_bull_signal.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_floor_score_boost_fallback.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_floor_score_boost_uncalibrated.yaml
+python scripts/run_marketlab.py run-experiment --config configs/experiment.btc_phase8_bull_floor_score_boost_long_train.yaml
 ```
 
 After each run, regenerate diagnostics:
 
 ```bash
 python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-target-diagnostic --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-bull-participation --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs/<experiment>/<run-id>
 python scripts/run_marketlab.py phase8-bull-counterfactual --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+python scripts/run_marketlab.py phase8-regime-policy-sweep --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>
 ```
 
@@ -86,34 +117,21 @@ python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs -
 
 ## Decision Criteria
 
-Use `phase8_btc_grid_comparison.csv` to rank the next BTC method by these
-criteria, in this order:
+Use `phase8_btc_grid_comparison.csv` plus the target diagnostic to rank the
+next BTC method by these criteria, in this order:
 
 1. `strict_gate_passed` remains the only deployment pass condition.
 2. `active_return_vs_buy_hold` must improve materially, not only versus
    rebalanced benchmarks.
 3. `bull_upside_capture_ratio` and `gate_bull_average_long_exposure` must show
    actual BTC bull participation.
-4. `gate_bull_underexposed_positive_benchmark_return_sum` must shrink; a high
-   value means the strategy still misses positive BTC days while underexposed.
-5. `downside_capture_ratio`, `strategy_max_drawdown`, and `strategy_sharpe_like`
-   must preserve the reason to use an active strategy instead of buy-and-hold.
-6. `selected_fold_fraction` must reach the strict coverage threshold rather
-   than relying on one lucky fold.
-7. Score diagnostics must stop showing negative score-to-outcome relationships
-   before adding heavier ML models.
-
-If none of the three configs improves bull capture and score validity, then the
-next logical pivot is target/model research:
-
-- add target diagnostics that distinguish bull-continuation labels from
-  drawdown-defense labels
-- test a binary bull-participation classifier as a separate candidate feature,
-  not as an override
-- compare gradient boosting variants only after the current sklearn trio is
-  shown to fail under a better-defined target
-- keep counterfactual exposure rules diagnostic until they are selected by
-  validation and survive OOS strict-gate review
+4. `gate_bull_underexposed_positive_benchmark_return_sum` must shrink.
+5. Score diagnostics must stop showing negative score-to-outcome relationships.
+6. `phase8-target-diagnostic` should show higher full-target and
+   full-prediction fractions on bull-continuation rows without turning
+   drawdown-defense rows into full-exposure labels.
+7. `selected_fold_fraction` must reach the strict coverage threshold without
+   relying on fallback-only success.
 
 ## Artifact Pruning Policy
 

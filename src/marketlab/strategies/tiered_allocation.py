@@ -27,6 +27,7 @@ class RegimeParticipationPolicy:
     sideways_floor: float = 0.0
     bear_floor: float = 0.0
     risk_off_cap: float | None = 0.25
+    gate_bull_floor: float | None = None
 
 
 def _validate_thresholds(thresholds: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -146,6 +147,14 @@ def _regime_label(row: pd.Series) -> str:
     return "sideways"
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
 def _apply_regime_policy(
     target_weight: float,
     row: pd.Series,
@@ -157,13 +166,19 @@ def _apply_regime_policy(
     regime = _regime_label(row)
     if regime == "risk_off":
         if policy.risk_off_cap is None:
-            return target_weight
-        return min(target_weight, float(policy.risk_off_cap))
-    if regime == "bull":
-        return max(target_weight, float(policy.bull_floor))
-    if regime == "bear":
-        return max(target_weight, float(policy.bear_floor))
-    return max(target_weight, float(policy.sideways_floor))
+            adjusted_weight = target_weight
+        else:
+            adjusted_weight = min(target_weight, float(policy.risk_off_cap))
+    elif regime == "bull":
+        adjusted_weight = max(target_weight, float(policy.bull_floor))
+    elif regime == "bear":
+        adjusted_weight = max(target_weight, float(policy.bear_floor))
+    else:
+        adjusted_weight = max(target_weight, float(policy.sideways_floor))
+
+    if policy.gate_bull_floor is not None and _truthy(row.get("gate_bull", False)):
+        adjusted_weight = max(adjusted_weight, float(policy.gate_bull_floor))
+    return adjusted_weight
 
 
 def _validate_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
