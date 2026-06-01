@@ -351,6 +351,16 @@ iteration before expanding the grid:
 - `btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover`: the
   same non-circular gate-bull repair with longer holding periods and a lower
   turnover cap.
+- `btc_phase8_guarded_cost_robust_selector`: the calibrated score-validity
+  repair with validation candidates required to beat the configured benchmark
+  family at both 35 and 50 bps.
+- `btc_phase8_guarded_gate_bull_risk_off_override`: the same cost-robust
+  selector plus a validation-authorized completed-bar `gate_bull` override for
+  risk-off rows. The override applies to the next effective allocation only.
+- `btc_phase8_guarded_gate_bull_risk_off_override_partial_support`: the same
+  guarded override with the deterministic target-profile sweep result
+  `drawdown_penalty=0.75`, `volatility_penalty=0.25`, and
+  `risk_penalty_power=2.0`.
 
 ## 7. Cost-Aware Candidate Selection
 
@@ -388,6 +398,28 @@ max_annualized_turnover: 24.0
 This budget rejects candidates that can only work by changing exposure too
 often. It also protects the strict gate from accepting an overfit strategy that
 looks acceptable before realistic BTC cost drag.
+
+The guarded cost-robustness configs additionally set:
+
+```yaml
+selection_validation_cost_bps: [35, 50]
+```
+
+The same validation weights are repriced at each configured cost. A candidate
+must retain positive excess return versus every selection benchmark at every
+configured cost, and ranking prefers the strongest worst-cost benchmark
+margin. This changes research candidate selection only; it does not change the
+strict gate.
+
+Run the allocation-utility target sweep before the guarded batch:
+
+```bash
+python scripts/run_marketlab.py phase8-target-profile-sweep --config configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml --output artifacts/runs/phase8_btc_target_profile_sweep.csv
+```
+
+The sweep relabels the already prepared modeling rows without retraining. It
+records partial-tier support and selects the first passing profile
+deterministically.
 
 After a run, regenerate the deterministic summary without training models:
 
@@ -454,6 +486,14 @@ expected-allocation scores have finite non-negative forward-return correlation,
 Authorization is computed before promotion. Negative-correlation fallback
 folds keep expected-allocation scores and persist the denial reason. This rule
 does not change the strict research gate or approve paper deployment.
+
+The optional guarded risk-off override is also research-only. It is authorized
+from raw pre-promotion validation score ordering, never repaired scores. When
+authorized, only a completed-bar `gate_bull` row whose runtime label is
+`risk_off` receives a 100% next-effective allocation marker. Negative or
+non-finite raw correlation disables the override and persists the denial
+reason. A future shadow confirmation window that was not inspected while
+designing this rule is required before any deployment discussion.
 
 Build the consolidated methodology review without retraining models:
 

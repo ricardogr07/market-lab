@@ -140,6 +140,41 @@ No challenger is promoted for further research from this batch:
   50 bps evidence
 - all strict gates remained failed, so paper and live deployment remain blocked
 
+## Guarded Cost-Robustness Batch
+
+The next research batch keeps the calibrated non-circular score repair and
+tests two narrower hypotheses:
+
+- validation candidates must retain positive benchmark excess at both 35 and
+  50 bps using the same weights
+- a completed-bar `gate_bull` risk-off row may receive a 100% next-effective
+  allocation marker only when raw validation score ordering is finite and
+  non-negative
+
+The deterministic target-profile sweep selected
+`dd0.75_vol0.25_power2`, with 0%, 25%, 50%, and 100% target fractions of
+`0.4787`, `0.0537`, `0.0547`, and `0.4129`. The third challenger isolates that
+profile so partial-tier support is tested without another target search during
+training.
+
+Run the foreground batch with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_phase8_guarded_gate_bull_cost_robustness_batch.ps1
+```
+
+The batch runs:
+
+- `configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml`
+- `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml`
+- `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml`
+
+All three configs keep `paper.enabled: false`, avoid `gate_bull_floor`, and
+leave the strict gate unchanged. The guarded override remains research-only
+even if it improves the historical OOS window. Before any deployment
+discussion, confirm the selected rule on a future shadow window that was not
+inspected while designing the override.
+
 Run one experiment at a time:
 
 ```bash
@@ -185,6 +220,9 @@ python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs -
 | `configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml` | Tests validation-authorized completed-bar gate-bull 100% tier repair. | Uses raw pre-promotion score validity and leaves the strict gate unchanged. |
 | `configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity_uncalibrated.yaml` | Tests the same repair without sigmoid calibration. | Isolates probability calibration without using `gate_bull_floor`. |
 | `configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover.yaml` | Tests the same repair with longer holding periods and lower turnover. | Keeps the score-validity objective and strict gate unchanged. |
+| `configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml` | Requires the calibrated repair to survive selection repricing at 35 and 50 bps. | Changes research candidate selection only; strict gate remains unchanged. |
+| `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml` | Tests a raw-score-authorized completed-bar gate-bull risk-off override. | The marker applies to next-effective allocation only and cannot authorize itself. |
+| `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml` | Tests the same guarded override with the deterministic partial-support target profile. | Isolates target shape while retaining multi-cost selection and the unchanged strict gate. |
 
 ## Decision Rule
 
