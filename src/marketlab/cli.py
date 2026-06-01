@@ -43,7 +43,11 @@ from marketlab.reports.phase8_score_diagnostic import write_phase8_score_diagnos
 from marketlab.reports.phase8_selection_probe import write_phase8_selection_probe
 from marketlab.reports.phase8_summary import write_phase8_run_summary
 from marketlab.reports.phase8_target_diagnostic import write_phase8_target_diagnostic
+from marketlab.reports.phase8_target_profile_sweep import (
+    write_phase8_target_profile_sweep,
+)
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
+from marketlab.targets import build_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     phase8_target_diagnostic.add_argument("--run-dir", required=True)
     phase8_target_diagnostic.add_argument("--config")
     phase8_target_diagnostic.add_argument("--output-dir")
+
+    phase8_target_profile_sweep = subparsers.add_parser("phase8-target-profile-sweep")
+    phase8_target_profile_sweep.add_argument("--config", required=True)
+    phase8_target_profile_sweep.add_argument("--output")
 
     phase8_bull_counterfactual = subparsers.add_parser("phase8-bull-counterfactual")
     phase8_bull_counterfactual.add_argument("--run-dir", required=True)
@@ -334,6 +342,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(detail_path)
         print(summary_path)
+        return 0
+
+    if args.command == "phase8-target-profile-sweep":
+        load_env_file()
+        config = load_config(args.config)
+        panel, _ = prepare_data(config)
+        modeling_dataset = build_modeling_dataset(panel, config)
+        output_path = (
+            args.output
+            if args.output is not None
+            else "artifacts/runs/phase8_btc_target_profile_sweep.csv"
+        )
+        print(
+            write_phase8_target_profile_sweep(
+                modeling_dataset,
+                config=config,
+                output_path=output_path,
+            )
+        )
         return 0
 
     if args.command == "phase8-bull-counterfactual":
