@@ -1117,6 +1117,73 @@ def test_load_config_accepts_gate_bull_score_validity_repair_configs(
 
 
 @pytest.mark.parametrize(
+    ("path", "experiment_name", "guarded_override", "target_penalties"),
+    [
+        (
+            "configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml",
+            "btc_phase8_guarded_cost_robust_selector",
+            False,
+            (0.50, 0.25, 2.0),
+        ),
+        (
+            "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml",
+            "btc_phase8_guarded_gate_bull_risk_off_override",
+            True,
+            (0.50, 0.25, 2.0),
+        ),
+        (
+            "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml",
+            "btc_phase8_guarded_gate_bull_risk_off_override_partial_support",
+            True,
+            (0.75, 0.25, 2.0),
+        ),
+    ],
+)
+def test_load_config_accepts_guarded_gate_bull_cost_robustness_configs(
+    path: str,
+    experiment_name: str,
+    guarded_override: bool,
+    target_penalties: tuple[float, float, float],
+) -> None:
+    config = load_config(path)
+    tuning = config.evaluation.ml_strategy_tuning
+
+    assert config.experiment_name == experiment_name
+    assert config.paper.enabled is False
+    assert tuning.allocation_score_policy == "gate_bull_prob100_threshold"
+    assert tuning.selection_validation_cost_bps == [35.0, 50.0]
+    assert tuning.guarded_gate_bull_risk_off_override is guarded_override
+    assert (
+        config.target.allocation_utility_drawdown_penalty,
+        config.target.allocation_utility_volatility_penalty,
+        config.target.allocation_utility_risk_penalty_power,
+    ) == pytest.approx(target_penalties)
+    assert all(
+        policy.gate_bull_floor is None
+        for policy in tuning.regime_participation_policies
+    )
+
+
+def test_guarded_gate_bull_configs_leave_strict_gate_unchanged() -> None:
+    control_path = (
+        "configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml"
+    )
+    challenger_paths = [
+        "configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml",
+        "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml",
+        "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml",
+    ]
+    control = yaml.safe_load(Path(control_path).read_text(encoding="utf-8"))
+
+    for challenger_path in challenger_paths:
+        challenger = yaml.safe_load(Path(challenger_path).read_text(encoding="utf-8"))
+        assert (
+            challenger["evaluation"]["strict_research_gate"]
+            == control["evaluation"]["strict_research_gate"]
+        )
+
+
+@pytest.mark.parametrize(
     ("path", "experiment_name", "fallback_policy"),
     [
         (
@@ -1268,6 +1335,15 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         ({"hysteresis_margin_grid": [-0.01]}, "hysteresis_margin_grid"),
         ({"hysteresis_margin_grid": [0.50]}, "hysteresis_margin_grid"),
         ({"max_annualized_turnover": 0.0}, "max_annualized_turnover"),
+        ({"selection_validation_cost_bps": [-1.0]}, "selection_validation_cost_bps"),
+        (
+            {"selection_validation_cost_bps": [35.0, 35.0]},
+            "selection_validation_cost_bps",
+        ),
+        (
+            {"guarded_gate_bull_risk_off_override": "true"},
+            "guarded_gate_bull_risk_off_override",
+        ),
         ({"objective": "auc"}, "ml_strategy_tuning.objective"),
         ({"selection_policy": "loose"}, "ml_strategy_tuning.selection_policy"),
         ({"allocation_score_policy": "magic_score"}, "allocation_score_policy"),

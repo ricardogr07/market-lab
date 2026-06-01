@@ -175,6 +175,40 @@ def test_generate_weights_applies_completed_bar_gate_bull_floor_after_runtime_po
     assert _signal_weights(weights, predictions) == [1.0, 1.0, 0.25, 0.0]
 
 
+def test_generate_weights_applies_only_pre_authorized_guarded_risk_off_override() -> None:
+    predictions = pd.DataFrame(
+        {
+            "model_name": ["m"] * 3,
+            "fold_id": [1] * 3,
+            "signal_date": pd.date_range("2026-01-01", periods=3, freq="4h"),
+            "effective_date": pd.date_range("2026-01-01 04:00", periods=3, freq="4h"),
+            "symbol": ["BTC/USD"] * 3,
+            "score": [0.10, 0.10, 0.10],
+            "crypto_regime_risk_off": [1, 1, 0],
+            "crypto_regime_trend_state": [1, 1, 1],
+            "guarded_gate_bull_risk_off_override_triggered": [True, False, False],
+        }
+    )
+
+    weights = generate_weights(
+        predictions=predictions,
+        panel=_panel(),
+        thresholds=(0.25, 0.50, 0.75),
+        frequency="4h",
+        strategy_name="btc_direct_tiered",
+        direct_scores=True,
+        regime_policy=RegimeParticipationPolicy(
+            name="bull100_sideways25",
+            bull_floor=1.0,
+            sideways_floor=0.25,
+            bear_floor=0.0,
+            risk_off_cap=0.25,
+        ),
+    )
+
+    assert _signal_weights(weights, predictions) == [1.0, 0.0, 1.0]
+
+
 def test_generate_weights_regime_policy_uses_only_current_signal_row() -> None:
     predictions = pd.DataFrame(
         {

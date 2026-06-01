@@ -47,6 +47,12 @@ def _write_phase8_artifacts(run_dir: Path) -> None:
             ],
             "selected_regime_gate_bull_floor": [1.0, 1.0, pd.NA, pd.NA],
             "validation_score_policy_repair_authorized": [True, False, False, False],
+            "validation_guarded_gate_bull_risk_off_override_authorized": [
+                True,
+                False,
+                False,
+                False,
+            ],
         }
     ).to_csv(run_dir / "ml_strategy_tuning_selections.csv", index=False)
     pd.DataFrame(
@@ -61,6 +67,21 @@ def _write_phase8_artifacts(run_dir: Path) -> None:
             "validation_score_forward_return_correlation": [0.20, -0.10, -0.20],
             "validation_raw_score_forward_return_correlation": [0.10, -0.20, -0.30],
             "validation_score_policy_repair_authorized": [True, False, False],
+            "validation_guarded_gate_bull_risk_off_override_authorized": [
+                True,
+                False,
+                False,
+            ],
+            "guarded_gate_bull_risk_off_override_denied_reason": [
+                "",
+                "negative_validation_raw_score_forward_return_correlation",
+                "negative_validation_raw_score_forward_return_correlation",
+            ],
+            "min_selection_validation_cost_benchmark_excess_cumulative_return": [
+                0.02,
+                -0.03,
+                -0.05,
+            ],
             "score_policy_repair_denied_reason": [
                 "",
                 "negative_validation_raw_score_forward_return_correlation",
@@ -92,6 +113,20 @@ def _write_phase8_artifacts(run_dir: Path) -> None:
             "predicted_tier_weight": [0.0, 0.25, 0.25, 0.50, 1.0],
             "score_policy_repair_authorized": [True, True, True, True, True],
             "score_policy_triggered_100": [False, False, False, False, True],
+            "guarded_gate_bull_risk_off_override_authorized": [
+                True,
+                True,
+                True,
+                True,
+                True,
+            ],
+            "guarded_gate_bull_risk_off_override_triggered": [
+                False,
+                True,
+                False,
+                False,
+                False,
+            ],
         }
     ).to_csv(run_dir / "allocation_probability_diagnostics.csv", index=False)
     pd.DataFrame(
@@ -144,6 +179,18 @@ def test_build_phase8_run_summary_reads_persisted_run_artifacts(tmp_path: Path) 
     assert by_metric.loc["score_policy_triggered_100_fraction", "value"] == pytest.approx(
         0.2
     )
+    assert by_metric.loc[
+        "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "value",
+    ] == pytest.approx(0.5)
+    assert by_metric.loc[
+        "guarded_gate_bull_risk_off_override_triggered_fraction",
+        "value",
+    ] == pytest.approx(0.2)
+    assert by_metric.loc[
+        "min_selection_validation_cost_benchmark_excess_cumulative_return_min",
+        "value",
+    ] == pytest.approx(-0.05)
     assert (
         by_metric.loc[
             "validation_raw_score_forward_return_correlation_min",

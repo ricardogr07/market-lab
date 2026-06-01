@@ -1193,6 +1193,8 @@ def test_run_experiment_writes_allocation_utility_outputs(
                 "allocation_partial_class_weight_multiplier": 2.0,
                 "allocation_probability_calibration": "sigmoid",
                 "allocation_calibration_cv": 3,
+                "selection_validation_cost_bps": [10, 25],
+                "guarded_gate_bull_risk_off_override": True,
             },
             "strict_research_gate": {
                 "enabled": True,
@@ -1240,6 +1242,9 @@ def test_run_experiment_writes_allocation_utility_outputs(
     )
     assert {
         "selection_benchmark_strategies",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "min_benchmark_excess_cumulative_return",
         "utility_profile",
         "allocation_class_weighting",
@@ -1265,6 +1270,10 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
         "validation_score_transform_applied_fraction",
     }.issubset(tuning_candidates.columns)
     assert {
@@ -1286,6 +1295,13 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "validation_score_policy_repair_authorized",
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
     }.issubset(tuning_selections.columns)
     assert "selected_fold_fraction" in set(phase8_summary["metric"])
     assert {
@@ -1317,6 +1333,9 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "score_policy_repair_authorized",
         "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
         "score_transform_applied",
         "prob_tier_0",
         "prob_tier_25",
@@ -1327,6 +1346,8 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "fold_predicted_100_fraction",
         "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
         "fold_score_transform_applied_fraction",
     }.issubset(probability_diagnostics.columns)
     assert {"feature", "importance_type", "importance"}.issubset(feature_importance.columns)
@@ -1338,6 +1359,8 @@ def test_run_experiment_writes_allocation_utility_outputs(
     assert "Allocation score policy" in report_text
     assert "Allocation score transforms" in report_text
     assert "Repaired scores never authorize their own promotion" in report_text
+    assert "Configured selection validation costs are evaluated" in report_text
+    assert "Guarded gate-bull risk-off override is `True`" in report_text
     assert "Allocation target diagnostics" in report_text
     assert "selection_policy" in report_text
 

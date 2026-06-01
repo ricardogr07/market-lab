@@ -120,6 +120,12 @@ def _write_complete_run(run_dir: Path, *, strategy_return: float) -> None:
                 "value": 0.75,
                 "detail": "",
             },
+            {
+                "section": "guarded_gate_bull_risk_off_override",
+                "metric": "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+                "value": 0.50,
+                "detail": "",
+            },
         ]
     ).to_csv(run_dir / "phase8_run_summary.csv", index=False)
     pd.DataFrame(
@@ -266,6 +272,24 @@ def _write_complete_run(run_dir: Path, *, strategy_return: float) -> None:
                 "detail": "",
             },
             {
+                "section": "guarded_gate_bull_risk_off_override",
+                "metric": "guarded_gate_bull_risk_off_override_triggered_fraction",
+                "value": 0.05,
+                "detail": "",
+            },
+            {
+                "section": "guarded_gate_bull_risk_off_override",
+                "metric": "guarded_gate_bull_risk_off_override_authorized_fraction",
+                "value": 0.75,
+                "detail": "",
+            },
+            {
+                "section": "candidate_score_validity",
+                "metric": "min_selection_validation_cost_benchmark_excess_cumulative_return_min",
+                "value": -0.06,
+                "detail": "",
+            },
+            {
                 "section": "candidate_score_validity",
                 "metric": "negative_validation_score_forward_return_correlation_candidates",
                 "value": 2,
@@ -376,6 +400,20 @@ def test_build_phase8_grid_comparison_summarizes_complete_and_incomplete_runs(
     assert latest["score_policy_triggered_100_fraction"] == 0.15
     assert latest["score_policy_repair_authorized_fraction"] == 0.75
     assert latest["selected_validation_score_policy_repair_authorized_fraction"] == 0.75
+    assert latest["guarded_gate_bull_risk_off_override_triggered_fraction"] == 0.05
+    assert latest["guarded_gate_bull_risk_off_override_authorized_fraction"] == 0.75
+    assert (
+        latest[
+            "selected_validation_guarded_gate_bull_risk_off_override_authorized_fraction"
+        ]
+        == 0.50
+    )
+    assert (
+        latest[
+            "candidate_min_selection_validation_cost_benchmark_excess_cumulative_return"
+        ]
+        == -0.06
+    )
     assert latest["negative_validation_score_forward_return_correlation_candidates"] == 2
     assert latest["recommended_artifact_action"] == "keep_latest_complete"
     assert bool(latest["latest_complete_for_experiment"]) is True

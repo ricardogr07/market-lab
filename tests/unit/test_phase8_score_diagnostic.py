@@ -29,6 +29,15 @@ def _write_score_artifacts(run_dir: Path) -> None:
             "score_transform_applied": [True, True, False, False, True] * 2,
             "score_policy_repair_authorized": [True] * 10,
             "score_policy_triggered_100": [False, True, False, False, True] * 2,
+            "guarded_gate_bull_risk_off_override_authorized": [True] * 10,
+            "guarded_gate_bull_risk_off_override_triggered": [
+                False,
+                True,
+                False,
+                False,
+                False,
+            ]
+            * 2,
             "score": [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00],
             "prob_tier_100": [0.05, 0.06, 0.07, 0.08, 0.09, 0.30, 0.31, 0.32, 0.33, 0.34],
             "forward_return": [-0.04, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06],
@@ -58,6 +67,7 @@ def _write_score_artifacts(run_dir: Path) -> None:
                 "validation_score_forward_return_correlation": -0.25,
                 "validation_raw_score_forward_return_correlation": -0.35,
                 "validation_score_policy_repair_authorized": False,
+                "validation_guarded_gate_bull_risk_off_override_authorized": False,
                 "validation_score_target_correlation": 0.10,
                 "validation_gate_bull_average_exposure": 0.50,
                 "validation_gate_bull_underexposed_positive_benchmark_fraction": 1.0,
@@ -65,6 +75,7 @@ def _write_score_artifacts(run_dir: Path) -> None:
                 "validation_score_transform_applied_fraction": 0.60,
                 "min_validation_predicted_target_fraction": 0.20,
                 "min_benchmark_excess_cumulative_return": -0.01,
+                "min_selection_validation_cost_benchmark_excess_cumulative_return": -0.02,
                 "passed_gate": False,
             },
             {
@@ -88,6 +99,7 @@ def _write_score_artifacts(run_dir: Path) -> None:
                 "validation_score_forward_return_correlation": 0.40,
                 "validation_raw_score_forward_return_correlation": 0.30,
                 "validation_score_policy_repair_authorized": True,
+                "validation_guarded_gate_bull_risk_off_override_authorized": True,
                 "validation_score_target_correlation": 0.30,
                 "validation_gate_bull_average_exposure": 1.0,
                 "validation_gate_bull_underexposed_positive_benchmark_fraction": 0.0,
@@ -95,6 +107,7 @@ def _write_score_artifacts(run_dir: Path) -> None:
                 "validation_score_transform_applied_fraction": 0.0,
                 "min_validation_predicted_target_fraction": 0.10,
                 "min_benchmark_excess_cumulative_return": 0.03,
+                "min_selection_validation_cost_benchmark_excess_cumulative_return": 0.01,
                 "passed_gate": True,
             },
         ]
@@ -145,6 +158,14 @@ def test_build_phase8_score_diagnostic_reports_deciles_confusion_and_support(
     assert by_metric.loc["score_policy_repair_authorized_fraction", "value"] == pytest.approx(
         1.0
     )
+    assert by_metric.loc[
+        "guarded_gate_bull_risk_off_override_triggered_fraction",
+        "value",
+    ] == pytest.approx(0.20)
+    assert by_metric.loc[
+        "guarded_gate_bull_risk_off_override_authorized_fraction",
+        "value",
+    ] == pytest.approx(1.0)
     assert (
         by_metric.loc[
             "validation_score_forward_return_correlation_min",
@@ -170,6 +191,14 @@ def test_build_phase8_score_diagnostic_reports_deciles_confusion_and_support(
         "validation_score_policy_repair_authorized_fraction",
         "value",
     ] == pytest.approx(0.5)
+    assert by_metric.loc[
+        "validation_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "value",
+    ] == pytest.approx(0.5)
+    assert by_metric.loc[
+        "min_selection_validation_cost_benchmark_excess_cumulative_return_min",
+        "value",
+    ] == pytest.approx(-0.02)
 
     deciles = detail.loc[
         detail["section"].eq("score_deciles") & detail["metric"].eq("score_mean")

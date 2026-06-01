@@ -14,6 +14,7 @@ from marketlab.pipeline import (
     _apply_allocation_score_policy,
     _apply_allocation_score_transform,
     _deterministic_regime_fallback_weights_for_rows,
+    _guarded_gate_bull_risk_off_override_authorization,
     _latest_training_rows,
     _predicted_tier_support,
     _prediction_frame_with_allocation_score_policy,
@@ -21,6 +22,7 @@ from marketlab.pipeline import (
     _score_validity_metrics,
     _select_ml_strategy_candidate,
     _select_ml_strategy_candidate_for_policy,
+    _selection_validation_cost_bps,
     _strict_research_gate,
 )
 
@@ -352,6 +354,67 @@ def test_prediction_frame_records_denied_gate_bull_repair_without_promoting() ->
     assert transformed["score_policy_repair_denied_reason"].tolist() == [
         "negative_validation_raw_score_forward_return_correlation"
     ]
+
+
+@pytest.mark.parametrize(
+    ("enabled", "correlation", "authorized", "denied_reason"),
+    [
+        (False, 0.20, False, ""),
+        (True, 0.20, True, ""),
+        (True, 0.0, True, ""),
+        (True, -0.01, False, "negative_validation_raw_score_forward_return_correlation"),
+        (True, pd.NA, False, "non_finite_validation_raw_score_forward_return_correlation"),
+    ],
+)
+def test_guarded_gate_bull_risk_off_override_requires_raw_score_validity(
+    enabled: bool,
+    correlation: object,
+    authorized: bool,
+    denied_reason: str,
+) -> None:
+    assert _guarded_gate_bull_risk_off_override_authorization(
+        enabled=enabled,
+        validation_raw_score_forward_return_correlation=correlation,
+    ) == (authorized, denied_reason)
+
+
+def test_prediction_frame_marks_only_authorized_gate_bull_risk_off_rows() -> None:
+    predictions = pd.DataFrame(
+        {
+            "score": [0.42, 0.42, 0.42],
+            "raw_expected_allocation_score": [0.42, 0.42, 0.42],
+            "gate_bull": [True, False, True],
+            "crypto_regime_risk_off": [1, 1, 0],
+            "crypto_regime_trend_state": [1, 1, 1],
+            "prob_tier_0": [0.10, 0.10, 0.10],
+            "prob_tier_100": [0.30, 0.30, 0.30],
+        }
+    )
+
+    transformed = _prediction_frame_with_allocation_score_policy(
+        predictions=predictions,
+        allocation_score_policy="gate_bull_prob100_threshold",
+        prob100_threshold=0.20,
+        score_policy_repair_authorized=True,
+        guarded_gate_bull_risk_off_override_enabled=True,
+        guarded_gate_bull_risk_off_override_authorized=True,
+    )
+
+    assert transformed["guarded_gate_bull_risk_off_override_triggered"].tolist() == [
+        True,
+        False,
+        False,
+    ]
+
+
+def test_selection_validation_costs_default_to_portfolio_cost() -> None:
+    config = ExperimentConfig()
+    config.portfolio.costs.bps_per_trade = 35.0
+
+    assert _selection_validation_cost_bps(config) == [35.0]
+
+    config.evaluation.ml_strategy_tuning.selection_validation_cost_bps = [35.0, 50.0]
+    assert _selection_validation_cost_bps(config) == [35.0, 50.0]
 
 
 def test_deterministic_regime_fallback_weights_map_test_regime_labels() -> None:
@@ -1024,6 +1087,33 @@ def test_ml_strategy_candidate_selection_prefers_required_benchmark_margin() -> 
     selected = _select_ml_strategy_candidate(candidates)
 
     assert selected["model_name"] == "better_benchmark_margin"
+
+
+def test_ml_strategy_candidate_selection_prefers_worst_cost_benchmark_margin() -> None:
+    candidates = [
+        {
+            "model_name": "better_base_cost",
+            "excess_cumulative_return": 0.20,
+            "min_benchmark_excess_cumulative_return": 0.08,
+            "min_selection_validation_cost_benchmark_excess_cumulative_return": 0.01,
+            "drawdown_delta": 1.0,
+            "sharpe_like_delta": 1.0,
+            "annualized_turnover": 1.0,
+        },
+        {
+            "model_name": "better_worst_cost",
+            "excess_cumulative_return": 0.12,
+            "min_benchmark_excess_cumulative_return": 0.05,
+            "min_selection_validation_cost_benchmark_excess_cumulative_return": 0.03,
+            "drawdown_delta": 0.0,
+            "sharpe_like_delta": 0.0,
+            "annualized_turnover": 10.0,
+        },
+    ]
+
+    selected = _select_ml_strategy_candidate(candidates)
+
+    assert selected["model_name"] == "better_worst_cost"
 
 
 def _runtime_selection_candidate(
