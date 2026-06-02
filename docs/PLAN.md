@@ -111,6 +111,7 @@ Current Phase 8 rules:
 - treat Phase 8 diagnostic commands as artifact review only
 - use `phase8-methodology-review` to separate deployment readiness from risk allocation, score validity, bull participation, and diagnostic-only counterfactual hypotheses
 - use `phase8-grid-compare`, `phase8-target-diagnostic`, `phase8-regime-policy-sweep`, and the BTC target/score pivot notes before pivoting to heavier ML models
+- use the [BTC Phase 8 Shadow-Confirmation Plan](phase8/BTC/shadow-confirmation-plan.md) as the locked forward-confirmation handoff for the historical partial-support challenger
 - keep crypto/BTC paper work blocked unless the strict research gate passes
 
 ## Phase 9 Boundary

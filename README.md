@@ -7,7 +7,7 @@ See [docs/solid-architecture-audit.md](docs/solid-architecture-audit.md) for the
 See [docs/service-extraction-readiness.md](docs/service-extraction-readiness.md) for the checklist used before extracting services, ports, or adapters.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
 See [docs/paper-trading.md](docs/paper-trading.md) for the Phase 7 daily single-ETF paper-trading loop and local Docker Compose shape.
-See [docs/crypto-hourly-trend.md](docs/crypto-hourly-trend.md), [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md), and [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md) for the Phase 8 crypto/BTC research lanes, strict paper-gating methodology, and current BTC bull-upside plan.
+See [docs/crypto-hourly-trend.md](docs/crypto-hourly-trend.md), [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md), [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md), and [docs/phase8/BTC/shadow-confirmation-plan.md](docs/phase8/BTC/shadow-confirmation-plan.md) for the Phase 8 crypto/BTC research lanes, strict paper-gating methodology, current BTC bull-upside plan, and locked shadow-confirmation handoff.
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
 See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
 See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
@@ -353,7 +353,7 @@ The tracked crypto research configs include:
 - `configs/experiment.crypto_indicator_ml_tuned_12h_2024_ytd.yaml`
 - `configs/experiment.crypto_indicator_ml_tuned_24h_2024_ytd.yaml`
 
-The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review. `configs/experiment.btc_phase8_methodology_review.yaml` records the strict methodology review, and the current target/score, regime-policy, and score-transform experiments are tracked from [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md).
+The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review. `configs/experiment.btc_phase8_methodology_review.yaml` records the strict methodology review, the current target/score, regime-policy, and score-transform experiments are tracked from [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md), and the locked historical challenger handoff is defined in [docs/phase8/BTC/shadow-confirmation-plan.md](docs/phase8/BTC/shadow-confirmation-plan.md).
 
 BTC paper uses its own tracked config and Docker shape:
 

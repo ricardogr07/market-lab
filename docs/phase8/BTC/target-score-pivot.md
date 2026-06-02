@@ -197,6 +197,10 @@ blocked until the same locked rule is confirmed on an uninspected shadow
 window and the fallback dependency is resolved or explicitly accepted by a
 separate methodology decision.
 
+The locked dates, approval boundary, graduation criteria, and parallel
+experiment backlog are recorded in the
+[BTC Phase 8 Shadow-Confirmation Plan](shadow-confirmation-plan.md).
+
 Run one experiment at a time:
 
 ```bash

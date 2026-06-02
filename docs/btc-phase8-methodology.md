@@ -500,6 +500,8 @@ every unchanged strict-gate row on June 2, 2026. It remains a shadow-confirmatio
 candidate, not a paper or live approval: the methodology review still flags
 signal-validity and bull-participation diagnostics, and all selected folds used
 diagnostic fallback paths rather than strict validation-selected candidates.
+The locked forward-confirmation lane is defined in the
+[BTC Phase 8 Shadow-Confirmation Plan](phase8/BTC/shadow-confirmation-plan.md).
 
 Build the consolidated methodology review without retraining models:
 
