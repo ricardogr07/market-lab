@@ -34,10 +34,15 @@ def test_phase8_docs_are_linked_from_mkdocs_nav() -> None:
     assert "BTC Phase 8 Methodology: btc-phase8-methodology.md" in nav_text
     assert "BTC Phase 8 Bull Upside: phase8/BTC/bull-upside-methodology.md" in nav_text
     assert "BTC Phase 8 Target/Score Pivot: phase8/BTC/target-score-pivot.md" in nav_text
+    assert (
+        "BTC Phase 8 Shadow Confirmation: phase8/BTC/shadow-confirmation-plan.md"
+        in nav_text
+    )
     assert Path("docs/crypto-hourly-trend.md").exists()
     assert Path("docs/btc-phase8-methodology.md").exists()
     assert Path("docs/phase8/BTC/bull-upside-methodology.md").exists()
     assert Path("docs/phase8/BTC/target-score-pivot.md").exists()
+    assert Path("docs/phase8/BTC/shadow-confirmation-plan.md").exists()
 
 
 def test_top_level_docs_describe_current_phase8_and_btc_paper_surface() -> None:
