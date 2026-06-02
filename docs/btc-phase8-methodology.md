@@ -495,6 +495,12 @@ non-finite raw correlation disables the override and persists the denial
 reason. A future shadow confirmation window that was not inspected while
 designing this rule is required before any deployment discussion.
 
+The first historical OOS run of the isolated partial-support challenger passed
+every unchanged strict-gate row on June 2, 2026. It remains a shadow-confirmation
+candidate, not a paper or live approval: the methodology review still flags
+signal-validity and bull-participation diagnostics, and all selected folds used
+diagnostic fallback paths rather than strict validation-selected candidates.
+
 Build the consolidated methodology review without retraining models:
 
 ```bash

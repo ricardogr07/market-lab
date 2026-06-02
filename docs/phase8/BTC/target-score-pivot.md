@@ -175,6 +175,28 @@ even if it improves the historical OOS window. Before any deployment
 discussion, confirm the selected rule on a future shadow window that was not
 inspected while designing the override.
 
+### Completed Guarded Batch
+
+The guarded batch completed on June 2, 2026. The isolated partial-support
+challenger passed every unchanged strict-gate row on the inspected historical
+OOS window:
+
+| Experiment | Run ID | Active return vs buy-hold | 50 bps active return vs buy-hold | Gate-bull exposure | OOS 100% tier fraction | Score/forward-return correlation | Guarded trigger fraction | Strict gate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `btc_phase8_bull_floor_score_validity_selection` | `20260529T233127Z` | +0.1227 | -1.2909 | 0.8327 | 0.0000 | 0.0805 | n/a | Failed |
+| `btc_phase8_guarded_cost_robust_selector` | `20260601T204931Z` | +0.1227 | -1.2909 | 0.8327 | 0.1380 | 0.0620 | 0.0000 | Failed |
+| `btc_phase8_guarded_gate_bull_risk_off_override` | `20260602T045028Z` | +1.5032 | +0.1636 | 0.9301 | 0.0629 | 0.0721 | 0.0780 | Failed |
+| `btc_phase8_guarded_gate_bull_risk_off_override_partial_support` | `20260602T081225Z` | +2.2940 | +0.8094 | 0.9323 | 0.0569 | 0.0430 | 0.0892 | Passed |
+
+The passed row is promoted only to future shadow confirmation. Its methodology
+review still flags signal-validity and bull-participation diagnostics, and its
+15 selected folds use diagnostic fallback paths: 10 `best_active_fallback`
+selections and 5 deterministic `regime_policy_fallback` selections. No fold
+uses a strict validation-selected candidate. Keep paper and live deployment
+blocked until the same locked rule is confirmed on an uninspected shadow
+window and the fallback dependency is resolved or explicitly accepted by a
+separate methodology decision.
+
 Run one experiment at a time:
 
 ```bash
