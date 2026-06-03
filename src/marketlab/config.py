@@ -24,11 +24,13 @@ ML_STRATEGY_ALLOCATION_MODES = {"binary", "direct_tiered", "tiered"}
 ML_STRATEGY_TUNING_OBJECTIVES = {
     "net_return_and_risk_vs_buy_hold",
     "net_return_and_risk_vs_required_benchmarks",
+    "net_return_risk_score_validity_vs_required_benchmarks",
 }
 ML_STRATEGY_SELECTION_POLICIES = {"best_active_fallback", "strict"}
 ML_STRATEGY_ALLOCATION_SCORE_POLICIES = {
     "bull_prob100_threshold",
     "expected_allocation",
+    "gate_bull_prob100_threshold",
 }
 ALLOCATION_CLASS_WEIGHTING_MODES = {
     "balanced",
@@ -36,7 +38,7 @@ ALLOCATION_CLASS_WEIGHTING_MODES = {
     "none",
 }
 ALLOCATION_PROBABILITY_CALIBRATION_MODES = {"none", "sigmoid"}
-REGIME_PARTICIPATION_POLICY_TIERS = {0.0, 0.25, 0.50, 1.0}
+REGIME_PARTICIPATION_POLICY_TIERS = {0.0, 0.25, 0.50, 0.75, 1.0}
 WEIGHT_TOLERANCE = 1e-6
 INTERVAL_PERIODS_PER_YEAR = {
     "1d": 252.0,
@@ -93,6 +95,7 @@ class FeaturesConfig:
     crypto_regime_percentile_window: int = 252
     crypto_regime_drawdown_window: int = 252
     crypto_regime_volume_window: int = 42
+    crypto_regime_signal_features_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -317,6 +320,16 @@ class RegimeParticipationPolicyConfig:
     sideways_floor: float = 0.0
     bear_floor: float = 0.0
     risk_off_cap: float | None = 0.25
+    gate_bull_floor: float | None = None
+
+
+@dataclass(slots=True)
+class AllocationScoreTransformConfig:
+    name: str = "identity"
+    bull_multiplier: float = 1.0
+    bull_addend: float = 0.0
+    risk_off_score_cap: float | None = None
+    non_bull_score_cap: float | None = None
 
 
 @dataclass(slots=True)
@@ -345,12 +358,19 @@ class MLStrategyTuningConfig:
         default_factory=lambda: [RegimeParticipationPolicyConfig()]
     )
     no_candidate_fallback_regime_policy: str | None = None
+    no_valid_candidate_regime_fallback: str | None = None
     allocation_class_weighting: str = "none"
     allocation_partial_class_weight_multiplier: float = 1.0
     allocation_probability_calibration: str = "none"
     allocation_calibration_cv: int = 3
     allocation_score_policy: str = "expected_allocation"
     allocation_score_policy_prob100_threshold: float = 0.20
+    allocation_score_policy_prob100_threshold_grid: list[float] = field(default_factory=list)
+    selection_validation_cost_bps: list[float] = field(default_factory=list)
+    guarded_gate_bull_risk_off_override: bool = False
+    allocation_score_transforms: list[AllocationScoreTransformConfig] = field(
+        default_factory=lambda: [AllocationScoreTransformConfig()]
+    )
 
 
 @dataclass(slots=True)
@@ -558,6 +578,19 @@ def _normalize_mapping_sections(config: ExperimentConfig) -> None:
         config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid = [0]
     if config.evaluation.ml_strategy_tuning.hysteresis_margin_grid is None:
         config.evaluation.ml_strategy_tuning.hysteresis_margin_grid = [0.0]
+    if config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid is None:
+        config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid = []
+    if config.evaluation.ml_strategy_tuning.allocation_score_transforms is None:
+        config.evaluation.ml_strategy_tuning.allocation_score_transforms = [
+            AllocationScoreTransformConfig()
+        ]
+    else:
+        config.evaluation.ml_strategy_tuning.allocation_score_transforms = [
+            transform
+            if isinstance(transform, AllocationScoreTransformConfig)
+            else _section(AllocationScoreTransformConfig, transform)
+            for transform in config.evaluation.ml_strategy_tuning.allocation_score_transforms
+        ] or [AllocationScoreTransformConfig()]
     if config.evaluation.ml_strategy_tuning.allocation_utility_profiles is None:
         config.evaluation.ml_strategy_tuning.allocation_utility_profiles = []
     else:
@@ -627,6 +660,28 @@ def _validate_cap(label: str, value: float | None) -> None:
         return
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{label} must be between 0.0 and 1.0.")
+
+
+def _validate_optional_score_cap(label: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite value between 0.0 and 1.0.") from exc
+    if not math.isfinite(numeric_value) or not 0.0 <= numeric_value <= 1.0:
+        raise ValueError(f"{label} must be a finite value between 0.0 and 1.0.")
+    return numeric_value
+
+
+def _validate_score_transform_float(label: str, value: float) -> float:
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be finite.") from exc
+    if not math.isfinite(numeric_value):
+        raise ValueError(f"{label} must be finite.")
+    return numeric_value
 
 
 def _validate_non_negative_bps_list(label: str, values: list[float]) -> None:
@@ -925,6 +980,82 @@ def _validate_config(config: ExperimentConfig) -> None:
     ml_tuning.allocation_score_policy_prob100_threshold = (
         allocation_score_policy_prob100_threshold
     )
+    validated_prob100_threshold_grid: list[float] = []
+    for threshold in ml_tuning.allocation_score_policy_prob100_threshold_grid:
+        try:
+            threshold_value = float(threshold)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid must contain finite values between 0.0 and 1.0."
+            ) from exc
+        if (
+            not math.isfinite(threshold_value)
+            or threshold_value < 0.0
+            or threshold_value > 1.0
+        ):
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid must contain finite values between 0.0 and 1.0."
+            )
+        validated_prob100_threshold_grid.append(threshold_value)
+    ml_tuning.allocation_score_policy_prob100_threshold_grid = (
+        validated_prob100_threshold_grid
+    )
+    validated_selection_validation_cost_bps: list[float] = []
+    seen_selection_validation_cost_bps: set[float] = set()
+    for cost_bps in ml_tuning.selection_validation_cost_bps:
+        try:
+            cost_value = float(cost_bps)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must contain finite non-negative values."
+            ) from exc
+        if not math.isfinite(cost_value) or cost_value < 0.0:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must contain finite non-negative values."
+            )
+        if cost_value in seen_selection_validation_cost_bps:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.selection_validation_cost_bps must not contain duplicate values."
+            )
+        seen_selection_validation_cost_bps.add(cost_value)
+        validated_selection_validation_cost_bps.append(cost_value)
+    ml_tuning.selection_validation_cost_bps = validated_selection_validation_cost_bps
+    if not isinstance(ml_tuning.guarded_gate_bull_risk_off_override, bool):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.guarded_gate_bull_risk_off_override must be a boolean."
+        )
+    seen_score_transform_names: set[str] = set()
+    for transform in ml_tuning.allocation_score_transforms:
+        transform.name = str(transform.name).strip()
+        if transform.name == "":
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_score_transforms names must be non-empty."
+            )
+        if transform.name in seen_score_transform_names:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_score_transforms must not contain duplicate names."
+            )
+        seen_score_transform_names.add(transform.name)
+        transform.bull_multiplier = _validate_score_transform_float(
+            f"evaluation.ml_strategy_tuning.allocation_score_transforms[{transform.name}].bull_multiplier",
+            transform.bull_multiplier,
+        )
+        if transform.bull_multiplier < 0.0:
+            raise ValueError(
+                "evaluation.ml_strategy_tuning.allocation_score_transforms bull_multiplier must be non-negative."
+            )
+        transform.bull_addend = _validate_score_transform_float(
+            f"evaluation.ml_strategy_tuning.allocation_score_transforms[{transform.name}].bull_addend",
+            transform.bull_addend,
+        )
+        transform.risk_off_score_cap = _validate_optional_score_cap(
+            f"evaluation.ml_strategy_tuning.allocation_score_transforms[{transform.name}].risk_off_score_cap",
+            transform.risk_off_score_cap,
+        )
+        transform.non_bull_score_cap = _validate_optional_score_cap(
+            f"evaluation.ml_strategy_tuning.allocation_score_transforms[{transform.name}].non_bull_score_cap",
+            transform.non_bull_score_cap,
+        )
     seen_selection_benchmarks: set[str] = set()
     for benchmark_strategy in ml_tuning.selection_benchmark_strategies:
         benchmark_name = str(benchmark_strategy).strip()
@@ -938,7 +1069,11 @@ def _validate_config(config: ExperimentConfig) -> None:
             )
         seen_selection_benchmarks.add(benchmark_name)
     if (
-        ml_tuning.objective == "net_return_and_risk_vs_required_benchmarks"
+        ml_tuning.objective
+        in {
+            "net_return_and_risk_vs_required_benchmarks",
+            "net_return_risk_score_validity_vs_required_benchmarks",
+        }
         and not ml_tuning.selection_benchmark_strategies
     ):
         raise ValueError(
@@ -1004,16 +1139,37 @@ def _validate_config(config: ExperimentConfig) -> None:
                 f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].risk_off_cap",
                 policy.risk_off_cap,
             )
-    if ml_tuning.no_candidate_fallback_regime_policy is not None:
-        fallback_policy_name = str(ml_tuning.no_candidate_fallback_regime_policy).strip()
+        if policy.gate_bull_floor is not None:
+            policy.gate_bull_floor = _validate_regime_policy_tier(
+                f"evaluation.ml_strategy_tuning.regime_participation_policies[{policy.name}].gate_bull_floor",
+                policy.gate_bull_floor,
+            )
+    configured_fallback_names = [
+        str(value).strip()
+        for value in (
+            ml_tuning.no_candidate_fallback_regime_policy,
+            ml_tuning.no_valid_candidate_regime_fallback,
+        )
+        if value is not None
+    ]
+    if (
+        len(configured_fallback_names) == 2
+        and configured_fallback_names[0] != configured_fallback_names[1]
+    ):
+        raise ValueError(
+            "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+            "and no_valid_candidate_regime_fallback must match when both are configured."
+        )
+    fallback_policy_name = configured_fallback_names[0] if configured_fallback_names else None
+    if fallback_policy_name is not None:
         if fallback_policy_name == "":
             raise ValueError(
-                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy must be non-empty when configured."
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy/no_valid_candidate_regime_fallback must be non-empty when configured."
             )
         if fallback_policy_name not in seen_policy_names:
             allowed = ", ".join(sorted(seen_policy_names))
             raise ValueError(
-                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy/no_valid_candidate_regime_fallback "
                 f"must reference one of regime_participation_policies: {allowed}."
             )
         fallback_policy = next(
@@ -1023,10 +1179,11 @@ def _validate_config(config: ExperimentConfig) -> None:
         )
         if fallback_policy.risk_off_cap is None:
             raise ValueError(
-                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy "
+                "evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy/no_valid_candidate_regime_fallback "
                 "requires the referenced policy to define risk_off_cap."
             )
         ml_tuning.no_candidate_fallback_regime_policy = fallback_policy_name
+        ml_tuning.no_valid_candidate_regime_fallback = fallback_policy_name
     if ml_tuning.allocation_class_weighting not in ALLOCATION_CLASS_WEIGHTING_MODES:
         allowed = ", ".join(sorted(ALLOCATION_CLASS_WEIGHTING_MODES))
         raise ValueError(

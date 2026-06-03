@@ -110,6 +110,7 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.evaluation.ml_strategy_tuning.max_annualized_turnover is None
     assert config.evaluation.ml_strategy_tuning.selection_policy == "strict"
     assert config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy is None
+    assert config.evaluation.ml_strategy_tuning.no_valid_candidate_regime_fallback is None
     assert (
         config.evaluation.ml_strategy_tuning.allocation_score_policy
         == "expected_allocation"
@@ -118,6 +119,17 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
         config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold
         == pytest.approx(0.20)
     )
+    assert config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid == []
+    assert [
+        (
+            transform.name,
+            transform.bull_multiplier,
+            transform.bull_addend,
+            transform.risk_off_score_cap,
+            transform.non_bull_score_cap,
+        )
+        for transform in config.evaluation.ml_strategy_tuning.allocation_score_transforms
+    ] == [("identity", 1.0, 0.0, None, None)]
     assert [
         (
             policy.name,
@@ -125,9 +137,10 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
             policy.sideways_floor,
             policy.bear_floor,
             policy.risk_off_cap,
+            policy.gate_bull_floor,
         )
         for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
-    ] == [("model_only", 0.0, 0.0, 0.0, 0.25)]
+    ] == [("model_only", 0.0, 0.0, 0.0, 0.25, None)]
     assert config.baselines.pattern_exit_overlay.enabled is False
     assert config.baselines.pattern_meta_label.enabled is False
 
@@ -155,6 +168,7 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
             "crypto_bollinger_std": 2.0,
             "crypto_volume_window": 24,
             "crypto_time_features": True,
+            "crypto_regime_signal_features_enabled": True,
         },
         evaluation={
             "ml_strategy_threshold_sweep": {
@@ -183,6 +197,7 @@ def test_load_config_accepts_crypto_time_series_features_and_ml_sweep(
 
     assert config.features.indicator_stack_ml_features_enabled is True
     assert config.features.crypto_time_series_enabled is True
+    assert config.features.crypto_regime_signal_features_enabled is True
     assert config.features.crypto_return_windows == [1, 12, 24]
     assert config.features.crypto_ma_windows == [24]
     assert config.evaluation.ml_strategy_threshold_sweep.enabled is True
@@ -236,6 +251,158 @@ def test_load_config_accepts_no_candidate_fallback_regime_policy(
         config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
         == "bull100_sideways25"
     )
+    assert (
+        config.evaluation.ml_strategy_tuning.no_valid_candidate_regime_fallback
+        == "bull100_sideways25"
+    )
+
+
+def test_load_config_accepts_regime_gate_bull_floor(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "regime_participation_policies": [
+                    {
+                        "name": "gate_bull_override",
+                        "bull_floor": 0.75,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                        "gate_bull_floor": 1.0,
+                    }
+                ],
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    policy = config.evaluation.ml_strategy_tuning.regime_participation_policies[0]
+    assert policy.gate_bull_floor == pytest.approx(1.0)
+
+
+def test_load_config_rejects_invalid_regime_gate_bull_floor(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "regime_participation_policies": [
+                    {
+                        "name": "bad_gate_bull_floor",
+                        "gate_bull_floor": 0.33,
+                    }
+                ],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="gate_bull_floor"):
+        load_config(config_path)
+
+
+def test_load_config_accepts_no_valid_candidate_regime_fallback_alias(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "no_valid_candidate_regime_fallback": "bull100_sideways25",
+                "allocation_score_policy": "bull_prob100_threshold",
+                "allocation_score_policy_prob100_threshold_grid": [0.2, 0.36],
+                "regime_participation_policies": [
+                    {
+                        "name": "bull100_sideways25",
+                        "bull_floor": 1.0,
+                        "sideways_floor": 0.25,
+                        "bear_floor": 0.0,
+                        "risk_off_cap": 0.25,
+                    }
+                ],
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    assert (
+        config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
+        == "bull100_sideways25"
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.no_valid_candidate_regime_fallback
+        == "bull100_sideways25"
+    )
+    assert config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid == [
+        0.2,
+        0.36,
+    ]
+
+
+def test_load_config_accepts_allocation_score_transforms(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_score_transforms": [
+                    {"name": "identity"},
+                    {
+                        "name": "bull_shift_18",
+                        "bull_multiplier": 1.0,
+                        "bull_addend": 0.18,
+                        "risk_off_score_cap": 0.25,
+                        "non_bull_score_cap": 0.50,
+                    },
+                ],
+            },
+        },
+    )
+
+    config = load_config(config_path)
+
+    transforms = config.evaluation.ml_strategy_tuning.allocation_score_transforms
+    assert [(transform.name, transform.bull_addend) for transform in transforms] == [
+        ("identity", 0.0),
+        ("bull_shift_18", 0.18),
+    ]
+    assert transforms[1].bull_multiplier == pytest.approx(1.0)
+    assert transforms[1].risk_off_score_cap == pytest.approx(0.25)
+    assert transforms[1].non_bull_score_cap == pytest.approx(0.50)
+
+
+@pytest.mark.parametrize(
+    "allocation_score_transforms",
+    [
+        [{"name": ""}],
+        [{"name": "duplicate"}, {"name": "duplicate"}],
+        [{"name": "bad_multiplier", "bull_multiplier": float("nan")}],
+        [{"name": "bad_multiplier", "bull_multiplier": -0.01}],
+        [{"name": "bad_addend", "bull_addend": float("inf")}],
+        [{"name": "bad_cap", "risk_off_score_cap": 1.10}],
+        [{"name": "bad_cap", "non_bull_score_cap": -0.01}],
+    ],
+)
+def test_load_config_rejects_invalid_allocation_score_transforms(
+    tmp_path: Path,
+    allocation_score_transforms: list[dict[str, object]],
+) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        evaluation={
+            "ml_strategy_tuning": {
+                "enabled": True,
+                "allocation_score_transforms": allocation_score_transforms,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="allocation_score_transforms"):
+        load_config(config_path)
 
 
 def test_load_config_accepts_btc_regime_tiered_research_config() -> None:
@@ -491,6 +658,12 @@ def test_load_config_accepts_btc_regime_state_long_history_config() -> None:
             "allocation_utility",
             "best_active_fallback",
         ),
+        (
+            "configs/experiment.btc_phase8_methodology_review.yaml",
+            "btc_phase8_methodology_review",
+            "allocation_utility",
+            "strict",
+        ),
     ],
 )
 def test_load_config_accepts_btc_long_history_challenger_configs(
@@ -529,17 +702,28 @@ def test_load_config_accepts_btc_long_history_challenger_configs(
     if "full_tier_score" in path:
         assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0]
         assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0]
+    elif "methodology_review" in path:
+        assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
+            0,
+            18,
+        ]
+        assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
     else:
         assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [
             18,
             36,
         ]
         assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.02, 0.04]
-    expected_policy_names = (
-        ["bull100_sideways25"]
-        if "full_tier_score" in path
-        else ["bull100_sideways25", "bull100_sideways50_bear25"]
-    )
+    if "full_tier_score" in path:
+        expected_policy_names = ["bull100_sideways25"]
+    elif "methodology_review" in path:
+        expected_policy_names = [
+            "model_only",
+            "bull50_sideways25",
+            "bull100_sideways25",
+        ]
+    else:
+        expected_policy_names = ["bull100_sideways25", "bull100_sideways50_bear25"]
     assert [
         policy.name
         for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
@@ -552,10 +736,11 @@ def test_load_config_accepts_btc_long_history_challenger_configs(
             policy.sideways_floor,
             policy.bear_floor,
             policy.risk_off_cap,
+            policy.gate_bull_floor,
         ]
         if value is not None
     }
-    assert policy_tiers <= {0.0, 0.25, 0.50, 1.0}
+    assert policy_tiers <= {0.0, 0.25, 0.50, 0.75, 1.0}
     assert [
         profile.name
         for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
@@ -576,6 +761,426 @@ def test_load_config_accepts_btc_long_history_challenger_configs(
         0.25,
         0.50,
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "target_type", "signal_features_enabled"),
+    [
+        (
+            "configs/experiment.btc_phase8_target_return_capture_utility.yaml",
+            "btc_phase8_target_return_capture_utility",
+            "allocation_utility",
+            False,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_signal_feature_utility.yaml",
+            "btc_phase8_bull_signal_feature_utility",
+            "allocation_utility",
+            True,
+        ),
+        (
+            "configs/experiment.btc_phase8_regime_state_bull_signal.yaml",
+            "btc_phase8_regime_state_bull_signal",
+            "regime_state",
+            True,
+        ),
+    ],
+)
+def test_load_config_accepts_btc_target_score_pivot_configs(
+    path: str,
+    experiment_name: str,
+    target_type: str,
+    signal_features_enabled: bool,
+) -> None:
+    config = load_config(path)
+
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "1d"
+    assert config.data.cache_dir == "artifacts/data-btc-phase8-1d-long"
+    assert config.target.type == target_type
+    assert config.paper.enabled is False
+    assert [model.name for model in config.models] == [
+        "logistic_l1",
+        "random_forest",
+        "hist_gradient_boosting",
+    ]
+    assert config.features.crypto_regime_signal_features_enabled is signal_features_enabled
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_score_policy
+        == "expected_allocation"
+    )
+    assert [
+        policy.name
+        for policy in config.evaluation.ml_strategy_tuning.regime_participation_policies
+    ] == ["model_only"]
+    assert [
+        profile.name
+        for profile in config.evaluation.ml_strategy_tuning.allocation_utility_profiles
+    ] == ["return_capture_p15", "return_capture_p25", "baseline_p25"]
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "target_type", "score_policy", "threshold_grid"),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_floor_signal_return_capture_fallback.yaml",
+            "btc_phase8_bull_floor_signal_return_capture_fallback",
+            "allocation_utility",
+            "expected_allocation",
+            [],
+        ),
+        (
+            "configs/experiment.btc_phase8_prob100_signal_threshold_fallback.yaml",
+            "btc_phase8_prob100_signal_threshold_fallback",
+            "allocation_utility",
+            "bull_prob100_threshold",
+            [0.20, 0.28, 0.36],
+        ),
+        (
+            "configs/experiment.btc_phase8_regime_floor_state_fallback.yaml",
+            "btc_phase8_regime_floor_state_fallback",
+            "regime_state",
+            "expected_allocation",
+            [],
+        ),
+    ],
+)
+def test_load_config_accepts_btc_regime_policy_next_experiment_configs(
+    path: str,
+    experiment_name: str,
+    target_type: str,
+    score_policy: str,
+    threshold_grid: list[float],
+) -> None:
+    config = load_config(path)
+
+    strict_benchmarks = [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.target.type == target_type
+    assert config.paper.enabled is False
+    assert config.features.crypto_regime_signal_features_enabled is True
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert config.evaluation.ml_strategy_tuning.allocation_score_policy == score_policy
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold_grid
+        == threshold_grid
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.no_valid_candidate_regime_fallback
+        == "bull100_sideways25"
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.no_candidate_fallback_regime_policy
+        == "bull100_sideways25"
+    )
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == (
+        strict_benchmarks
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "calibration", "rolling_train_grid"),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_floor_score_boost_fallback.yaml",
+            "btc_phase8_bull_floor_score_boost_fallback",
+            "sigmoid",
+            [730, 1095],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_score_boost_uncalibrated.yaml",
+            "btc_phase8_bull_floor_score_boost_uncalibrated",
+            "none",
+            [730, 1095],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_score_boost_long_train.yaml",
+            "btc_phase8_bull_floor_score_boost_long_train",
+            "sigmoid",
+            [1095, 1460],
+        ),
+    ],
+)
+def test_load_config_accepts_btc_score_transform_next_experiment_configs(
+    path: str,
+    experiment_name: str,
+    calibration: str,
+    rolling_train_grid: list[int],
+) -> None:
+    config = load_config(path)
+
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.target.type == "allocation_utility"
+    assert config.paper.enabled is False
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert (
+        config.evaluation.ml_strategy_tuning.allocation_probability_calibration
+        == calibration
+    )
+    assert (
+        config.evaluation.ml_strategy_tuning.rolling_train_bars_grid
+        == rolling_train_grid
+    )
+    assert [
+        transform.name
+        for transform in config.evaluation.ml_strategy_tuning.allocation_score_transforms
+    ] == [
+        "identity",
+        "bull_shift_10",
+        "bull_shift_18",
+        "bull_mult115_shift10",
+        "bull_mult125_shift10",
+    ]
+    assert (
+        config.evaluation.ml_strategy_tuning.no_valid_candidate_regime_fallback
+        == "bull100_sideways25"
+    )
+    assert config.evaluation.strict_research_gate.enabled is True
+
+
+@pytest.mark.parametrize(
+    (
+        "path",
+        "experiment_name",
+        "objective",
+        "expected_gate_bull_floor",
+        "risk_off_caps",
+        "holding_grid",
+        "hysteresis_grid",
+        "turnover_cap",
+    ),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_override.yaml",
+            "btc_phase8_bull_floor_gate_bull_override",
+            "net_return_and_risk_vs_required_benchmarks",
+            1.0,
+            {0.25},
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_riskoff0.yaml",
+            "btc_phase8_bull_floor_gate_bull_riskoff0",
+            "net_return_and_risk_vs_required_benchmarks",
+            1.0,
+            {0.0},
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_low_turnover.yaml",
+            "btc_phase8_bull_floor_gate_bull_low_turnover",
+            "net_return_and_risk_vs_required_benchmarks",
+            1.0,
+            {0.25},
+            [18, 36, 54],
+            [0.02, 0.04],
+            12.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_score_validity_selection.yaml",
+            "btc_phase8_bull_floor_score_validity_selection",
+            "net_return_risk_score_validity_vs_required_benchmarks",
+            None,
+            {0.25},
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_score_validity.yaml",
+            "btc_phase8_bull_floor_gate_bull_score_validity",
+            "net_return_risk_score_validity_vs_required_benchmarks",
+            1.0,
+            {0.25},
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+    ],
+)
+def test_load_config_accepts_btc_gate_bull_floor_and_score_validity_configs(
+    path: str,
+    experiment_name: str,
+    objective: str,
+    expected_gate_bull_floor: float | None,
+    risk_off_caps: set[float],
+    holding_grid: list[int],
+    hysteresis_grid: list[float],
+    turnover_cap: float,
+) -> None:
+    config = load_config(path)
+
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.target.type == "allocation_utility"
+    assert config.paper.enabled is False
+    tuning = config.evaluation.ml_strategy_tuning
+    assert tuning.selection_policy == "best_active_fallback"
+    assert tuning.objective == objective
+    assert tuning.min_holding_period_bars_grid == holding_grid
+    assert tuning.hysteresis_margin_grid == hysteresis_grid
+    assert tuning.max_annualized_turnover == pytest.approx(turnover_cap)
+    assert {policy.risk_off_cap for policy in tuning.regime_participation_policies} == (
+        risk_off_caps
+    )
+    assert {
+        policy.gate_bull_floor
+        for policy in tuning.regime_participation_policies
+    } == {expected_gate_bull_floor}
+    if "riskoff0" in path:
+        assert {
+            policy.sideways_floor
+            for policy in tuning.regime_participation_policies
+        } == {0.0, 0.25, 0.50}
+    assert config.evaluation.strict_research_gate.enabled is True
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "calibration", "holding_grid", "hysteresis_grid", "turnover_cap"),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml",
+            "btc_phase8_bull_floor_gate_bull_prob100_score_validity",
+            "sigmoid",
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity_uncalibrated.yaml",
+            "btc_phase8_bull_floor_gate_bull_prob100_score_validity_uncalibrated",
+            "none",
+            [0, 18],
+            [0.0, 0.02],
+            24.0,
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover.yaml",
+            "btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover",
+            "sigmoid",
+            [18, 36, 54],
+            [0.02, 0.04],
+            12.0,
+        ),
+    ],
+)
+def test_load_config_accepts_gate_bull_score_validity_repair_configs(
+    path: str,
+    experiment_name: str,
+    calibration: str,
+    holding_grid: list[int],
+    hysteresis_grid: list[float],
+    turnover_cap: float,
+) -> None:
+    config = load_config(path)
+    tuning = config.evaluation.ml_strategy_tuning
+
+    assert config.experiment_name == experiment_name
+    assert config.paper.enabled is False
+    assert tuning.allocation_score_policy == "gate_bull_prob100_threshold"
+    assert tuning.allocation_score_policy_prob100_threshold_grid == [0.20, 0.28, 0.36]
+    assert tuning.objective == "net_return_risk_score_validity_vs_required_benchmarks"
+    assert tuning.allocation_probability_calibration == calibration
+    assert tuning.min_holding_period_bars_grid == holding_grid
+    assert tuning.hysteresis_margin_grid == hysteresis_grid
+    assert tuning.max_annualized_turnover == pytest.approx(turnover_cap)
+    assert all(
+        policy.gate_bull_floor is None
+        for policy in tuning.regime_participation_policies
+    )
+    assert config.evaluation.strict_research_gate.enabled is True
+
+
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "guarded_override", "target_penalties"),
+    [
+        (
+            "configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml",
+            "btc_phase8_guarded_cost_robust_selector",
+            False,
+            (0.50, 0.25, 2.0),
+        ),
+        (
+            "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml",
+            "btc_phase8_guarded_gate_bull_risk_off_override",
+            True,
+            (0.50, 0.25, 2.0),
+        ),
+        (
+            "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml",
+            "btc_phase8_guarded_gate_bull_risk_off_override_partial_support",
+            True,
+            (0.75, 0.25, 2.0),
+        ),
+    ],
+)
+def test_load_config_accepts_guarded_gate_bull_cost_robustness_configs(
+    path: str,
+    experiment_name: str,
+    guarded_override: bool,
+    target_penalties: tuple[float, float, float],
+) -> None:
+    config = load_config(path)
+    tuning = config.evaluation.ml_strategy_tuning
+
+    assert config.experiment_name == experiment_name
+    assert config.paper.enabled is False
+    assert tuning.allocation_score_policy == "gate_bull_prob100_threshold"
+    assert tuning.selection_validation_cost_bps == [35.0, 50.0]
+    assert tuning.guarded_gate_bull_risk_off_override is guarded_override
+    assert (
+        config.target.allocation_utility_drawdown_penalty,
+        config.target.allocation_utility_volatility_penalty,
+        config.target.allocation_utility_risk_penalty_power,
+    ) == pytest.approx(target_penalties)
+    assert all(
+        policy.gate_bull_floor is None
+        for policy in tuning.regime_participation_policies
+    )
+
+
+def test_guarded_gate_bull_configs_leave_strict_gate_unchanged() -> None:
+    control_path = (
+        "configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml"
+    )
+    challenger_paths = [
+        "configs/experiment.btc_phase8_guarded_cost_robust_selector.yaml",
+        "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override.yaml",
+        "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml",
+    ]
+    control = yaml.safe_load(Path(control_path).read_text(encoding="utf-8"))
+
+    for challenger_path in challenger_paths:
+        challenger = yaml.safe_load(Path(challenger_path).read_text(encoding="utf-8"))
+        assert (
+            challenger["evaluation"]["strict_research_gate"]
+            == control["evaluation"]["strict_research_gate"]
+        )
 
 
 @pytest.mark.parametrize(
@@ -628,6 +1233,82 @@ def test_load_config_accepts_btc_regime_fallback_challenger_configs(
     )
 
 
+@pytest.mark.parametrize(
+    ("path", "experiment_name", "score_policy", "selection_benchmarks"),
+    [
+        (
+            "configs/experiment.btc_phase8_bull_capture_rebalanced_gate.yaml",
+            "btc_phase8_bull_capture_rebalanced_gate",
+            "expected_allocation",
+            ["buy_hold", "btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_capture_prob100_grid.yaml",
+            "btc_phase8_bull_capture_prob100_grid",
+            "bull_prob100_threshold",
+            ["buy_hold", "btc_rebalanced_25", "btc_rebalanced_50", "btc_rebalanced_75"],
+        ),
+        (
+            "configs/experiment.btc_phase8_bull_capture_static_audit.yaml",
+            "btc_phase8_bull_capture_static_audit",
+            "expected_allocation",
+            [
+                "buy_hold",
+                "btc_static_25",
+                "btc_static_50",
+                "btc_static_75",
+                "btc_rebalanced_25",
+                "btc_rebalanced_50",
+                "btc_rebalanced_75",
+            ],
+        ),
+    ],
+)
+def test_load_config_accepts_phase8_btc_bull_capture_grid_configs(
+    path: str,
+    experiment_name: str,
+    score_policy: str,
+    selection_benchmarks: list[str],
+) -> None:
+    config = load_config(path)
+
+    strict_benchmarks = [
+        "buy_hold",
+        "btc_static_25",
+        "btc_static_50",
+        "btc_static_75",
+        "btc_rebalanced_25",
+        "btc_rebalanced_50",
+        "btc_rebalanced_75",
+    ]
+    assert config.experiment_name == experiment_name
+    assert config.data.symbols == ["BTC-USD"]
+    assert config.data.interval == "1d"
+    assert config.target.type == "allocation_utility"
+    assert config.paper.enabled is False
+    assert config.evaluation.ml_strategy_tuning.selection_policy == "best_active_fallback"
+    assert config.evaluation.ml_strategy_tuning.allocation_score_policy == score_policy
+    assert config.evaluation.ml_strategy_tuning.selection_benchmark_strategies == (
+        selection_benchmarks
+    )
+    assert config.evaluation.strict_research_gate.required_benchmark_strategies == (
+        strict_benchmarks
+    )
+    assert config.evaluation.ml_strategy_tuning.rolling_train_bars_grid == [730, 1095]
+    assert config.evaluation.ml_strategy_tuning.min_holding_period_bars_grid == [0, 18]
+    assert config.evaluation.ml_strategy_tuning.hysteresis_margin_grid == [0.0, 0.02]
+    assert [model.name for model in config.models] == [
+        "logistic_l1",
+        "random_forest",
+        "hist_gradient_boosting",
+    ]
+    if score_policy == "bull_prob100_threshold":
+        assert (
+            config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold
+            == pytest.approx(0.16)
+        )
+
+
 def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
     config = load_config("configs/experiment.btc_paper_daily.yaml")
 
@@ -654,6 +1335,15 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         ({"hysteresis_margin_grid": [-0.01]}, "hysteresis_margin_grid"),
         ({"hysteresis_margin_grid": [0.50]}, "hysteresis_margin_grid"),
         ({"max_annualized_turnover": 0.0}, "max_annualized_turnover"),
+        ({"selection_validation_cost_bps": [-1.0]}, "selection_validation_cost_bps"),
+        (
+            {"selection_validation_cost_bps": [35.0, 35.0]},
+            "selection_validation_cost_bps",
+        ),
+        (
+            {"guarded_gate_bull_risk_off_override": "true"},
+            "guarded_gate_bull_risk_off_override",
+        ),
         ({"objective": "auc"}, "ml_strategy_tuning.objective"),
         ({"selection_policy": "loose"}, "ml_strategy_tuning.selection_policy"),
         ({"allocation_score_policy": "magic_score"}, "allocation_score_policy"),
@@ -664,6 +1354,25 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         (
             {"allocation_score_policy_prob100_threshold": -0.1},
             "allocation_score_policy_prob100_threshold",
+        ),
+        (
+            {"allocation_score_policy_prob100_threshold_grid": [0.2, 1.2]},
+            "allocation_score_policy_prob100_threshold_grid",
+        ),
+        (
+            {"allocation_score_policy_prob100_threshold_grid": [-0.1]},
+            "allocation_score_policy_prob100_threshold_grid",
+        ),
+        (
+            {
+                "no_candidate_fallback_regime_policy": "model_only",
+                "no_valid_candidate_regime_fallback": "other_policy",
+                "regime_participation_policies": [
+                    {"name": "model_only"},
+                    {"name": "other_policy"},
+                ],
+            },
+            "no_candidate_fallback_regime_policy",
         ),
         (
             {"objective": "net_return_and_risk_vs_required_benchmarks"},
@@ -746,7 +1455,7 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         (
             {
                 "regime_participation_policies": [
-                    {"name": "bad_floor", "bull_floor": 0.75},
+                    {"name": "bad_floor", "bull_floor": 0.80},
                 ]
             },
             "bull_floor",
@@ -754,7 +1463,7 @@ def test_load_config_accepts_isolated_btc_paper_daily_config() -> None:
         (
             {
                 "regime_participation_policies": [
-                    {"name": "bad_cap", "risk_off_cap": 0.75},
+                    {"name": "bad_cap", "risk_off_cap": 0.80},
                 ]
             },
             "risk_off_cap",

@@ -1193,6 +1193,8 @@ def test_run_experiment_writes_allocation_utility_outputs(
                 "allocation_partial_class_weight_multiplier": 2.0,
                 "allocation_probability_calibration": "sigmoid",
                 "allocation_calibration_cv": 3,
+                "selection_validation_cost_bps": [10, 25],
+                "guarded_gate_bull_risk_off_override": True,
             },
             "strict_research_gate": {
                 "enabled": True,
@@ -1227,6 +1229,7 @@ def test_run_experiment_writes_allocation_utility_outputs(
     tuning_candidates = pd.read_csv(run_dir / "ml_strategy_tuning_candidates.csv")
     tuning_selections = pd.read_csv(run_dir / "ml_strategy_tuning_selections.csv")
     phase8_summary = pd.read_csv(run_dir / "phase8_run_summary.csv")
+    phase8_methodology = pd.read_csv(run_dir / "phase8_methodology_review.csv")
     strict_gate = pd.read_csv(run_dir / "strict_research_gate.csv")
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
 
@@ -1239,11 +1242,19 @@ def test_run_experiment_writes_allocation_utility_outputs(
     )
     assert {
         "selection_benchmark_strategies",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "min_benchmark_excess_cumulative_return",
         "utility_profile",
         "allocation_class_weighting",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "allocation_score_transform",
+        "score_transform_bull_multiplier",
+        "score_transform_bull_addend",
+        "score_transform_risk_off_score_cap",
+        "score_transform_non_bull_score_cap",
         "calibration_status",
         "regime_policy",
         "regime_bull_floor",
@@ -1254,20 +1265,50 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
         "validation_predicted_100_fraction",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_policy_repair_authorized",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "validation_score_transform_applied_fraction",
     }.issubset(tuning_candidates.columns)
     assert {
         "selection_policy",
         "selection_source",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "selected_allocation_score_transform",
+        "selected_score_transform_bull_multiplier",
+        "selected_score_transform_bull_addend",
+        "selected_score_transform_risk_off_score_cap",
+        "selected_score_transform_non_bull_score_cap",
         "selected_regime_policy",
         "selected_regime_bull_floor",
         "selected_regime_sideways_floor",
         "selected_regime_bear_floor",
         "selected_regime_risk_off_cap",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_policy_repair_authorized",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
     }.issubset(tuning_selections.columns)
     assert "selected_fold_fraction" in set(phase8_summary["metric"])
+    assert {
+        "deployment_gate",
+        "risk_allocation_gate",
+        "target_support_gate",
+    }.issubset(set(phase8_methodology["methodology_gate"]))
     assert {
         "partial_target_25_global_fraction",
         "partial_target_50_fold_fraction",
@@ -1282,9 +1323,20 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "predicted_tier_weight",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "allocation_score_transform",
+        "score_transform_bull_multiplier",
+        "score_transform_bull_addend",
+        "score_transform_risk_off_score_cap",
+        "score_transform_non_bull_score_cap",
         "raw_expected_allocation_score",
         "final_allocation_score",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
+        "score_transform_applied",
         "prob_tier_0",
         "prob_tier_25",
         "prob_tier_50",
@@ -1292,14 +1344,23 @@ def test_run_experiment_writes_allocation_utility_outputs(
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
         "fold_predicted_100_fraction",
+        "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "fold_score_transform_applied_fraction",
     }.issubset(probability_diagnostics.columns)
     assert {"feature", "importance_type", "importance"}.issubset(feature_importance.columns)
     assert "## Allocation Utility Diagnostics" in report_text
     assert "## Phase 8 Run Summary" in report_text
+    assert "## Phase 8 Methodology Review" in report_text
     assert "Target-support gate requires" in report_text
     assert "Predicted-support gate requires" in report_text
     assert "Allocation score policy" in report_text
+    assert "Allocation score transforms" in report_text
+    assert "Repaired scores never authorize their own promotion" in report_text
+    assert "Configured selection validation costs are evaluated" in report_text
+    assert "Guarded gate-bull risk-off override is `True`" in report_text
     assert "Allocation target diagnostics" in report_text
     assert "selection_policy" in report_text
 
@@ -1597,7 +1658,7 @@ def test_run_experiment_supports_no_candidate_regime_fallback_selection(
     strict_gate = pd.read_csv(run_dir / "strict_research_gate.csv")
 
     fallback_rows = selections.loc[
-        selections["selection_source"].eq("deterministic_regime_fallback")
+        selections["selection_source"].eq("regime_policy_fallback")
     ]
     assert not fallback_rows.empty
     assert fallback_rows["selection_status"].eq("selected").all()

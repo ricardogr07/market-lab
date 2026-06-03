@@ -188,6 +188,25 @@ def _add_crypto_regime_features(
     return featured
 
 
+def _add_crypto_regime_signal_features(featured: pd.DataFrame) -> pd.DataFrame:
+    if not {"crypto_regime_risk_off", "crypto_regime_trend_state"}.issubset(
+        featured.columns
+    ):
+        raise ValueError(
+            "Crypto regime signal features require crypto regime state columns."
+        )
+
+    risk_off = featured["crypto_regime_risk_off"].fillna(0).astype(int).eq(1)
+    trend_state = featured["crypto_regime_trend_state"].fillna(0).astype(int)
+    featured["crypto_regime_bull_participation_signal"] = (
+        trend_state.gt(0) & ~risk_off
+    ).astype(int)
+    featured["crypto_regime_drawdown_defense_signal"] = (
+        risk_off | trend_state.lt(0)
+    ).astype(int)
+    return featured
+
+
 def add_feature_set(
     panel: pd.DataFrame,
     return_windows: list[int],
@@ -213,6 +232,7 @@ def add_feature_set(
     crypto_regime_percentile_window: int = 252,
     crypto_regime_drawdown_window: int = 252,
     crypto_regime_volume_window: int = 42,
+    crypto_regime_signal_features_enabled: bool = False,
 ) -> pd.DataFrame:
     featured = panel.sort_values(["symbol", "timestamp"]).copy()
     grouped_close = featured.groupby("symbol")["adj_close"]
@@ -258,7 +278,7 @@ def add_feature_set(
             volume_window=crypto_volume_window,
             time_features=crypto_time_features,
         )
-    if crypto_regime_features_enabled:
+    if crypto_regime_features_enabled or crypto_regime_signal_features_enabled:
         featured = _add_crypto_regime_features(
             featured,
             trend_windows=crypto_regime_trend_windows or [],
@@ -267,4 +287,6 @@ def add_feature_set(
             drawdown_window=crypto_regime_drawdown_window,
             volume_window=crypto_regime_volume_window,
         )
+    if crypto_regime_signal_features_enabled:
+        featured = _add_crypto_regime_signal_features(featured)
     return featured

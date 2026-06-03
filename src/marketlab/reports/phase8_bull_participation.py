@@ -724,7 +724,11 @@ def _selection_context_rows(
                 row_count=int(count),
             )
 
-    for column in ("selected_regime_bull_floor", "selected_regime_risk_off_cap"):
+    for column in (
+        "selected_regime_bull_floor",
+        "selected_regime_risk_off_cap",
+        "selected_regime_gate_bull_floor",
+    ):
         if column not in selections.columns:
             continue
         values = selections.loc[status.eq("selected"), column].map(_numeric).dropna()

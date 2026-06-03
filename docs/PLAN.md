@@ -38,7 +38,11 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab phase8-selection-probe --run-dir ...`
 - `marketlab phase8-bull-participation --run-dir ... --config ...`
 - `marketlab phase8-score-diagnostic --run-dir ...`
+- `marketlab phase8-target-diagnostic --run-dir ... --config ...`
 - `marketlab phase8-bull-counterfactual --run-dir ... --config ...`
+- `marketlab phase8-regime-policy-sweep --run-dir ... --config ...`
+- `marketlab phase8-methodology-review --run-dir ...`
+- `marketlab phase8-grid-compare --runs-root ... --output ...`
 
 Current workflow surface:
 
@@ -55,7 +59,11 @@ Current workflow surface:
 - local file-backed paper-trading proposals, approvals, and submission state
 - local Docker Compose scheduling for the daily single-ETF paper loop
 - isolated BTC paper proposal, approval, and submission state under `artifacts/btc-paper` / `artifacts-btc-paper`
-- artifact-only Phase 8 diagnostic commands for post-run review
+- artifact-only Phase 8 diagnostic commands for post-run review, including a consolidated methodology review
+- artifact-only Phase 8 target diagnostics for separating bull-continuation and drawdown-defense labels
+- artifact-only BTC regime-policy sweeps for testing completed-bar exposure policies before expensive retraining
+- research-only BTC score-transform grids for repairing compressed bull-floor fallback scores before tier mapping
+- cross-run BTC Phase 8 grid comparison for bull-upside capture, downside capture, score validity, counterfactual hypotheses, and artifact-pruning review
 
 ## Phase 4 Outcomes Worth Keeping
 
@@ -101,6 +109,9 @@ Current Phase 8 rules:
 - keep BTC exposure decisions limited to `0%`, `25%`, `50%`, or `100%`
 - compare selected strategies against BTC buy-and-hold plus static and rebalanced BTC/cash benchmarks
 - treat Phase 8 diagnostic commands as artifact review only
+- use `phase8-methodology-review` to separate deployment readiness from risk allocation, score validity, bull participation, and diagnostic-only counterfactual hypotheses
+- use `phase8-grid-compare`, `phase8-target-diagnostic`, `phase8-regime-policy-sweep`, and the BTC target/score pivot notes before pivoting to heavier ML models
+- use the [BTC Phase 8 Shadow-Confirmation Plan](phase8/BTC/shadow-confirmation-plan.md) as the locked forward-confirmation handoff for the historical partial-support challenger
 - keep crypto/BTC paper work blocked unless the strict research gate passes
 
 ## Phase 9 Boundary

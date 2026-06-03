@@ -243,7 +243,7 @@ def _cost_sensitivity_grid(
     return sorted(grid)
 
 
-def _repriced_performance(working: pd.DataFrame, bps_per_trade: float) -> pd.DataFrame:
+def reprice_performance(working: pd.DataFrame, bps_per_trade: float) -> pd.DataFrame:
     repriced = working.loc[:, ["date", "strategy", "gross_return", "turnover"]].copy()
     repriced["net_return"] = repriced["gross_return"] - (repriced["turnover"] * (bps_per_trade / 10_000.0))
     repriced["equity"] = (
@@ -330,7 +330,7 @@ def build_cost_sensitivity(
 
     scenario_frames: list[pd.DataFrame] = []
     for bps_per_trade in _cost_sensitivity_grid(base_cost_bps, sensitivity_bps):
-        repriced = _repriced_performance(working, bps_per_trade)
+        repriced = reprice_performance(working, bps_per_trade)
         metrics = _compute_repriced_strategy_metrics_for_periods(
             repriced,
             periods_per_year=periods_per_year,

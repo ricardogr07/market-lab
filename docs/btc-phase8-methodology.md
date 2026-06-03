@@ -106,6 +106,12 @@ score compression is suppressing full BTC participation. It does not change
 the allowed strategy tiers, fallback selection rules, or the strict Phase 8
 research gate.
 
+Score-transform grids are also research-only candidate parameters. They apply
+after model probability scoring and before tier mapping, hysteresis, and regime
+participation policy. The Phase 8 score-repair configs use completed-bar
+runtime regime labels to boost only runtime-bull scores; they do not change
+target labels, paper behavior, or the strict deployment gate.
+
 ## 4. Walk-Forward Training
 
 The outer walk-forward split defines the real out-of-sample test windows. Each
@@ -187,6 +193,13 @@ The research artifacts to inspect are:
   `phase8_bull_counterfactual_gate.csv` for artifact-only bull-exposure
   counterfactuals. These rows are diagnostic and do not replace
   `strict_research_gate.csv`.
+- `phase8_methodology_review.csv` for the consolidated methodology view that
+  separates the unchanged deployment gate from risk-allocation, benchmark
+  family, target-support, signal-validity, bull-participation, and
+  diagnostic-only counterfactual evidence.
+- `phase8_btc_grid_comparison.csv` for the cross-run BTC Phase 8 comparison of
+  strict-gate status, bull-upside capture, downside capture, score validity,
+  counterfactual hypotheses, and conservative artifact-pruning recommendations.
 
 ## 6. Long Or Cash Decision
 
@@ -306,6 +319,48 @@ iteration before expanding the grid:
   calibration. This tests whether the model can produce real `100%`
   predicted-tier support in bull regimes without changing the strict success
   definition.
+- `btc_phase8_methodology_review`: the focused next daily allocation-utility
+  methodology run. It keeps the strict gate unchanged, includes buy-hold plus
+  static and rebalanced partial BTC benchmarks in candidate selection, and
+  treats bull-participation floors as validation-selected candidate parameters
+  rather than paper-trading overrides or counterfactual approvals.
+- `btc_phase8_bull_capture_rebalanced_gate`: the next rebalanced-benchmark
+  bull-capture grid. It uses diagnostic `best_active_fallback` selection,
+  expected-allocation scoring, the existing sklearn trio, and validation-chosen
+  bull participation floors while leaving the strict deployment gate unchanged.
+- `btc_phase8_bull_capture_prob100_grid`: the next score-mapping grid. It uses
+  `bull_prob100_threshold` scoring at 0.16 with no probability calibration to
+  test whether 100% BTC exposure is being suppressed by score mapping.
+- `btc_phase8_bull_capture_static_audit`: the full benchmark-family audit grid.
+  It includes buy-hold, static BTC/cash, and rebalanced BTC/cash benchmarks in
+  validation selection so the selected candidates face the same benchmark
+  family that the strict gate requires.
+- `btc_phase8_bull_floor_score_boost_fallback`: the score-repair successor to
+  the first buy-hold-beating bull-floor fallback branch. It evaluates identity
+  plus runtime-bull score boosts with sigmoid calibration.
+- `btc_phase8_bull_floor_score_boost_uncalibrated`: the same score-transform
+  grid without probability calibration, isolating whether calibration is
+  compressing full-participation scores.
+- `btc_phase8_bull_floor_score_boost_long_train`: the same score-transform grid
+  with longer rolling train windows.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity`: a research-only
+  completed-bar `gate_bull` 100% tier repair. It authorizes promotion from raw
+  validation expected-allocation score ordering before applying promotion.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity_uncalibrated`: the
+  same non-circular gate-bull repair without probability calibration.
+- `btc_phase8_bull_floor_gate_bull_prob100_score_validity_low_turnover`: the
+  same non-circular gate-bull repair with longer holding periods and a lower
+  turnover cap.
+- `btc_phase8_guarded_cost_robust_selector`: the calibrated score-validity
+  repair with validation candidates required to beat the configured benchmark
+  family at both 35 and 50 bps.
+- `btc_phase8_guarded_gate_bull_risk_off_override`: the same cost-robust
+  selector plus a validation-authorized completed-bar `gate_bull` override for
+  risk-off rows. The override applies to the next effective allocation only.
+- `btc_phase8_guarded_gate_bull_risk_off_override_partial_support`: the same
+  guarded override with the deterministic target-profile sweep result
+  `drawdown_penalty=0.75`, `volatility_penalty=0.25`, and
+  `risk_penalty_power=2.0`.
 
 ## 7. Cost-Aware Candidate Selection
 
@@ -344,6 +399,28 @@ This budget rejects candidates that can only work by changing exposure too
 often. It also protects the strict gate from accepting an overfit strategy that
 looks acceptable before realistic BTC cost drag.
 
+The guarded cost-robustness configs additionally set:
+
+```yaml
+selection_validation_cost_bps: [35, 50]
+```
+
+The same validation weights are repriced at each configured cost. A candidate
+must retain positive excess return versus every selection benchmark at every
+configured cost, and ranking prefers the strongest worst-cost benchmark
+margin. This changes research candidate selection only; it does not change the
+strict gate.
+
+Run the allocation-utility target sweep before the guarded batch:
+
+```bash
+python scripts/run_marketlab.py phase8-target-profile-sweep --config configs/experiment.btc_phase8_bull_floor_gate_bull_prob100_score_validity.yaml --output artifacts/runs/phase8_btc_target_profile_sweep.csv
+```
+
+The sweep relabels the already prepared modeling rows without retraining. It
+records partial-tier support and selects the first passing profile
+deterministically.
+
 After a run, regenerate the deterministic summary without training models:
 
 ```bash
@@ -376,6 +453,17 @@ python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs
 This report checks whether score compression, tier confusion, or validation to
 OOS score instability explains weak BTC participation.
 
+Run the target diagnostic without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-target-diagnostic --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+```
+
+This report checks whether current target and prediction rows are mixing BTC
+bull-continuation participation with drawdown-defense behavior. The `--config`
+argument adds strict-gate bull labels for the run window; it does not retrain
+models or change portfolio weights.
+
 Run the bull counterfactual diagnostic without retraining models:
 
 ```bash
@@ -391,8 +479,59 @@ The fallback and turnover-only probe profiles are diagnostic only. The runtime
 `best_active_fallback` policy is also diagnostic until a regenerated OOS run
 passes the unchanged strict Phase 8 research gate.
 
-The same summary is embedded into `report.md` when Phase 8 artifacts are
-generated.
+The `gate_bull_prob100_threshold` score policy is also research-only. It may
+promote a completed-bar `gate_bull` row to 100% only when raw validation
+expected-allocation scores have finite non-negative forward-return correlation,
+`prob_tier_100` passes its threshold, and `prob_tier_100 >= prob_tier_0`.
+Authorization is computed before promotion. Negative-correlation fallback
+folds keep expected-allocation scores and persist the denial reason. This rule
+does not change the strict research gate or approve paper deployment.
+
+The optional guarded risk-off override is also research-only. It is authorized
+from raw pre-promotion validation score ordering, never repaired scores. When
+authorized, only a completed-bar `gate_bull` row whose runtime label is
+`risk_off` receives a 100% next-effective allocation marker. Negative or
+non-finite raw correlation disables the override and persists the denial
+reason. A future shadow confirmation window that was not inspected while
+designing this rule is required before any deployment discussion.
+
+The first historical OOS run of the isolated partial-support challenger passed
+every unchanged strict-gate row on June 2, 2026. It remains a shadow-confirmation
+candidate, not a paper or live approval: the methodology review still flags
+signal-validity and bull-participation diagnostics, and all selected folds used
+diagnostic fallback paths rather than strict validation-selected candidates.
+The locked forward-confirmation lane is defined in the
+[BTC Phase 8 Shadow-Confirmation Plan](phase8/BTC/shadow-confirmation-plan.md).
+
+Build the consolidated methodology review without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>
+```
+
+The methodology review makes the current research state explicit: a run may
+improve drawdown and Sharpe and beat rebalanced BTC/cash benchmarks while still
+failing deployment because it lags buy-and-hold, lags static partial BTC
+benchmarks, lacks enough selected-fold coverage, has weak score-to-outcome
+relationships, or misses positive BTC bull-regime upside. Counterfactual rows
+can identify hypotheses for the next validation-selected rule, but they remain
+diagnostic-only and cannot approve Phase 8 or redefine the unchanged strict
+research gate.
+
+The Phase 8 run summary and methodology review are embedded into `report.md`
+when Phase 8 artifacts are generated.
+
+Compare completed BTC Phase 8 runs without retraining models:
+
+```bash
+python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs --output artifacts/runs/phase8_btc_grid_comparison.csv
+```
+
+This comparison report is the main handoff into the BTC bull-upside methodology
+notes in [Phase 8 BTC Bull Upside](phase8/BTC/bull-upside-methodology.md) and
+the current [Target/Score Pivot](phase8/BTC/target-score-pivot.md). It also
+surfaces incomplete artifact directories as pruning candidates, but the CLI
+never deletes or moves files.
 
 ## 8. Strict Research Gate
 

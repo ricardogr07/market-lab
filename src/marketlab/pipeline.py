@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from marketlab.backtest.engine import (
 )
 from marketlab.backtest.metrics import compute_strategy_metrics
 from marketlab.config import (
+    AllocationScoreTransformConfig,
     AllocationUtilityProfileConfig,
     ExperimentConfig,
     RegimeParticipationPolicyConfig,
@@ -47,8 +49,10 @@ from marketlab.reports.analytics import (
     build_monthly_returns,
     build_strategy_summary,
     build_turnover_costs,
+    reprice_performance,
 )
 from marketlab.reports.markdown import write_markdown_report
+from marketlab.reports.phase8_methodology import build_phase8_methodology_review
 from marketlab.reports.phase8_summary import build_phase8_run_summary
 from marketlab.reports.plots import (
     plot_calibration_curves,
@@ -141,6 +145,10 @@ ML_TUNED_STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
 BENCHMARK_SELECTION_FAILURE_REASONS = {
     "non_positive_buy_hold_excess",
     "non_positive_required_benchmark_excess",
+    "non_positive_validation_cost_benchmark_excess",
+}
+SCORE_VALIDITY_FAILURE_REASONS = {
+    "negative_score_forward_return_correlation",
 }
 
 
@@ -197,6 +205,7 @@ class ExperimentArtifacts:
     regime_slice_diagnostics_path: Path | None = None
     strict_research_gate_path: Path | None = None
     phase8_run_summary_path: Path | None = None
+    phase8_methodology_review_path: Path | None = None
     pattern_price_overlay_plot_path: Path | None = None
     pattern_detections_plot_path: Path | None = None
     pattern_detection_windows_plot_path: Path | None = None
@@ -399,6 +408,14 @@ def _last_percentile(values: pd.Series) -> float:
     return float(values.rank(pct=True).iloc[-1])
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
 def _btc_regime_masks(panel: pd.DataFrame, config: ExperimentConfig) -> dict[str, pd.Index]:
     if panel.empty:
         return {}
@@ -442,6 +459,22 @@ def _btc_regime_masks(panel: pd.DataFrame, config: ExperimentConfig) -> dict[str
         "high_volatility": dates[high_volatility.fillna(False).to_numpy()],
         "recent": dates[dates >= recent_start],
     }
+
+
+def _with_completed_bar_gate_labels(
+    rows: pd.DataFrame,
+    *,
+    panel: pd.DataFrame,
+    config: ExperimentConfig,
+) -> pd.DataFrame:
+    if rows.empty or "signal_date" not in rows.columns:
+        return rows.copy()
+
+    working = rows.copy()
+    signal_dates = pd.to_datetime(working["signal_date"], errors="coerce")
+    for slice_name, dates in _btc_regime_masks(panel, config).items():
+        working[f"gate_{slice_name}"] = signal_dates.isin(pd.to_datetime(list(dates)))
+    return working
 
 
 def _regime_slice_diagnostics(
@@ -529,7 +562,10 @@ def _gate_benchmark_strategies(config: ExperimentConfig) -> list[str]:
 
 def _selection_benchmark_strategies(config: ExperimentConfig) -> list[str]:
     tuning = config.evaluation.ml_strategy_tuning
-    if tuning.objective == "net_return_and_risk_vs_required_benchmarks":
+    if tuning.objective in {
+        "net_return_and_risk_vs_required_benchmarks",
+        "net_return_risk_score_validity_vs_required_benchmarks",
+    }:
         benchmark_names = [str(value) for value in tuning.selection_benchmark_strategies]
     else:
         benchmark_names = ["buy_hold"]
@@ -1241,6 +1277,8 @@ def _persist_experiment_outputs(
 
     phase8_run_summary: pd.DataFrame | None = None
     phase8_run_summary_path: Path | None = None
+    phase8_methodology_review: pd.DataFrame | None = None
+    phase8_methodology_review_path: Path | None = None
     if (
         config.evaluation.strict_research_gate.enabled
         or ml_strategy_tuning_candidates is not None
@@ -1250,6 +1288,9 @@ def _persist_experiment_outputs(
         phase8_run_summary = build_phase8_run_summary(artifact_run_dir)
         phase8_run_summary_path = artifact_run_dir / "phase8_run_summary.csv"
         phase8_run_summary.to_csv(phase8_run_summary_path, index=False)
+        phase8_methodology_review = build_phase8_methodology_review(artifact_run_dir)
+        phase8_methodology_review_path = artifact_run_dir / "phase8_methodology_review.csv"
+        phase8_methodology_review.to_csv(phase8_methodology_review_path, index=False)
 
     cumulative_plot_path: Path | None = None
     drawdown_plot_path: Path | None = None
@@ -1379,6 +1420,7 @@ def _persist_experiment_outputs(
             regime_slice_diagnostics=regime_slice_diagnostics,
             strict_research_gate=strict_research_gate,
             phase8_run_summary=phase8_run_summary,
+            phase8_methodology_review=phase8_methodology_review,
             fold_diagnostics=fold_diagnostics,
             threshold_diagnostics=threshold_diagnostics,
             calibration_curves_plot_path=calibration_curves_plot_path,
@@ -1415,6 +1457,7 @@ def _persist_experiment_outputs(
             regime_slice_diagnostics_path=regime_slice_diagnostics_path,
             strict_research_gate_path=strict_research_gate_path,
             phase8_run_summary_path=phase8_run_summary_path,
+            phase8_methodology_review_path=phase8_methodology_review_path,
             pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
             pattern_detections_plot_path=pattern_detections_plot_path,
             pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,
@@ -1473,6 +1516,7 @@ def _persist_experiment_outputs(
         regime_slice_diagnostics_path=regime_slice_diagnostics_path,
         strict_research_gate_path=strict_research_gate_path,
         phase8_run_summary_path=phase8_run_summary_path,
+        phase8_methodology_review_path=phase8_methodology_review_path,
         pattern_price_overlay_plot_path=pattern_price_overlay_plot_path,
         pattern_detections_plot_path=pattern_detections_plot_path,
         pattern_detection_windows_plot_path=pattern_detection_windows_plot_path,
@@ -2608,6 +2652,9 @@ def _prediction_frame_for_rows(
     regime_columns = [column for column in rows.columns if str(column).startswith("crypto_regime_")]
     for column in regime_columns:
         prediction_frame[column] = rows[column].to_numpy()
+    gate_columns = [column for column in rows.columns if str(column).startswith("gate_")]
+    for column in gate_columns:
+        prediction_frame[column] = rows[column].to_numpy()
     return prediction_frame
 
 
@@ -2827,28 +2874,151 @@ def _apply_allocation_score_policy(
     probability_frame: pd.DataFrame,
     allocation_score_policy: str,
     prob100_threshold: float,
+    score_policy_repair_authorized: bool = False,
 ) -> tuple[pd.Series, pd.Series]:
     final_scores = score_series.astype(float).copy()
     triggered_100 = pd.Series(False, index=score_series.index, dtype=bool)
     if allocation_score_policy == "expected_allocation":
         return final_scores.rename("score"), triggered_100
-    if allocation_score_policy != "bull_prob100_threshold":
+    if allocation_score_policy not in {
+        "bull_prob100_threshold",
+        "gate_bull_prob100_threshold",
+    }:
         raise ValueError(f"Unsupported allocation score policy: {allocation_score_policy}")
 
     required_columns = {"prob_tier_0", "prob_tier_100"}
     if not required_columns.issubset(probability_frame.columns):
         return final_scores.rename("score"), triggered_100
 
-    runtime_regime = rows.apply(_allocation_regime_label, axis=1)
     prob_tier_100 = probability_frame["prob_tier_100"].astype(float)
     prob_tier_0 = probability_frame["prob_tier_0"].astype(float)
+    if allocation_score_policy == "gate_bull_prob100_threshold":
+        if not score_policy_repair_authorized:
+            return final_scores.rename("score"), triggered_100
+        eligible_rows = rows.get(
+            "gate_bull",
+            pd.Series(False, index=rows.index, dtype=bool),
+        ).map(_truthy)
+    else:
+        eligible_rows = rows.apply(_allocation_regime_label, axis=1).eq("bull")
     triggered_100 = (
-        runtime_regime.eq("bull")
+        eligible_rows
         & prob_tier_100.ge(float(prob100_threshold))
         & prob_tier_100.ge(prob_tier_0)
     )
     final_scores.loc[triggered_100] = 1.0
     return final_scores.rename("score"), triggered_100.rename("score_policy_triggered_100")
+
+
+def _score_policy_repair_authorization(
+    *,
+    allocation_score_policy: str,
+    validation_raw_score_forward_return_correlation: object,
+) -> tuple[bool, str]:
+    if allocation_score_policy != "gate_bull_prob100_threshold":
+        return False, ""
+    if pd.isna(validation_raw_score_forward_return_correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    correlation = float(validation_raw_score_forward_return_correlation)
+    if not math.isfinite(correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    if correlation < 0.0:
+        return False, "negative_validation_raw_score_forward_return_correlation"
+    return True, ""
+
+
+def _guarded_gate_bull_risk_off_override_authorization(
+    *,
+    enabled: bool,
+    validation_raw_score_forward_return_correlation: object,
+) -> tuple[bool, str]:
+    if not enabled:
+        return False, ""
+    if pd.isna(validation_raw_score_forward_return_correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    correlation = float(validation_raw_score_forward_return_correlation)
+    if not math.isfinite(correlation):
+        return False, "non_finite_validation_raw_score_forward_return_correlation"
+    if correlation < 0.0:
+        return False, "negative_validation_raw_score_forward_return_correlation"
+    return True, ""
+
+
+def _apply_allocation_score_transform(
+    *,
+    rows: pd.DataFrame,
+    score_series: pd.Series,
+    score_transform: AllocationScoreTransformConfig,
+) -> tuple[pd.Series, pd.Series]:
+    base_scores = pd.to_numeric(score_series, errors="coerce").fillna(0.0).astype(float)
+    transformed = base_scores.copy()
+    runtime_regime = rows.apply(_allocation_regime_label, axis=1)
+    bull_rows = runtime_regime.eq("bull")
+    transformed.loc[bull_rows] = (
+        transformed.loc[bull_rows].mul(float(score_transform.bull_multiplier))
+        + float(score_transform.bull_addend)
+    )
+    if score_transform.risk_off_score_cap is not None:
+        risk_off_rows = runtime_regime.eq("risk_off")
+        transformed.loc[risk_off_rows] = transformed.loc[risk_off_rows].clip(
+            upper=float(score_transform.risk_off_score_cap)
+        )
+    if score_transform.non_bull_score_cap is not None:
+        non_bull_rows = ~bull_rows
+        transformed.loc[non_bull_rows] = transformed.loc[non_bull_rows].clip(
+            upper=float(score_transform.non_bull_score_cap)
+        )
+    transformed = transformed.clip(lower=0.0, upper=1.0)
+    applied = transformed.sub(base_scores).abs().gt(1e-12)
+    return transformed.rename("score"), applied.rename("score_transform_applied")
+
+
+def _score_transform_metadata(
+    score_transform: AllocationScoreTransformConfig,
+) -> dict[str, object]:
+    return {
+        "allocation_score_transform": score_transform.name,
+        "score_transform_bull_multiplier": float(score_transform.bull_multiplier),
+        "score_transform_bull_addend": float(score_transform.bull_addend),
+        "score_transform_risk_off_score_cap": (
+            float(score_transform.risk_off_score_cap)
+            if score_transform.risk_off_score_cap is not None
+            else pd.NA
+        ),
+        "score_transform_non_bull_score_cap": (
+            float(score_transform.non_bull_score_cap)
+            if score_transform.non_bull_score_cap is not None
+            else pd.NA
+        ),
+    }
+
+
+def _selected_score_transform_metadata(
+    score_transform: AllocationScoreTransformConfig | None,
+) -> dict[str, object]:
+    if score_transform is None:
+        return {
+            "selected_allocation_score_transform": pd.NA,
+            "selected_score_transform_bull_multiplier": pd.NA,
+            "selected_score_transform_bull_addend": pd.NA,
+            "selected_score_transform_risk_off_score_cap": pd.NA,
+            "selected_score_transform_non_bull_score_cap": pd.NA,
+        }
+    return {
+        "selected_allocation_score_transform": score_transform.name,
+        "selected_score_transform_bull_multiplier": float(score_transform.bull_multiplier),
+        "selected_score_transform_bull_addend": float(score_transform.bull_addend),
+        "selected_score_transform_risk_off_score_cap": (
+            float(score_transform.risk_off_score_cap)
+            if score_transform.risk_off_score_cap is not None
+            else pd.NA
+        ),
+        "selected_score_transform_non_bull_score_cap": (
+            float(score_transform.non_bull_score_cap)
+            if score_transform.non_bull_score_cap is not None
+            else pd.NA
+        ),
+    }
 
 
 def _score_model_rows(
@@ -2865,6 +3035,9 @@ def _score_model_rows(
     allocation_calibration_cv: int = 3,
     allocation_score_policy: str = "expected_allocation",
     allocation_score_policy_prob100_threshold: float = 0.20,
+    score_policy_repair_authorized: bool = False,
+    score_policy_repair_denied_reason: str = "",
+    allocation_score_transform: AllocationScoreTransformConfig | None = None,
     utility_profile: AllocationUtilityProfileConfig | None = None,
 ) -> ModelScoreOutput | None:
     train_target = train_rows["target"].astype(int)
@@ -2931,7 +3104,9 @@ def _score_model_rows(
     raw_expected_allocation_score = score_series.astype(float).rename(
         "raw_expected_allocation_score"
     )
+    selected_score_transform = allocation_score_transform or AllocationScoreTransformConfig()
     score_policy_triggered_100 = pd.Series(False, index=score_series.index, dtype=bool)
+    score_transform_applied = pd.Series(False, index=score_series.index, dtype=bool)
     if probability_frame is not None:
         score_series, score_policy_triggered_100 = _apply_allocation_score_policy(
             rows=score_rows,
@@ -2939,6 +3114,12 @@ def _score_model_rows(
             probability_frame=probability_frame,
             allocation_score_policy=allocation_score_policy,
             prob100_threshold=allocation_score_policy_prob100_threshold,
+            score_policy_repair_authorized=score_policy_repair_authorized,
+        )
+        score_series, score_transform_applied = _apply_allocation_score_transform(
+            rows=score_rows,
+            score_series=score_series,
+            score_transform=selected_score_transform,
         )
     predicted_target = pd.Series(
         estimator.predict(score_features),
@@ -2960,9 +3141,20 @@ def _score_model_rows(
         predictions["allocation_score_policy_prob100_threshold"] = float(
             allocation_score_policy_prob100_threshold
         )
+        predictions["score_policy_repair_authorized"] = bool(
+            score_policy_repair_authorized
+        )
+        predictions["score_policy_repair_denied_reason"] = (
+            score_policy_repair_denied_reason
+        )
+        for column, value in _score_transform_metadata(selected_score_transform).items():
+            predictions[column] = value
         predictions["raw_expected_allocation_score"] = raw_expected_allocation_score.to_numpy()
         predictions["final_allocation_score"] = predictions["score"].to_numpy()
         predictions["score_policy_triggered_100"] = score_policy_triggered_100.to_numpy(
+            dtype=bool
+        )
+        predictions["score_transform_applied"] = score_transform_applied.to_numpy(
             dtype=bool
         )
         predictions["predicted_weight"] = predictions["predicted_target"].map(
@@ -3202,6 +3394,11 @@ def _strategy_regime_policy(
             if policy.risk_off_cap is not None
             else None
         ),
+        gate_bull_floor=(
+            float(policy.gate_bull_floor)
+            if policy.gate_bull_floor is not None
+            else None
+        ),
     )
 
 
@@ -3233,6 +3430,115 @@ def _no_candidate_fallback_regime_policy(
     )
 
 
+def _allocation_score_policy_prob100_threshold_candidates(
+    config: ExperimentConfig,
+) -> list[float]:
+    tuning = config.evaluation.ml_strategy_tuning
+    if (
+        tuning.allocation_score_policy
+        in {"bull_prob100_threshold", "gate_bull_prob100_threshold"}
+        and tuning.allocation_score_policy_prob100_threshold_grid
+    ):
+        return sorted(
+            {float(value) for value in tuning.allocation_score_policy_prob100_threshold_grid}
+        )
+    return [float(tuning.allocation_score_policy_prob100_threshold)]
+
+
+def _selection_validation_cost_bps(config: ExperimentConfig) -> list[float]:
+    configured = config.evaluation.ml_strategy_tuning.selection_validation_cost_bps
+    return configured or [float(config.portfolio.costs.bps_per_trade)]
+
+
+def _allocation_score_transform_candidates(
+    config: ExperimentConfig,
+) -> list[AllocationScoreTransformConfig]:
+    transforms = config.evaluation.ml_strategy_tuning.allocation_score_transforms
+    return transforms or [AllocationScoreTransformConfig()]
+
+
+def _prediction_frame_with_allocation_score_policy(
+    *,
+    predictions: pd.DataFrame,
+    allocation_score_policy: str,
+    prob100_threshold: float,
+    score_policy_repair_authorized: bool = False,
+    score_policy_repair_denied_reason: str = "",
+    guarded_gate_bull_risk_off_override_enabled: bool = False,
+    guarded_gate_bull_risk_off_override_authorized: bool = False,
+    guarded_gate_bull_risk_off_override_denied_reason: str = "",
+    score_transform: AllocationScoreTransformConfig | None = None,
+) -> pd.DataFrame:
+    working = predictions.copy()
+    selected_score_transform = score_transform or AllocationScoreTransformConfig()
+    working["allocation_score_policy"] = allocation_score_policy
+    working["allocation_score_policy_prob100_threshold"] = float(prob100_threshold)
+    working["score_policy_repair_authorized"] = bool(score_policy_repair_authorized)
+    working["score_policy_repair_denied_reason"] = score_policy_repair_denied_reason
+    for column, value in _score_transform_metadata(selected_score_transform).items():
+        working[column] = value
+    probability_columns = {"prob_tier_0", "prob_tier_100"}
+    if probability_columns.issubset(working.columns):
+        raw_score = pd.Series(
+            pd.to_numeric(
+                working.get("raw_expected_allocation_score", working["score"]),
+                errors="coerce",
+            ).fillna(0.0),
+            index=working.index,
+            dtype=float,
+        )
+        score_series, triggered_100 = _apply_allocation_score_policy(
+            rows=working,
+            score_series=raw_score,
+            probability_frame=working,
+            allocation_score_policy=allocation_score_policy,
+            prob100_threshold=prob100_threshold,
+            score_policy_repair_authorized=score_policy_repair_authorized,
+        )
+        score_series, transform_applied = _apply_allocation_score_transform(
+            rows=working,
+            score_series=score_series,
+            score_transform=selected_score_transform,
+        )
+        working["score"] = score_series.to_numpy()
+        working["final_allocation_score"] = score_series.to_numpy()
+        working["score_policy_triggered_100"] = triggered_100.to_numpy(dtype=bool)
+        working["score_transform_applied"] = transform_applied.to_numpy(dtype=bool)
+    else:
+        working["score_policy_triggered_100"] = False
+        working["score_transform_applied"] = False
+        if "final_allocation_score" not in working.columns:
+            working["final_allocation_score"] = working["score"]
+    if "raw_expected_allocation_score" not in working.columns:
+        working["raw_expected_allocation_score"] = working["score"]
+    if "score" in working.columns:
+        working["predicted_tier_weight"] = working["score"].map(
+            lambda value: nearest_tier(float(value))
+        )
+    working["guarded_gate_bull_risk_off_override_authorized"] = bool(
+        guarded_gate_bull_risk_off_override_authorized
+    )
+    working["guarded_gate_bull_risk_off_override_denied_reason"] = (
+        guarded_gate_bull_risk_off_override_denied_reason
+    )
+    guarded_override_triggered = pd.Series(False, index=working.index, dtype=bool)
+    if (
+        guarded_gate_bull_risk_off_override_enabled
+        and guarded_gate_bull_risk_off_override_authorized
+    ):
+        guarded_override_triggered = (
+            working.get(
+                "gate_bull",
+                pd.Series(False, index=working.index, dtype=bool),
+            ).map(_truthy)
+            & working.apply(_allocation_regime_label, axis=1).eq("risk_off")
+        )
+    working["guarded_gate_bull_risk_off_override_triggered"] = (
+        guarded_override_triggered.to_numpy(dtype=bool)
+    )
+    return working
+
+
 def _regime_policy_weight_for_row(
     row: pd.Series,
     policy: RegimeParticipationPolicyConfig,
@@ -3243,12 +3549,16 @@ def _regime_policy_weight_for_row(
             raise ValueError(
                 "Deterministic regime fallback requires the referenced policy to define risk_off_cap."
             )
-        return float(policy.risk_off_cap)
-    if regime == "bull":
-        return float(policy.bull_floor)
-    if regime == "bear":
-        return float(policy.bear_floor)
-    return float(policy.sideways_floor)
+        weight = float(policy.risk_off_cap)
+    elif regime == "bull":
+        weight = float(policy.bull_floor)
+    elif regime == "bear":
+        weight = float(policy.bear_floor)
+    else:
+        weight = float(policy.sideways_floor)
+    if policy.gate_bull_floor is not None and _truthy(row.get("gate_bull", False)):
+        weight = max(weight, float(policy.gate_bull_floor))
+    return weight
 
 
 def _deterministic_regime_fallback_weights_for_rows(
@@ -3338,7 +3648,9 @@ def _candidate_failure_reasons(
     benchmark_relative_selection: bool,
     missing_selection_benchmarks: list[str],
     benchmark_excess_values: list[float],
+    validation_cost_benchmark_gate_ok: bool,
     risk_gate_ok: bool,
+    score_validity_ok: bool = True,
 ) -> str:
     reasons: list[str] = []
     if not active_candidate:
@@ -3355,8 +3667,12 @@ def _candidate_failure_reasons(
                 reasons.append("non_positive_required_benchmark_excess")
         else:
             reasons.append("non_positive_buy_hold_excess")
+    if not validation_cost_benchmark_gate_ok:
+        reasons.append("non_positive_validation_cost_benchmark_excess")
     if not risk_gate_ok:
         reasons.append("risk_not_improved")
+    if not score_validity_ok:
+        reasons.append("negative_score_forward_return_correlation")
     return ";".join(reasons)
 
 
@@ -3369,14 +3685,19 @@ def _candidate_failure_reason_set(row: dict[str, object]) -> set[str]:
 
 def _benchmark_only_fallback_candidates(
     candidates: list[dict[str, object]],
+    *,
+    allow_score_validity_fallback: bool = False,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    allowed_reasons = set(BENCHMARK_SELECTION_FAILURE_REASONS)
+    if allow_score_validity_fallback:
+        allowed_reasons.update(SCORE_VALIDITY_FAILURE_REASONS)
     for row in candidates:
         reasons = _candidate_failure_reason_set(row)
         if (
             not bool(row.get("passed_gate"))
             and reasons
-            and reasons.issubset(BENCHMARK_SELECTION_FAILURE_REASONS)
+            and reasons.issubset(allowed_reasons)
         ):
             rows.append(row)
     return rows
@@ -3403,15 +3724,131 @@ def _annualized_turnover(
     return float(total_turnover) / periods * periods_per_year
 
 
+def _safe_correlation(left: pd.Series, right: pd.Series) -> object:
+    frame = pd.DataFrame(
+        {
+            "left": pd.to_numeric(left, errors="coerce"),
+            "right": pd.to_numeric(right, errors="coerce"),
+        }
+    ).dropna()
+    if len(frame) < 2:
+        return pd.NA
+    if frame["left"].nunique() < 2 or frame["right"].nunique() < 2:
+        return pd.NA
+    value = float(frame["left"].corr(frame["right"]))
+    return value if math.isfinite(value) else pd.NA
+
+
+def _score_validity_metrics(predictions: pd.DataFrame) -> dict[str, object]:
+    if predictions.empty or "score" not in predictions.columns:
+        return {
+            "validation_score_forward_return_correlation": pd.NA,
+            "validation_raw_score_forward_return_correlation": pd.NA,
+            "validation_score_target_correlation": pd.NA,
+        }
+    target_column = "target_weight" if "target_weight" in predictions.columns else "target"
+    raw_score_column = (
+        "raw_expected_allocation_score"
+        if "raw_expected_allocation_score" in predictions.columns
+        else "score"
+    )
+    return {
+        "validation_score_forward_return_correlation": (
+            _safe_correlation(predictions["score"], predictions["forward_return"])
+            if "forward_return" in predictions.columns
+            else pd.NA
+        ),
+        "validation_raw_score_forward_return_correlation": (
+            _safe_correlation(predictions[raw_score_column], predictions["forward_return"])
+            if "forward_return" in predictions.columns
+            else pd.NA
+        ),
+        "validation_score_target_correlation": (
+            _safe_correlation(predictions["score"], predictions[target_column])
+            if target_column in predictions.columns
+            else pd.NA
+        ),
+    }
+
+
+def _gate_bull_underexposure_metrics(
+    *,
+    predictions: pd.DataFrame,
+    weights: pd.DataFrame,
+) -> dict[str, object]:
+    empty_metrics = {
+        "validation_gate_bull_average_exposure": pd.NA,
+        "validation_gate_bull_underexposed_positive_benchmark_fraction": pd.NA,
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum": pd.NA,
+    }
+    if (
+        predictions.empty
+        or weights.empty
+        or "gate_bull" not in predictions.columns
+        or "forward_return" not in predictions.columns
+    ):
+        return empty_metrics
+
+    exposure = (
+        weights.copy()
+        .assign(effective_date=lambda frame: pd.to_datetime(frame["effective_date"]))
+        .groupby("effective_date", as_index=False)["weight"]
+        .sum()
+        .rename(columns={"weight": "candidate_exposure"})
+    )
+    working = predictions.copy()
+    working["effective_date"] = pd.to_datetime(working["effective_date"], errors="coerce")
+    working = working.merge(exposure, on="effective_date", how="left")
+    gate_bull = working.loc[working["gate_bull"].map(_truthy)].copy()
+    if gate_bull.empty:
+        return empty_metrics
+
+    gate_bull["candidate_exposure"] = (
+        pd.to_numeric(gate_bull["candidate_exposure"], errors="coerce")
+        .fillna(0.0)
+        .clip(0.0, 1.0)
+    )
+    forward_return = pd.to_numeric(gate_bull["forward_return"], errors="coerce")
+    positive_benchmark = forward_return.gt(0.0)
+    underexposed_positive = positive_benchmark & gate_bull["candidate_exposure"].lt(
+        1.0 - 1e-9
+    )
+    positive_count = int(positive_benchmark.sum())
+    return {
+        "validation_gate_bull_average_exposure": float(
+            gate_bull["candidate_exposure"].mean()
+        ),
+        "validation_gate_bull_underexposed_positive_benchmark_fraction": (
+            float(underexposed_positive.sum() / positive_count)
+            if positive_count
+            else pd.NA
+        ),
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum": (
+            float(forward_return.loc[underexposed_positive].sum())
+            if bool(underexposed_positive.any())
+            else 0.0
+        ),
+    }
+
+
 def _select_ml_strategy_candidate(candidates: list[dict[str, object]]) -> dict[str, object]:
     if not candidates:
         raise ValueError("ML strategy candidate selection requires at least one candidate.")
 
-    def _selection_score(row: dict[str, object]) -> tuple[float, float, float, float, float]:
+    def _selection_score(
+        row: dict[str, object],
+    ) -> tuple[float, float, float, float, float, float]:
+        min_validation_cost_benchmark_excess = row.get(
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
+            pd.NA,
+        )
         min_benchmark_excess = row.get("min_benchmark_excess_cumulative_return", pd.NA)
         if pd.isna(min_benchmark_excess):
             min_benchmark_excess = row["excess_cumulative_return"]
+        if pd.isna(min_validation_cost_benchmark_excess):
+            min_validation_cost_benchmark_excess = min_benchmark_excess
         return (
+            float(min_validation_cost_benchmark_excess),
             float(min_benchmark_excess),
             float(row["excess_cumulative_return"]),
             float(row["drawdown_delta"]),
@@ -3430,12 +3867,18 @@ def _select_ml_strategy_candidate_for_policy(
     candidates: list[dict[str, object]],
     *,
     selection_policy: str,
+    allow_score_validity_fallback: bool = False,
 ) -> tuple[dict[str, object] | None, str]:
     valid_candidates = [row for row in candidates if row["passed_gate"]]
     if valid_candidates:
         return _select_ml_strategy_candidate(valid_candidates), "strict"
     if selection_policy == "best_active_fallback":
         fallback_candidates = _benchmark_only_fallback_candidates(candidates)
+        if not fallback_candidates and allow_score_validity_fallback:
+            fallback_candidates = _benchmark_only_fallback_candidates(
+                candidates,
+                allow_score_validity_fallback=True,
+            )
         if fallback_candidates:
             return _select_ml_strategy_candidate(fallback_candidates), "best_active_fallback"
     return None, "none"
@@ -3455,6 +3898,7 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "effective_date",
         "symbol",
         "runtime_regime",
+        "gate_bull",
         "crypto_regime_risk_off",
         "crypto_regime_trend_state",
         "target",
@@ -3464,9 +3908,21 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "predicted_tier_weight",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "selected_regime_gate_bull_floor",
+        "allocation_score_transform",
+        "score_transform_bull_multiplier",
+        "score_transform_bull_addend",
+        "score_transform_risk_off_score_cap",
+        "score_transform_non_bull_score_cap",
         "raw_expected_allocation_score",
         "final_allocation_score",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
+        "score_transform_applied",
         "score",
         *probability_columns,
         "forward_return",
@@ -3478,7 +3934,11 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
         "fold_predicted_100_fraction",
+        "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "fold_score_transform_applied_fraction",
     ]
     if predictions.empty:
         return pd.DataFrame(columns=columns)
@@ -3497,10 +3957,29 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         working["raw_expected_allocation_score"] = working["score"]
     if "score_policy_triggered_100" not in working.columns:
         working["score_policy_triggered_100"] = False
+    if "score_policy_repair_authorized" not in working.columns:
+        working["score_policy_repair_authorized"] = False
+    if "score_policy_repair_denied_reason" not in working.columns:
+        working["score_policy_repair_denied_reason"] = ""
+    if "guarded_gate_bull_risk_off_override_authorized" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_authorized"] = False
+    if "guarded_gate_bull_risk_off_override_denied_reason" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_denied_reason"] = ""
+    if "guarded_gate_bull_risk_off_override_triggered" not in working.columns:
+        working["guarded_gate_bull_risk_off_override_triggered"] = False
+    if "score_transform_applied" not in working.columns:
+        working["score_transform_applied"] = False
+    for column, value in _score_transform_metadata(AllocationScoreTransformConfig()).items():
+        if column not in working.columns:
+            working[column] = value
     if {"crypto_regime_risk_off", "crypto_regime_trend_state"}.issubset(
         working.columns
     ):
         working["runtime_regime"] = working.apply(_allocation_regime_label, axis=1)
+    if "gate_bull" not in working.columns:
+        working["gate_bull"] = False
+    if "selected_regime_gate_bull_floor" not in working.columns:
+        working["selected_regime_gate_bull_floor"] = pd.NA
     for column in probability_columns:
         if column not in working.columns:
             working[column] = 0.0
@@ -3521,6 +4000,16 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         .reset_index()
     )
     working = working.merge(fold_support, on="fold_id", how="left")
+    repair_authorization = (
+        working.groupby("fold_id")["score_policy_repair_authorized"]
+        .agg(
+            fold_score_policy_repair_authorized_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(repair_authorization, on="fold_id", how="left")
     trigger_support = (
         working.groupby("fold_id")["score_policy_triggered_100"]
         .agg(
@@ -3531,6 +4020,36 @@ def _allocation_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFra
         .reset_index()
     )
     working = working.merge(trigger_support, on="fold_id", how="left")
+    guarded_override_authorization = (
+        working.groupby("fold_id")["guarded_gate_bull_risk_off_override_authorized"]
+        .agg(
+            fold_guarded_gate_bull_risk_off_override_authorized_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(guarded_override_authorization, on="fold_id", how="left")
+    guarded_override_trigger_support = (
+        working.groupby("fold_id")["guarded_gate_bull_risk_off_override_triggered"]
+        .agg(
+            fold_guarded_gate_bull_risk_off_override_triggered_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(guarded_override_trigger_support, on="fold_id", how="left")
+    transform_support = (
+        working.groupby("fold_id")["score_transform_applied"]
+        .agg(
+            fold_score_transform_applied_fraction=lambda values: float(
+                values.astype(bool).mean()
+            )
+        )
+        .reset_index()
+    )
+    working = working.merge(transform_support, on="fold_id", how="left")
 
     utility_columns = {
         0.0: "allocation_utility_0",
@@ -3675,6 +4194,11 @@ def _build_ml_strategy_tuning_outputs(
         "allocation_class_weighting",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "allocation_score_transform",
+        "score_transform_bull_multiplier",
+        "score_transform_bull_addend",
+        "score_transform_risk_off_score_cap",
+        "score_transform_non_bull_score_cap",
         "calibration_status",
         "rolling_train_bars",
         "min_holding_period_bars",
@@ -3684,6 +4208,7 @@ def _build_ml_strategy_tuning_outputs(
         "regime_sideways_floor",
         "regime_bear_floor",
         "regime_risk_off_cap",
+        "regime_gate_bull_floor",
         "threshold",
         "tier_min_threshold",
         "tier_half_threshold",
@@ -3705,10 +4230,27 @@ def _build_ml_strategy_tuning_outputs(
         "selection_benchmark_strategies",
         "selection_benchmark_excess_cumulative_returns",
         "min_benchmark_excess_cumulative_return",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
         "validation_predicted_100_fraction",
+        "validation_score_forward_return_correlation",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_target_correlation",
+        "validation_score_policy_repair_authorized",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_gate_bull_average_exposure",
+        "validation_gate_bull_underexposed_positive_benchmark_fraction",
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "validation_score_transform_applied_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
@@ -3730,6 +4272,11 @@ def _build_ml_strategy_tuning_outputs(
         "allocation_class_weighting",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "selected_allocation_score_transform",
+        "selected_score_transform_bull_multiplier",
+        "selected_score_transform_bull_addend",
+        "selected_score_transform_risk_off_score_cap",
+        "selected_score_transform_non_bull_score_cap",
         "calibration_status",
         "selected_rolling_train_bars",
         "selected_min_holding_period_bars",
@@ -3739,6 +4286,7 @@ def _build_ml_strategy_tuning_outputs(
         "selected_regime_sideways_floor",
         "selected_regime_bear_floor",
         "selected_regime_risk_off_cap",
+        "selected_regime_gate_bull_floor",
         "selected_threshold",
         "selected_tier_min_threshold",
         "selected_tier_half_threshold",
@@ -3753,16 +4301,34 @@ def _build_ml_strategy_tuning_outputs(
         "selection_benchmark_strategies",
         "selection_benchmark_excess_cumulative_returns",
         "min_benchmark_excess_cumulative_return",
+        "selection_validation_cost_bps",
+        "selection_validation_cost_benchmark_excess_cumulative_returns",
+        "min_selection_validation_cost_benchmark_excess_cumulative_return",
         "validation_predicted_25_fraction",
         "validation_predicted_50_fraction",
         "validation_predicted_100_fraction",
+        "validation_score_forward_return_correlation",
+        "validation_raw_score_forward_return_correlation",
+        "validation_score_target_correlation",
+        "validation_score_policy_repair_authorized",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
+        "validation_guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "validation_gate_bull_average_exposure",
+        "validation_gate_bull_underexposed_positive_benchmark_fraction",
+        "validation_gate_bull_underexposed_positive_benchmark_return_sum",
         "validation_score_policy_triggered_100_fraction",
+        "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "validation_score_transform_applied_fraction",
         "min_validation_predicted_target_fraction",
         "sharpe_like_delta",
         "drawdown_delta",
         "annualized_turnover",
         "exposure_changes",
         "average_exposure",
+        "selected_candidate_failure_reasons",
     ]
     allocation_probability_columns = [
         "model_name",
@@ -3771,6 +4337,7 @@ def _build_ml_strategy_tuning_outputs(
         "effective_date",
         "symbol",
         "runtime_regime",
+        "gate_bull",
         "crypto_regime_risk_off",
         "crypto_regime_trend_state",
         "target",
@@ -3780,9 +4347,21 @@ def _build_ml_strategy_tuning_outputs(
         "predicted_tier_weight",
         "allocation_score_policy",
         "allocation_score_policy_prob100_threshold",
+        "selected_regime_gate_bull_floor",
+        "allocation_score_transform",
+        "score_transform_bull_multiplier",
+        "score_transform_bull_addend",
+        "score_transform_risk_off_score_cap",
+        "score_transform_non_bull_score_cap",
         "raw_expected_allocation_score",
         "final_allocation_score",
+        "score_policy_repair_authorized",
+        "score_policy_repair_denied_reason",
         "score_policy_triggered_100",
+        "guarded_gate_bull_risk_off_override_authorized",
+        "guarded_gate_bull_risk_off_override_denied_reason",
+        "guarded_gate_bull_risk_off_override_triggered",
+        "score_transform_applied",
         "score",
         "prob_tier_0",
         "prob_tier_25",
@@ -3797,7 +4376,11 @@ def _build_ml_strategy_tuning_outputs(
         "fold_predicted_25_fraction",
         "fold_predicted_50_fraction",
         "fold_predicted_100_fraction",
+        "fold_score_policy_repair_authorized_fraction",
         "fold_score_policy_triggered_100_fraction",
+        "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+        "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
+        "fold_score_transform_applied_fraction",
     ]
     feature_importance_columns = [
         "model_name",
@@ -3810,8 +4393,12 @@ def _build_ml_strategy_tuning_outputs(
     tuning = config.evaluation.ml_strategy_tuning
     allocation_mode = tuning.allocation_mode
     selection_benchmark_names = _selection_benchmark_strategies(config)
-    benchmark_relative_selection = (
-        tuning.objective == "net_return_and_risk_vs_required_benchmarks"
+    benchmark_relative_selection = tuning.objective in {
+        "net_return_and_risk_vs_required_benchmarks",
+        "net_return_risk_score_validity_vs_required_benchmarks",
+    }
+    score_validity_selection = (
+        tuning.objective == "net_return_risk_score_validity_vs_required_benchmarks"
     )
     threshold_candidates = sorted(set(float(value) for value in tuning.thresholds))
     tier_threshold_candidates = _tier_threshold_sets(config)
@@ -3834,6 +4421,10 @@ def _build_ml_strategy_tuning_outputs(
         if allocation_mode in {"direct_tiered", "tiered"}
         else [0.0]
     )
+    prob100_threshold_candidates = _allocation_score_policy_prob100_threshold_candidates(
+        config
+    )
+    score_transform_candidates = _allocation_score_transform_candidates(config)
     regime_policy_candidates = (
         _regime_participation_policy_candidates(config)
         if allocation_mode in {"direct_tiered", "tiered"}
@@ -3854,6 +4445,11 @@ def _build_ml_strategy_tuning_outputs(
         )
 
     feature_columns = modeling_feature_columns(modeling_dataset)
+    modeling_dataset = _with_completed_bar_gate_labels(
+        modeling_dataset,
+        panel=panel,
+        config=config,
+    )
     frequency = config.portfolio.ranking.rebalance_frequency
     candidate_rows: list[dict[str, object]] = []
     selection_rows: list[dict[str, object]] = []
@@ -3862,6 +4458,14 @@ def _build_ml_strategy_tuning_outputs(
     feature_importance_frames: list[pd.DataFrame] = []
     panel_timestamps = pd.to_datetime(panel["timestamp"])
     fallback_regime_policy = _no_candidate_fallback_regime_policy(config)
+    selection_validation_cost_bps = _selection_validation_cost_bps(config)
+    baseline_performance_by_cost = {
+        float(cost_bps): reprice_performance(baseline_performance, float(cost_bps))
+        for cost_bps in {
+            float(config.portfolio.costs.bps_per_trade),
+            *selection_validation_cost_bps,
+        }
+    }
 
     def _deterministic_fallback_selection(
         *,
@@ -3884,7 +4488,7 @@ def _build_ml_strategy_tuning_outputs(
             "fold_id": fold_id,
             "selection_status": "selected",
             "selection_policy": tuning.selection_policy,
-            "selection_source": "deterministic_regime_fallback",
+            "selection_source": "regime_policy_fallback",
             "allocation_mode": allocation_mode,
             "selected_model_name": pd.NA,
             "selected_utility_profile": pd.NA,
@@ -3896,6 +4500,7 @@ def _build_ml_strategy_tuning_outputs(
             "allocation_score_policy_prob100_threshold": (
                 tuning.allocation_score_policy_prob100_threshold
             ),
+            **_selected_score_transform_metadata(None),
             "calibration_status": pd.NA,
             "selected_rolling_train_bars": pd.NA,
             "selected_min_holding_period_bars": pd.NA,
@@ -3909,6 +4514,11 @@ def _build_ml_strategy_tuning_outputs(
             "selected_regime_risk_off_cap": float(fallback_regime_policy.risk_off_cap)
             if fallback_regime_policy.risk_off_cap is not None
             else pd.NA,
+            "selected_regime_gate_bull_floor": (
+                float(fallback_regime_policy.gate_bull_floor)
+                if fallback_regime_policy.gate_bull_floor is not None
+                else pd.NA
+            ),
             "selected_threshold": pd.NA,
             "selected_tier_min_threshold": pd.NA,
             "selected_tier_half_threshold": pd.NA,
@@ -3931,16 +4541,44 @@ def _build_ml_strategy_tuning_outputs(
             "selection_benchmark_strategies": ",".join(selection_benchmark_names),
             "selection_benchmark_excess_cumulative_returns": pd.NA,
             "min_benchmark_excess_cumulative_return": pd.NA,
+            "selection_validation_cost_bps": ",".join(
+                f"{cost_bps:g}" for cost_bps in selection_validation_cost_bps
+            ),
+            "selection_validation_cost_benchmark_excess_cumulative_returns": pd.NA,
+            "min_selection_validation_cost_benchmark_excess_cumulative_return": pd.NA,
             "validation_predicted_25_fraction": pd.NA,
             "validation_predicted_50_fraction": pd.NA,
             "validation_predicted_100_fraction": pd.NA,
+            "validation_score_forward_return_correlation": pd.NA,
+            "validation_raw_score_forward_return_correlation": pd.NA,
+            "validation_score_target_correlation": pd.NA,
+            "validation_score_policy_repair_authorized": False,
+            "score_policy_repair_authorized": False,
+            "score_policy_repair_denied_reason": (
+                "regime_policy_fallback_no_valid_candidate"
+                if tuning.allocation_score_policy == "gate_bull_prob100_threshold"
+                else ""
+            ),
+            "validation_guarded_gate_bull_risk_off_override_authorized": False,
+            "guarded_gate_bull_risk_off_override_authorized": False,
+            "guarded_gate_bull_risk_off_override_denied_reason": (
+                "regime_policy_fallback_no_valid_candidate"
+                if tuning.guarded_gate_bull_risk_off_override
+                else ""
+            ),
+            "validation_gate_bull_average_exposure": pd.NA,
+            "validation_gate_bull_underexposed_positive_benchmark_fraction": pd.NA,
+            "validation_gate_bull_underexposed_positive_benchmark_return_sum": pd.NA,
             "validation_score_policy_triggered_100_fraction": pd.NA,
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction": pd.NA,
+            "validation_score_transform_applied_fraction": pd.NA,
             "min_validation_predicted_target_fraction": pd.NA,
             "sharpe_like_delta": pd.NA,
             "drawdown_delta": pd.NA,
             "annualized_turnover": pd.NA,
             "exposure_changes": exposure_changes,
             "average_exposure": average_exposure,
+            "selected_candidate_failure_reasons": "regime_policy_fallback_no_valid_candidate",
         }
         return weights, row
 
@@ -3993,6 +4631,32 @@ def _build_ml_strategy_tuning_outputs(
                 selection_benchmark_returns[benchmark_name] = float(
                     benchmark_window_metrics["cumulative_return"]
                 )
+            selection_benchmark_returns_by_cost: dict[float, dict[str, float]] = {}
+            missing_selection_benchmarks_by_cost: dict[float, list[str]] = {}
+            for cost_bps in selection_validation_cost_bps:
+                cost_benchmark_returns: dict[str, float] = {}
+                cost_missing_benchmarks: list[str] = []
+                cost_performance = baseline_performance_by_cost[float(cost_bps)]
+                for benchmark_name in selection_benchmark_names:
+                    try:
+                        benchmark_window_metrics = _strategy_metrics_for_window(
+                            performance=cost_performance,
+                            strategy_name=benchmark_name,
+                            window_dates=validation_dates,
+                            periods_per_year=config.evaluation.periods_per_year,
+                        )
+                    except RuntimeError:
+                        cost_missing_benchmarks.append(benchmark_name)
+                        continue
+                    cost_benchmark_returns[benchmark_name] = float(
+                        benchmark_window_metrics["cumulative_return"]
+                    )
+                selection_benchmark_returns_by_cost[float(cost_bps)] = (
+                    cost_benchmark_returns
+                )
+                missing_selection_benchmarks_by_cost[float(cost_bps)] = (
+                    cost_missing_benchmarks
+                )
 
             for model_spec in config.models:
                 for rolling_train_bars in rolling_train_candidates:
@@ -4041,67 +4705,164 @@ def _build_ml_strategy_tuning_outputs(
                         )
                         if validation_output is None:
                             continue
-                        validation_predictions = validation_output.predictions
+                        base_validation_predictions = validation_output.predictions
+                        base_score_validity_metrics = _score_validity_metrics(
+                            base_validation_predictions
+                        )
                         (
-                            predicted_support_ok,
-                            predicted_support_fractions,
-                        ) = _predicted_tier_support(
-                            predictions=validation_predictions,
-                            required_weights=(
-                                required_predicted_weights
-                                if _is_allocation_target(config.target.type)
-                                else []
+                            score_policy_repair_authorized,
+                            score_policy_repair_denied_reason,
+                        ) = _score_policy_repair_authorization(
+                            allocation_score_policy=tuning.allocation_score_policy,
+                            validation_raw_score_forward_return_correlation=(
+                                base_score_validity_metrics[
+                                    "validation_raw_score_forward_return_correlation"
+                                ]
                             ),
-                            min_fraction=min_predicted_fraction,
                         )
-                        validation_predicted_25_fraction = predicted_support_fractions.get(
-                            0.25,
-                            pd.NA,
+                        (
+                            guarded_gate_bull_risk_off_override_authorized,
+                            guarded_gate_bull_risk_off_override_denied_reason,
+                        ) = _guarded_gate_bull_risk_off_override_authorization(
+                            enabled=tuning.guarded_gate_bull_risk_off_override,
+                            validation_raw_score_forward_return_correlation=(
+                                base_score_validity_metrics[
+                                    "validation_raw_score_forward_return_correlation"
+                                ]
+                            ),
                         )
-                        validation_predicted_50_fraction = predicted_support_fractions.get(
-                            0.50,
-                            pd.NA,
-                        )
-                        validation_predicted_100_fraction = float(
-                            validation_predictions["score"]
-                            .map(lambda value: nearest_tier(float(value)))
-                            .sub(1.0)
-                            .abs()
-                            .le(1e-9)
-                            .mean()
-                        )
-                        if "score_policy_triggered_100" in validation_predictions.columns:
-                            validation_score_policy_triggered_100_fraction = float(
-                                validation_predictions[
-                                    "score_policy_triggered_100"
-                                ].astype(bool).mean()
-                            )
-                        else:
-                            validation_score_policy_triggered_100_fraction = pd.NA
-                        predicted_fraction_values = [
-                            value
-                            for value in predicted_support_fractions.values()
-                            if pd.notna(value)
+                        candidate_thresholds: list[
+                            tuple[
+                                float,
+                                tuple[float, float, float] | None,
+                                float,
+                                AllocationScoreTransformConfig,
+                            ]
                         ]
-                        min_validation_predicted_target_fraction = (
-                            min(predicted_fraction_values)
-                            if predicted_fraction_values
-                            else pd.NA
-                        )
-                        candidate_thresholds: list[tuple[float, tuple[float, float, float] | None]]
                         if allocation_mode == "tiered":
                             candidate_thresholds = [
-                                (threshold_set[0], threshold_set)
+                                (
+                                    threshold_set[0],
+                                    threshold_set,
+                                    prob100_threshold,
+                                    score_transform,
+                                )
                                 for threshold_set in tier_threshold_candidates
+                                for prob100_threshold in prob100_threshold_candidates
+                                for score_transform in score_transform_candidates
                             ]
                         elif allocation_mode == "direct_tiered":
-                            candidate_thresholds = [(0.0, None)]
+                            candidate_thresholds = [
+                                (0.0, None, prob100_threshold, score_transform)
+                                for prob100_threshold in prob100_threshold_candidates
+                                for score_transform in score_transform_candidates
+                            ]
                         else:
                             candidate_thresholds = [
-                                (threshold, None)
+                                (threshold, None, prob100_threshold, score_transform)
                                 for threshold in threshold_candidates
+                                for prob100_threshold in prob100_threshold_candidates
+                                for score_transform in score_transform_candidates
                             ]
-                        for threshold, tier_thresholds in candidate_thresholds:
+                        for (
+                            threshold,
+                            tier_thresholds,
+                            prob100_threshold,
+                            score_transform,
+                        ) in candidate_thresholds:
+                            validation_predictions = (
+                                _prediction_frame_with_allocation_score_policy(
+                                    predictions=base_validation_predictions,
+                                    allocation_score_policy=tuning.allocation_score_policy,
+                                    prob100_threshold=prob100_threshold,
+                                    score_policy_repair_authorized=(
+                                        score_policy_repair_authorized
+                                    ),
+                                    score_policy_repair_denied_reason=(
+                                        score_policy_repair_denied_reason
+                                    ),
+                                    guarded_gate_bull_risk_off_override_enabled=(
+                                        tuning.guarded_gate_bull_risk_off_override
+                                    ),
+                                    guarded_gate_bull_risk_off_override_authorized=(
+                                        guarded_gate_bull_risk_off_override_authorized
+                                    ),
+                                    guarded_gate_bull_risk_off_override_denied_reason=(
+                                        guarded_gate_bull_risk_off_override_denied_reason
+                                    ),
+                                    score_transform=score_transform,
+                                )
+                            )
+                            (
+                                predicted_support_ok,
+                                predicted_support_fractions,
+                            ) = _predicted_tier_support(
+                                predictions=validation_predictions,
+                                required_weights=(
+                                    required_predicted_weights
+                                    if _is_allocation_target(config.target.type)
+                                    else []
+                                ),
+                                min_fraction=min_predicted_fraction,
+                            )
+                            validation_predicted_25_fraction = (
+                                predicted_support_fractions.get(0.25, pd.NA)
+                            )
+                            validation_predicted_50_fraction = (
+                                predicted_support_fractions.get(0.50, pd.NA)
+                            )
+                            validation_predicted_100_fraction = float(
+                                validation_predictions["score"]
+                                .map(lambda value: nearest_tier(float(value)))
+                                .sub(1.0)
+                                .abs()
+                                .le(1e-9)
+                                .mean()
+                            )
+                            if "score_policy_triggered_100" in validation_predictions.columns:
+                                validation_score_policy_triggered_100_fraction = float(
+                                    validation_predictions[
+                                        "score_policy_triggered_100"
+                                    ].astype(bool).mean()
+                                )
+                            else:
+                                validation_score_policy_triggered_100_fraction = pd.NA
+                            validation_guarded_gate_bull_risk_off_override_triggered_fraction = float(
+                                validation_predictions[
+                                    "guarded_gate_bull_risk_off_override_triggered"
+                                ]
+                                .astype(bool)
+                                .mean()
+                            )
+                            if "score_transform_applied" in validation_predictions.columns:
+                                validation_score_transform_applied_fraction = float(
+                                    validation_predictions[
+                                        "score_transform_applied"
+                                    ].astype(bool).mean()
+                                )
+                            else:
+                                validation_score_transform_applied_fraction = pd.NA
+                            predicted_fraction_values = [
+                                value
+                                for value in predicted_support_fractions.values()
+                                if pd.notna(value)
+                            ]
+                            min_validation_predicted_target_fraction = (
+                                min(predicted_fraction_values)
+                                if predicted_fraction_values
+                                else pd.NA
+                            )
+                            score_validity_metrics = _score_validity_metrics(
+                                validation_predictions
+                            )
+                            score_forward_correlation = score_validity_metrics[
+                                "validation_score_forward_return_correlation"
+                            ]
+                            score_validity_ok = not (
+                                score_validity_selection
+                                and pd.notna(score_forward_correlation)
+                                and float(score_forward_correlation) < 0.0
+                            )
                             for regime_policy in regime_policy_candidates:
                                 strategy_regime_policy = _strategy_regime_policy(
                                     regime_policy
@@ -4121,11 +4882,20 @@ def _build_ml_strategy_tuning_outputs(
                                         )
                                         if weights.empty:
                                             continue
-                                        performance = run_backtest(
-                                            panel=validation_panel,
-                                            weights=weights,
-                                            cost_bps=config.portfolio.costs.bps_per_trade,
-                                        )
+                                        performance_by_cost = {
+                                            float(cost_bps): run_backtest(
+                                                panel=validation_panel,
+                                                weights=weights,
+                                                cost_bps=float(cost_bps),
+                                            )
+                                            for cost_bps in {
+                                                float(config.portfolio.costs.bps_per_trade),
+                                                *selection_validation_cost_bps,
+                                            }
+                                        }
+                                        performance = performance_by_cost[
+                                            float(config.portfolio.costs.bps_per_trade)
+                                        ]
                                         metrics = compute_strategy_metrics(
                                             performance,
                                             periods_per_year=config.evaluation.periods_per_year,
@@ -4138,6 +4908,12 @@ def _build_ml_strategy_tuning_outputs(
                                         )
                                         exposure_changes, average_exposure = _weight_activity(
                                             weights
+                                        )
+                                        gate_bull_metrics = (
+                                            _gate_bull_underexposure_metrics(
+                                                predictions=validation_predictions,
+                                                weights=weights,
+                                            )
                                         )
                                         excess_return = (
                                             float(metrics["cumulative_return"])
@@ -4174,6 +4950,63 @@ def _build_ml_strategy_tuning_outputs(
                                                 ]
                                                 if value
                                             )
+                                        validation_cost_benchmark_excess_values: list[float] = []
+                                        validation_cost_benchmark_excess_summary_parts: list[
+                                            str
+                                        ] = []
+                                        for cost_bps in selection_validation_cost_bps:
+                                            cost_metrics = compute_strategy_metrics(
+                                                performance_by_cost[float(cost_bps)],
+                                                periods_per_year=(
+                                                    config.evaluation.periods_per_year
+                                                ),
+                                            ).iloc[0]
+                                            cost_excess_returns = {
+                                                name: float(
+                                                    cost_metrics["cumulative_return"]
+                                                )
+                                                - benchmark_return
+                                                for name, benchmark_return in (
+                                                    selection_benchmark_returns_by_cost[
+                                                        float(cost_bps)
+                                                    ].items()
+                                                )
+                                            }
+                                            validation_cost_benchmark_excess_values.extend(
+                                                cost_excess_returns.values()
+                                            )
+                                            validation_cost_benchmark_excess_summary_parts.extend(
+                                                f"{float(cost_bps):g}:{name}:{cost_excess_returns[name]:.12g}"
+                                                for name in selection_benchmark_names
+                                                if name in cost_excess_returns
+                                            )
+                                            validation_cost_benchmark_excess_summary_parts.extend(
+                                                f"{float(cost_bps):g}:{name}:missing"
+                                                for name in missing_selection_benchmarks_by_cost[
+                                                    float(cost_bps)
+                                                ]
+                                            )
+                                        min_validation_cost_benchmark_excess_return = (
+                                            min(
+                                                validation_cost_benchmark_excess_values
+                                            )
+                                            if validation_cost_benchmark_excess_values
+                                            else pd.NA
+                                        )
+                                        validation_cost_benchmark_gate_ok = (
+                                            not any(
+                                                missing_selection_benchmarks_by_cost.values()
+                                            )
+                                            and bool(
+                                                validation_cost_benchmark_excess_values
+                                            )
+                                            and all(
+                                                excess > 0.0
+                                                for excess in (
+                                                    validation_cost_benchmark_excess_values
+                                                )
+                                            )
+                                        )
                                         sharpe_delta = (
                                             float(metrics["sharpe_like"]) - buy_hold_sharpe
                                         )
@@ -4223,14 +5056,20 @@ def _build_ml_strategy_tuning_outputs(
                                                 missing_selection_benchmarks
                                             ),
                                             benchmark_excess_values=benchmark_excess_values,
+                                            validation_cost_benchmark_gate_ok=(
+                                                validation_cost_benchmark_gate_ok
+                                            ),
                                             risk_gate_ok=risk_gate_ok,
+                                            score_validity_ok=score_validity_ok,
                                         )
                                         passed_gate = (
                                             active_candidate
                                             and turnover_budget_ok
                                             and predicted_support_ok
                                             and benchmark_gate_ok
+                                            and validation_cost_benchmark_gate_ok
                                             and risk_gate_ok
+                                            and score_validity_ok
                                         )
                                         row = {
                                             "fold_id": fold.fold_id,
@@ -4253,8 +5092,9 @@ def _build_ml_strategy_tuning_outputs(
                                                 tuning.allocation_score_policy
                                             ),
                                             "allocation_score_policy_prob100_threshold": (
-                                                tuning.allocation_score_policy_prob100_threshold
+                                                prob100_threshold
                                             ),
+                                            **_score_transform_metadata(score_transform),
                                             "calibration_status": (
                                                 validation_output.calibration_status
                                             ),
@@ -4280,6 +5120,11 @@ def _build_ml_strategy_tuning_outputs(
                                             "regime_risk_off_cap": (
                                                 float(regime_policy.risk_off_cap)
                                                 if regime_policy.risk_off_cap is not None
+                                                else pd.NA
+                                            ),
+                                            "regime_gate_bull_floor": (
+                                                float(regime_policy.gate_bull_floor)
+                                                if regime_policy.gate_bull_floor is not None
                                                 else pd.NA
                                             ),
                                             "threshold": threshold,
@@ -4329,6 +5174,16 @@ def _build_ml_strategy_tuning_outputs(
                                             "min_benchmark_excess_cumulative_return": (
                                                 min_benchmark_excess_return
                                             ),
+                                            "selection_validation_cost_bps": ",".join(
+                                                f"{cost_bps:g}"
+                                                for cost_bps in selection_validation_cost_bps
+                                            ),
+                                            "selection_validation_cost_benchmark_excess_cumulative_returns": ";".join(
+                                                validation_cost_benchmark_excess_summary_parts
+                                            ),
+                                            "min_selection_validation_cost_benchmark_excess_cumulative_return": (
+                                                min_validation_cost_benchmark_excess_return
+                                            ),
                                             "validation_predicted_25_fraction": (
                                                 validation_predicted_25_fraction
                                             ),
@@ -4338,8 +5193,34 @@ def _build_ml_strategy_tuning_outputs(
                                             "validation_predicted_100_fraction": (
                                                 validation_predicted_100_fraction
                                             ),
+                                            **score_validity_metrics,
+                                            "validation_score_policy_repair_authorized": (
+                                                score_policy_repair_authorized
+                                            ),
+                                            "score_policy_repair_authorized": (
+                                                score_policy_repair_authorized
+                                            ),
+                                            "score_policy_repair_denied_reason": (
+                                                score_policy_repair_denied_reason
+                                            ),
+                                            "validation_guarded_gate_bull_risk_off_override_authorized": (
+                                                guarded_gate_bull_risk_off_override_authorized
+                                            ),
+                                            "guarded_gate_bull_risk_off_override_authorized": (
+                                                guarded_gate_bull_risk_off_override_authorized
+                                            ),
+                                            "guarded_gate_bull_risk_off_override_denied_reason": (
+                                                guarded_gate_bull_risk_off_override_denied_reason
+                                            ),
+                                            **gate_bull_metrics,
                                             "validation_score_policy_triggered_100_fraction": (
                                                 validation_score_policy_triggered_100_fraction
+                                            ),
+                                            "validation_guarded_gate_bull_risk_off_override_triggered_fraction": (
+                                                validation_guarded_gate_bull_risk_off_override_triggered_fraction
+                                            ),
+                                            "validation_score_transform_applied_fraction": (
+                                                validation_score_transform_applied_fraction
                                             ),
                                             "min_validation_predicted_target_fraction": (
                                                 min_validation_predicted_target_fraction
@@ -4356,6 +5237,7 @@ def _build_ml_strategy_tuning_outputs(
         selected, selected_source = _select_ml_strategy_candidate_for_policy(
             fold_candidates,
             selection_policy=tuning.selection_policy,
+            allow_score_validity_fallback=score_validity_selection,
         )
         if selected is None:
             if fallback_regime_policy is not None:
@@ -4393,6 +5275,7 @@ def _build_ml_strategy_tuning_outputs(
                     "allocation_score_policy_prob100_threshold": (
                         tuning.allocation_score_policy_prob100_threshold
                     ),
+                    **_selected_score_transform_metadata(None),
                     "calibration_status": pd.NA,
                     "selected_rolling_train_bars": pd.NA,
                     "selected_min_holding_period_bars": pd.NA,
@@ -4402,6 +5285,7 @@ def _build_ml_strategy_tuning_outputs(
                     "selected_regime_sideways_floor": pd.NA,
                     "selected_regime_bear_floor": pd.NA,
                     "selected_regime_risk_off_cap": pd.NA,
+                    "selected_regime_gate_bull_floor": pd.NA,
                     "selected_threshold": pd.NA,
                     "selected_tier_min_threshold": pd.NA,
                     "selected_tier_half_threshold": pd.NA,
@@ -4424,16 +5308,45 @@ def _build_ml_strategy_tuning_outputs(
                     "selection_benchmark_strategies": ",".join(selection_benchmark_names),
                     "selection_benchmark_excess_cumulative_returns": pd.NA,
                     "min_benchmark_excess_cumulative_return": pd.NA,
+                    "selection_validation_cost_bps": ",".join(
+                        f"{cost_bps:g}" for cost_bps in selection_validation_cost_bps
+                    ),
+                    "selection_validation_cost_benchmark_excess_cumulative_returns": pd.NA,
+                    "min_selection_validation_cost_benchmark_excess_cumulative_return": pd.NA,
                     "validation_predicted_25_fraction": pd.NA,
                     "validation_predicted_50_fraction": pd.NA,
                     "validation_predicted_100_fraction": pd.NA,
+                    "validation_score_forward_return_correlation": pd.NA,
+                    "validation_raw_score_forward_return_correlation": pd.NA,
+                    "validation_score_target_correlation": pd.NA,
+                    "validation_score_policy_repair_authorized": False,
+                    "score_policy_repair_authorized": False,
+                    "score_policy_repair_denied_reason": (
+                        "no_valid_candidate"
+                        if tuning.allocation_score_policy
+                        == "gate_bull_prob100_threshold"
+                        else ""
+                    ),
+                    "validation_guarded_gate_bull_risk_off_override_authorized": False,
+                    "guarded_gate_bull_risk_off_override_authorized": False,
+                    "guarded_gate_bull_risk_off_override_denied_reason": (
+                        "no_valid_candidate"
+                        if tuning.guarded_gate_bull_risk_off_override
+                        else ""
+                    ),
+                    "validation_gate_bull_average_exposure": pd.NA,
+                    "validation_gate_bull_underexposed_positive_benchmark_fraction": pd.NA,
+                    "validation_gate_bull_underexposed_positive_benchmark_return_sum": pd.NA,
                     "validation_score_policy_triggered_100_fraction": pd.NA,
+                    "validation_guarded_gate_bull_risk_off_override_triggered_fraction": pd.NA,
+                    "validation_score_transform_applied_fraction": pd.NA,
                     "min_validation_predicted_target_fraction": pd.NA,
                     "sharpe_like_delta": pd.NA,
                     "drawdown_delta": pd.NA,
                     "annualized_turnover": pd.NA,
                     "exposure_changes": 0,
                     "average_exposure": 0.0,
+                    "selected_candidate_failure_reasons": pd.NA,
                 }
             )
             continue
@@ -4446,6 +5359,42 @@ def _build_ml_strategy_tuning_outputs(
         selected_min_holding_period_bars = int(selected["min_holding_period_bars"])
         selected_hysteresis_margin = float(selected["hysteresis_margin"])
         selected_threshold = float(selected["threshold"])
+        selected_prob100_threshold = float(
+            selected["allocation_score_policy_prob100_threshold"]
+        )
+        selected_score_policy_repair_authorized = bool(
+            selected["validation_score_policy_repair_authorized"]
+        )
+        selected_score_policy_repair_denied_reason = (
+            str(selected["score_policy_repair_denied_reason"])
+            if pd.notna(selected["score_policy_repair_denied_reason"])
+            else ""
+        )
+        selected_guarded_gate_bull_risk_off_override_authorized = bool(
+            selected["validation_guarded_gate_bull_risk_off_override_authorized"]
+        )
+        selected_guarded_gate_bull_risk_off_override_denied_reason = (
+            str(selected["guarded_gate_bull_risk_off_override_denied_reason"])
+            if pd.notna(
+                selected["guarded_gate_bull_risk_off_override_denied_reason"]
+            )
+            else ""
+        )
+        selected_score_transform = AllocationScoreTransformConfig(
+            name=str(selected["allocation_score_transform"]),
+            bull_multiplier=float(selected["score_transform_bull_multiplier"]),
+            bull_addend=float(selected["score_transform_bull_addend"]),
+            risk_off_score_cap=(
+                float(selected["score_transform_risk_off_score_cap"])
+                if pd.notna(selected["score_transform_risk_off_score_cap"])
+                else None
+            ),
+            non_bull_score_cap=(
+                float(selected["score_transform_non_bull_score_cap"])
+                if pd.notna(selected["score_transform_non_bull_score_cap"])
+                else None
+            ),
+        )
         selected_regime_policy = RegimeParticipationPolicyConfig(
             name=str(selected["regime_policy"]),
             bull_floor=float(selected["regime_bull_floor"]),
@@ -4454,6 +5403,11 @@ def _build_ml_strategy_tuning_outputs(
             risk_off_cap=(
                 float(selected["regime_risk_off_cap"])
                 if pd.notna(selected["regime_risk_off_cap"])
+                else None
+            ),
+            gate_bull_floor=(
+                float(selected["regime_gate_bull_floor"])
+                if pd.notna(selected["regime_gate_bull_floor"])
                 else None
             ),
         )
@@ -4495,8 +5449,15 @@ def _build_ml_strategy_tuning_outputs(
             allocation_calibration_cv=tuning.allocation_calibration_cv,
             allocation_score_policy=tuning.allocation_score_policy,
             allocation_score_policy_prob100_threshold=(
-                tuning.allocation_score_policy_prob100_threshold
+                selected_prob100_threshold
             ),
+            score_policy_repair_authorized=(
+                selected_score_policy_repair_authorized
+            ),
+            score_policy_repair_denied_reason=(
+                selected_score_policy_repair_denied_reason
+            ),
+            allocation_score_transform=selected_score_transform,
             utility_profile=selected_utility_profile,
         )
         if selected_test_output is None:
@@ -4520,7 +5481,32 @@ def _build_ml_strategy_tuning_outputs(
             )
             selection_status = "no_valid_candidate"
         else:
-            selected_test_predictions = selected_test_output.predictions
+            selected_test_predictions = _prediction_frame_with_allocation_score_policy(
+                predictions=selected_test_output.predictions,
+                allocation_score_policy=tuning.allocation_score_policy,
+                prob100_threshold=selected_prob100_threshold,
+                score_policy_repair_authorized=(
+                    selected_score_policy_repair_authorized
+                ),
+                score_policy_repair_denied_reason=(
+                    selected_score_policy_repair_denied_reason
+                ),
+                guarded_gate_bull_risk_off_override_enabled=(
+                    tuning.guarded_gate_bull_risk_off_override
+                ),
+                guarded_gate_bull_risk_off_override_authorized=(
+                    selected_guarded_gate_bull_risk_off_override_authorized
+                ),
+                guarded_gate_bull_risk_off_override_denied_reason=(
+                    selected_guarded_gate_bull_risk_off_override_denied_reason
+                ),
+                score_transform=selected_score_transform,
+            )
+            selected_test_predictions["selected_regime_gate_bull_floor"] = (
+                float(selected_regime_policy.gate_bull_floor)
+                if selected_regime_policy.gate_bull_floor is not None
+                else pd.NA
+            )
             selected_weight_frames.append(
                 _weights_for_predictions(
                     config=config,
@@ -4576,7 +5562,12 @@ def _build_ml_strategy_tuning_outputs(
                 "allocation_class_weighting": tuning.allocation_class_weighting,
                 "allocation_score_policy": tuning.allocation_score_policy,
                 "allocation_score_policy_prob100_threshold": (
-                    tuning.allocation_score_policy_prob100_threshold
+                    selected_prob100_threshold
+                    if selection_status == "selected"
+                    else tuning.allocation_score_policy_prob100_threshold
+                ),
+                **_selected_score_transform_metadata(
+                    selected_score_transform if selection_status == "selected" else None
                 ),
                 "calibration_status": (
                     selected_test_output.calibration_status
@@ -4624,6 +5615,14 @@ def _build_ml_strategy_tuning_outputs(
                     )
                     else pd.NA
                 ),
+                "selected_regime_gate_bull_floor": (
+                    float(selected_regime_policy.gate_bull_floor)
+                    if (
+                        selection_status == "selected"
+                        and selected_regime_policy.gate_bull_floor is not None
+                    )
+                    else pd.NA
+                ),
                 "selected_threshold": (
                     selected_threshold if selection_status == "selected" else pd.NA
                 ),
@@ -4658,6 +5657,15 @@ def _build_ml_strategy_tuning_outputs(
                 "min_benchmark_excess_cumulative_return": selected[
                     "min_benchmark_excess_cumulative_return"
                 ],
+                "selection_validation_cost_bps": selected[
+                    "selection_validation_cost_bps"
+                ],
+                "selection_validation_cost_benchmark_excess_cumulative_returns": selected[
+                    "selection_validation_cost_benchmark_excess_cumulative_returns"
+                ],
+                "min_selection_validation_cost_benchmark_excess_cumulative_return": selected[
+                    "min_selection_validation_cost_benchmark_excess_cumulative_return"
+                ],
                 "validation_predicted_25_fraction": selected[
                     "validation_predicted_25_fraction"
                 ],
@@ -4667,8 +5675,58 @@ def _build_ml_strategy_tuning_outputs(
                 "validation_predicted_100_fraction": selected[
                     "validation_predicted_100_fraction"
                 ],
+                "validation_score_forward_return_correlation": selected[
+                    "validation_score_forward_return_correlation"
+                ],
+                "validation_raw_score_forward_return_correlation": selected[
+                    "validation_raw_score_forward_return_correlation"
+                ],
+                "validation_score_target_correlation": selected[
+                    "validation_score_target_correlation"
+                ],
+                "validation_score_policy_repair_authorized": selected[
+                    "validation_score_policy_repair_authorized"
+                ],
+                "score_policy_repair_authorized": (
+                    selected_score_policy_repair_authorized
+                    if selection_status == "selected"
+                    else False
+                ),
+                "score_policy_repair_denied_reason": (
+                    selected_score_policy_repair_denied_reason
+                    if selection_status == "selected"
+                    else ""
+                ),
+                "validation_guarded_gate_bull_risk_off_override_authorized": selected[
+                    "validation_guarded_gate_bull_risk_off_override_authorized"
+                ],
+                "guarded_gate_bull_risk_off_override_authorized": (
+                    selected_guarded_gate_bull_risk_off_override_authorized
+                    if selection_status == "selected"
+                    else False
+                ),
+                "guarded_gate_bull_risk_off_override_denied_reason": (
+                    selected_guarded_gate_bull_risk_off_override_denied_reason
+                    if selection_status == "selected"
+                    else ""
+                ),
+                "validation_gate_bull_average_exposure": selected[
+                    "validation_gate_bull_average_exposure"
+                ],
+                "validation_gate_bull_underexposed_positive_benchmark_fraction": selected[
+                    "validation_gate_bull_underexposed_positive_benchmark_fraction"
+                ],
+                "validation_gate_bull_underexposed_positive_benchmark_return_sum": selected[
+                    "validation_gate_bull_underexposed_positive_benchmark_return_sum"
+                ],
                 "validation_score_policy_triggered_100_fraction": selected[
                     "validation_score_policy_triggered_100_fraction"
+                ],
+                "validation_guarded_gate_bull_risk_off_override_triggered_fraction": selected[
+                    "validation_guarded_gate_bull_risk_off_override_triggered_fraction"
+                ],
+                "validation_score_transform_applied_fraction": selected[
+                    "validation_score_transform_applied_fraction"
                 ],
                 "min_validation_predicted_target_fraction": selected[
                     "min_validation_predicted_target_fraction"
@@ -4678,6 +5736,11 @@ def _build_ml_strategy_tuning_outputs(
                 "annualized_turnover": selected["annualized_turnover"],
                 "exposure_changes": selected["exposure_changes"],
                 "average_exposure": selected["average_exposure"],
+                "selected_candidate_failure_reasons": (
+                    selected["failure_reasons"]
+                    if selected_source == "best_active_fallback"
+                    else ""
+                ),
             }
         )
 
@@ -4687,12 +5750,14 @@ def _build_ml_strategy_tuning_outputs(
             [
                 "fold_id",
                 "passed_gate",
+                "min_selection_validation_cost_benchmark_excess_cumulative_return",
                 "min_benchmark_excess_cumulative_return",
                 "excess_cumulative_return",
                 "drawdown_delta",
                 "sharpe_like_delta",
                 "annualized_turnover",
                 "model_name",
+                "allocation_score_transform",
                 "regime_policy",
                 "threshold",
                 "hysteresis_margin",
@@ -4704,6 +5769,8 @@ def _build_ml_strategy_tuning_outputs(
                 False,
                 False,
                 False,
+                False,
+                True,
                 True,
                 True,
                 True,

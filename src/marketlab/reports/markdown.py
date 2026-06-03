@@ -310,6 +310,14 @@ def _relative_artifact_line(report_path: Path, artifact_path: Path, label: str) 
     return f"- {label}: [{artifact_path.name}]({relative_path})"
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
 def _display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     display = frame.copy()
     numeric_columns = display.select_dtypes(include="number").columns
@@ -639,6 +647,11 @@ def _ml_strategy_tuning_lines(
             "allocation_mode",
             "allocation_score_policy",
             "allocation_score_policy_prob100_threshold",
+            "selected_allocation_score_transform",
+            "selected_score_transform_bull_multiplier",
+            "selected_score_transform_bull_addend",
+            "selected_score_transform_risk_off_score_cap",
+            "selected_score_transform_non_bull_score_cap",
             "selected_model_name",
             "selected_rolling_train_bars",
             "selected_min_holding_period_bars",
@@ -648,6 +661,7 @@ def _ml_strategy_tuning_lines(
             "selected_regime_sideways_floor",
             "selected_regime_bear_floor",
             "selected_regime_risk_off_cap",
+            "selected_regime_gate_bull_floor",
             "selected_threshold",
             "selected_tier_min_threshold",
             "selected_tier_half_threshold",
@@ -655,13 +669,29 @@ def _ml_strategy_tuning_lines(
             "passed_gate",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "selection_validation_cost_bps",
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
             "validation_predicted_100_fraction",
+            "validation_score_forward_return_correlation",
+            "validation_raw_score_forward_return_correlation",
+            "validation_score_target_correlation",
+            "validation_score_policy_repair_authorized",
+            "score_policy_repair_authorized",
+            "score_policy_repair_denied_reason",
+            "validation_guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_denied_reason",
+            "validation_gate_bull_average_exposure",
+            "validation_gate_bull_underexposed_positive_benchmark_fraction",
             "validation_score_policy_triggered_100_fraction",
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
+            "validation_score_transform_applied_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
             "annualized_turnover",
             "exposure_changes",
             "average_exposure",
+            "selected_candidate_failure_reasons",
         ]
         available_selection_columns = [
             column for column in selection_columns if column in tuning_selections.columns
@@ -677,6 +707,11 @@ def _ml_strategy_tuning_lines(
             "allocation_mode",
             "allocation_score_policy",
             "allocation_score_policy_prob100_threshold",
+            "allocation_score_transform",
+            "score_transform_bull_multiplier",
+            "score_transform_bull_addend",
+            "score_transform_risk_off_score_cap",
+            "score_transform_non_bull_score_cap",
             "rolling_train_bars",
             "min_holding_period_bars",
             "hysteresis_margin",
@@ -685,6 +720,7 @@ def _ml_strategy_tuning_lines(
             "regime_sideways_floor",
             "regime_bear_floor",
             "regime_risk_off_cap",
+            "regime_gate_bull_floor",
             "threshold",
             "tier_min_threshold",
             "tier_half_threshold",
@@ -695,8 +731,23 @@ def _ml_strategy_tuning_lines(
             "annualized_turnover",
             "excess_cumulative_return",
             "min_benchmark_excess_cumulative_return",
+            "selection_validation_cost_bps",
+            "min_selection_validation_cost_benchmark_excess_cumulative_return",
             "validation_predicted_100_fraction",
+            "validation_score_forward_return_correlation",
+            "validation_raw_score_forward_return_correlation",
+            "validation_score_target_correlation",
+            "validation_score_policy_repair_authorized",
+            "score_policy_repair_authorized",
+            "score_policy_repair_denied_reason",
+            "validation_guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_authorized",
+            "guarded_gate_bull_risk_off_override_denied_reason",
+            "validation_gate_bull_average_exposure",
+            "validation_gate_bull_underexposed_positive_benchmark_fraction",
             "validation_score_policy_triggered_100_fraction",
+            "validation_guarded_gate_bull_risk_off_override_triggered_fraction",
+            "validation_score_transform_applied_fraction",
             "sharpe_like_delta",
             "drawdown_delta",
             "active_candidate",
@@ -725,7 +776,10 @@ def _ml_strategy_tuning_lines(
             "- Rolling train candidates use only the latest configured bars inside the label-safe training slice.",
             "- Selected models are refit on the selected rolling training window before scoring the outer test fold.",
             "- The pass gate requires net excess return versus the configured selection benchmarks, activity guardrails, risk improvement, and any configured turnover budget after costs.",
+            "- Configured selection validation costs are evaluated on the same candidate weights; candidates rank by their worst benchmark excess across those costs.",
             "- `best_active_fallback` selections are diagnostic runtime selections; they keep `passed_gate=False` and do not relax the strict Phase 8 research gate.",
+            "- `gate_bull_prob100_threshold` can promote a completed-bar `gate_bull` row to 100% only when the raw validation expected-allocation score has finite non-negative forward-return correlation. Repaired scores never authorize their own promotion.",
+            "- The research-only guarded gate-bull risk-off override can lift a completed-bar `gate_bull` conflict row to 100% after the risk-off cap only when raw validation score ordering is finite and non-negative.",
         ]
     )
     for artifact_path, label in [
@@ -811,7 +865,12 @@ def _allocation_utility_lines(
             "fold_predicted_25_fraction",
             "fold_predicted_50_fraction",
             "fold_predicted_100_fraction",
+            "fold_score_policy_repair_authorized_fraction",
             "fold_score_policy_triggered_100_fraction",
+            "fold_guarded_gate_bull_risk_off_override_authorized_fraction",
+            "fold_guarded_gate_bull_risk_off_override_triggered_fraction",
+            "fold_score_transform_applied_fraction",
+            "selected_regime_gate_bull_floor",
         ]:
             if column in allocation_probability_diagnostics.columns:
                 probability_aggregations[column] = (column, "max")
@@ -819,6 +878,36 @@ def _allocation_utility_lines(
             probability_aggregations["selected_utility_profile"] = (
                 "utility_profile",
                 "first",
+            )
+        if "allocation_score_transform" in allocation_probability_diagnostics.columns:
+            probability_aggregations["selected_allocation_score_transform"] = (
+                "allocation_score_transform",
+                "first",
+            )
+        if "score_policy_repair_denied_reason" in allocation_probability_diagnostics.columns:
+            probability_aggregations["score_policy_repair_denied_reason"] = (
+                "score_policy_repair_denied_reason",
+                "first",
+            )
+        if (
+            "guarded_gate_bull_risk_off_override_denied_reason"
+            in allocation_probability_diagnostics.columns
+        ):
+            probability_aggregations[
+                "guarded_gate_bull_risk_off_override_denied_reason"
+            ] = (
+                "guarded_gate_bull_risk_off_override_denied_reason",
+                "first",
+            )
+        if "selected_regime_gate_bull_floor" in allocation_probability_diagnostics.columns:
+            probability_aggregations["selected_regime_gate_bull_floor"] = (
+                "selected_regime_gate_bull_floor",
+                "first",
+            )
+        if "gate_bull" in allocation_probability_diagnostics.columns:
+            probability_aggregations["gate_bull_fraction"] = (
+                "gate_bull",
+                lambda values: values.map(_truthy).mean(),
             )
         if "calibration_status" in allocation_probability_diagnostics.columns:
             probability_aggregations["calibration_status"] = (
@@ -873,6 +962,10 @@ def _allocation_utility_lines(
 
     if not lines:
         lines.append("Allocation-utility diagnostics were written as empty artifacts.")
+    score_transform_names = ", ".join(
+        transform.name
+        for transform in config.evaluation.ml_strategy_tuning.allocation_score_transforms
+    )
     lines.extend(
         [
             "",
@@ -882,7 +975,10 @@ def _allocation_utility_lines(
             f"- Predicted-support gate requires {', '.join(str(value) for value in config.evaluation.strict_research_gate.required_predicted_target_weights) or 'no configured partial tiers'} at OOS fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fraction:g} and selected-fold fraction >= {config.evaluation.strict_research_gate.min_predicted_target_fold_fraction:g}.",
             f"- Candidate training uses `{config.evaluation.ml_strategy_tuning.allocation_class_weighting}` class weighting and `{config.evaluation.ml_strategy_tuning.allocation_probability_calibration}` probability calibration when training-slice support allows it.",
             f"- Allocation score policy is `{config.evaluation.ml_strategy_tuning.allocation_score_policy}` with `prob_tier_100` trigger threshold {config.evaluation.ml_strategy_tuning.allocation_score_policy_prob100_threshold:g}.",
+            f"- Allocation score transforms are evaluated as research-only candidate score mappings: `{score_transform_names}`.",
             "- The default trading score is expected allocation: `sum(prob_tier * tier_weight)`. Diagnostic score policies may transform that score before tiering.",
+            "- The `gate_bull_prob100_threshold` research repair is authorized only by finite non-negative raw validation score/forward-return correlation and only affects completed-bar `gate_bull` rows on the next effective allocation.",
+            f"- Guarded gate-bull risk-off override is `{config.evaluation.ml_strategy_tuning.guarded_gate_bull_risk_off_override}` and is authorized only by finite non-negative raw validation score ordering.",
             "- Direct-tier allocation still applies risk-off caps, minimum holding periods, hysteresis, costs, and the strict gate.",
             "- `regime_state` maps utility tiers into `risk_off`, `reduced`, and `risk_on` states before converting state probabilities back into expected allocation.",
         ]
@@ -993,6 +1089,52 @@ def _phase8_run_summary_lines(
                 report_path,
                 phase8_run_summary_path,
                 "Phase 8 run summary",
+            )
+        )
+    return lines
+
+
+def _phase8_methodology_review_lines(
+    phase8_methodology_review: pd.DataFrame | None,
+    report_path: Path,
+    phase8_methodology_review_path: Path | None,
+) -> list[str]:
+    if phase8_methodology_review is None or phase8_methodology_review.empty:
+        return []
+
+    display_columns = [
+        "methodology_gate",
+        "section",
+        "metric",
+        "passed",
+        "value",
+        "required",
+        "diagnostic_only",
+        "detail",
+    ]
+    lines = [
+        _markdown_table(
+            _display_frame(
+                phase8_methodology_review.loc[
+                    :,
+                    [
+                        column
+                        for column in display_columns
+                        if column in phase8_methodology_review.columns
+                    ],
+                ].head(100)
+            )
+        ),
+        "",
+        "- The deployment gate is still the unchanged `strict_research_gate.csv` overall row.",
+        "- Counterfactual rows are diagnostic only and do not approve BTC paper deployment.",
+    ]
+    if phase8_methodology_review_path is not None:
+        lines.append(
+            _relative_artifact_line(
+                report_path,
+                phase8_methodology_review_path,
+                "Phase 8 methodology review",
             )
         )
     return lines
@@ -1171,6 +1313,7 @@ def write_markdown_report(
     regime_slice_diagnostics: pd.DataFrame | None = None,
     strict_research_gate: pd.DataFrame | None = None,
     phase8_run_summary: pd.DataFrame | None = None,
+    phase8_methodology_review: pd.DataFrame | None = None,
     fold_diagnostics: pd.DataFrame | None = None,
     threshold_diagnostics: pd.DataFrame | None = None,
     calibration_curves_plot_path: Path | None = None,
@@ -1204,6 +1347,7 @@ def write_markdown_report(
     regime_slice_diagnostics_path: Path | None = None,
     strict_research_gate_path: Path | None = None,
     phase8_run_summary_path: Path | None = None,
+    phase8_methodology_review_path: Path | None = None,
     pattern_price_overlay_plot_path: Path | None = None,
     pattern_detections_plot_path: Path | None = None,
     pattern_detection_windows_plot_path: Path | None = None,
@@ -1367,6 +1511,16 @@ def write_markdown_report(
     )
     if phase8_run_summary_lines:
         content_lines.extend(_section("Phase 8 Run Summary", phase8_run_summary_lines))
+
+    phase8_methodology_review_lines = _phase8_methodology_review_lines(
+        phase8_methodology_review,
+        output_path,
+        phase8_methodology_review_path,
+    )
+    if phase8_methodology_review_lines:
+        content_lines.extend(
+            _section("Phase 8 Methodology Review", phase8_methodology_review_lines)
+        )
 
     signal_inspection_lines = _signal_inspection_lines(
         config,

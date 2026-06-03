@@ -7,7 +7,7 @@ See [docs/solid-architecture-audit.md](docs/solid-architecture-audit.md) for the
 See [docs/service-extraction-readiness.md](docs/service-extraction-readiness.md) for the checklist used before extracting services, ports, or adapters.
 See [docs/how-it-works.md](docs/how-it-works.md) for a narrative walkthrough of the library and the `voo_long_only_ytd` timing example.
 See [docs/paper-trading.md](docs/paper-trading.md) for the Phase 7 daily single-ETF paper-trading loop and local Docker Compose shape.
-See [docs/crypto-hourly-trend.md](docs/crypto-hourly-trend.md) and [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) for the Phase 8 crypto/BTC research lanes and strict paper-gating methodology.
+See [docs/crypto-hourly-trend.md](docs/crypto-hourly-trend.md), [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md), [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md), and [docs/phase8/BTC/shadow-confirmation-plan.md](docs/phase8/BTC/shadow-confirmation-plan.md) for the Phase 8 crypto/BTC research lanes, strict paper-gating methodology, current BTC bull-upside plan, and locked shadow-confirmation handoff.
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
 See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
 See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
@@ -29,7 +29,12 @@ python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experim
 python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>
 python scripts/run_marketlab.py phase8-bull-participation --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-score-diagnostic --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-target-diagnostic --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
 python scripts/run_marketlab.py phase8-bull-counterfactual --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+python scripts/run_marketlab.py phase8-target-profile-sweep --config configs/<experiment>.yaml --output artifacts/runs/phase8_btc_target_profile_sweep.csv
+python scripts/run_marketlab.py phase8-regime-policy-sweep --run-dir artifacts/runs/<experiment>/<run-id> --config configs/<experiment>.yaml
+python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-grid-compare --runs-root artifacts/runs --output artifacts/runs/phase8_btc_grid_comparison.csv
 ```
 
 `python scripts/run_marketlab.py ...` is the canonical local invocation path because it always resolves to the source tree under `src/`.
@@ -57,7 +62,12 @@ marketlab-mcp --workspace-root ./workspace --artifact-root ./artifacts --repo-ro
 - `phase8-selection-probe`: run artifact-only selection coverage probes without retraining or changing the approved strict gate.
 - `phase8-bull-participation`: attribute bull-regime underparticipation from persisted Phase 8 artifacts and, when needed, the matching config.
 - `phase8-score-diagnostic`: inspect score compression, tier confusion, model-family behavior, and validation-vs-OOS score stability.
+- `phase8-target-diagnostic`: inspect target and prediction behavior across bull-continuation and drawdown-defense rows without retraining.
 - `phase8-bull-counterfactual`: write artifact-only bull-exposure counterfactuals that remain diagnostics, not deployment approvals.
+- `phase8-target-profile-sweep`: deterministically compare allocation-utility target penalties and record the first profile with strict-gate partial-tier support before launching another expensive training batch.
+- `phase8-regime-policy-sweep`: test completed-bar BTC regime exposure policies against persisted run artifacts before launching another expensive training batch.
+- `phase8-methodology-review`: consolidate strict-gate, benchmark-family, score-validity, bull-participation, and counterfactual diagnostics into one methodology review CSV.
+- `phase8-grid-compare`: compare completed BTC Phase 8 runs across strict-gate status, bull-upside capture, downside capture, score validity, counterfactual hypotheses, and conservative artifact-pruning recommendations.
 
 ## Artifact Outputs
 
@@ -343,7 +353,7 @@ The tracked crypto research configs include:
 - `configs/experiment.crypto_indicator_ml_tuned_12h_2024_ytd.yaml`
 - `configs/experiment.crypto_indicator_ml_tuned_24h_2024_ytd.yaml`
 
-The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review.
+The BTC Phase 8 configs under `configs/experiment.btc_phase8_*.yaml` are not a shortcut into live or paper trading. They must satisfy the strict research gate documented in [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) before the isolated BTC paper path is treated as eligible for deployment review. `configs/experiment.btc_phase8_methodology_review.yaml` records the strict methodology review, the current target/score, regime-policy, and score-transform experiments are tracked from [docs/phase8/BTC/bull-upside-methodology.md](docs/phase8/BTC/bull-upside-methodology.md), and the locked historical challenger handoff is defined in [docs/phase8/BTC/shadow-confirmation-plan.md](docs/phase8/BTC/shadow-confirmation-plan.md).
 
 BTC paper uses its own tracked config and Docker shape:
 
@@ -353,7 +363,7 @@ BTC paper uses its own tracked config and Docker shape:
 - `marketlab-btc-paper-mcp`, `marketlab-btc-paper-scheduler`, and `marketlab-btc-paper-agent`
 - `../artifacts-btc-paper` mounted to `/app/repo/artifacts`
 
-The Phase 8 diagnostic commands read persisted run artifacts and write review CSVs. They do not retrain models, change strategy weights, or approve Phase 9 paper deployment.
+The Phase 8 diagnostic commands read persisted run artifacts and write review CSVs. They do not retrain models, change strategy weights, or approve Phase 9 paper deployment. `phase8_methodology_review.csv` separates the unchanged deployment gate from risk-allocation, target-support, signal-validity, bull-participation, and diagnostic-only counterfactual hypotheses. `phase8_btc_grid_comparison.csv` compares BTC Phase 8 runs and marks incomplete artifact directories as review/pruning candidates without deleting files.
 
 ## Lightweight Model Comparison Set
 
