@@ -1842,8 +1842,10 @@ def test_run_experiment_writes_regime_state_outputs(tmp_path: Path) -> None:
     assert "`regime_state` maps utility tiers" in report_text
 
 
-def test_btc_long_history_config_produces_walk_forward_folds() -> None:
-    config = load_config("configs/experiment.btc_phase8_regime_allocation_1d_long_history.yaml")
+def test_retained_btc_phase8_config_produces_walk_forward_folds() -> None:
+    config = load_config(
+        "configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml"
+    )
     dates = pd.date_range(config.data.start_date, config.data.end_date, freq="D")
     modeling_dataset = pd.DataFrame(
         {

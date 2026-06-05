@@ -34,14 +34,7 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab paper-scheduler --config ...`
 - `marketlab paper-report --config ... --start ... --end ...`
 - `marketlab phase8-summary --run-dir ...`
-- `marketlab phase8-selection-probe --run-dir ...`
-- `marketlab phase8-bull-participation --run-dir ... --config ...`
-- `marketlab phase8-score-diagnostic --run-dir ...`
-- `marketlab phase8-target-diagnostic --run-dir ... --config ...`
-- `marketlab phase8-bull-counterfactual --run-dir ... --config ...`
-- `marketlab phase8-regime-policy-sweep --run-dir ... --config ...`
 - `marketlab phase8-methodology-review --run-dir ...`
-- `marketlab phase8-grid-compare --runs-root ... --output ...`
 
 Current workflow surface:
 

@@ -54,13 +54,6 @@ def test_list_configs_prints_packaged_templates(capsys: pytest.CaptureFixture[st
     assert captured.out.splitlines() == [
         "weekly_rank",
         "weekly_rank_smoke",
-        "phase5_allocation_equal",
-        "phase5_allocation_group",
-        "phase5_ranking_default",
-        "phase5_ranking_capped",
-        "phase5_mean_variance",
-        "phase5_risk_parity",
-        "phase5_black_litterman",
     ]
 
 
@@ -68,7 +61,7 @@ def test_list_configs_prints_packaged_templates(capsys: pytest.CaptureFixture[st
     ("template_name", "output_name"),
     [
         ("weekly_rank", "weekly_rank.yaml"),
-        ("phase5_black_litterman", "phase5_black_litterman.yaml"),
+        ("weekly_rank_smoke", "weekly_rank_smoke.yaml"),
     ],
 )
 def test_write_config_copies_the_selected_template(
