@@ -10,6 +10,12 @@ __pycache__/
 .codex/
 .tox/
 .tox-ci/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
 .env
 .env.*
 !.env.example
