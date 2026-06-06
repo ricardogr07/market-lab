@@ -8,9 +8,9 @@ The retained config is:
 
 - `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml`
 
-The retained local evidence run is:
+The retained evidence artifacts are generated local state, not tracked repository content. Restore them under:
 
-- `artifacts/runs/btc_phase8_guarded_gate_bull_risk_off_override_partial_support/20260602T081225Z`
+- a restored local run directory under `artifacts/runs/<experiment>/<run-id>`
 
 ## Methodology Summary
 
@@ -39,6 +39,9 @@ approve/reject controls.
 ## Review Commands
 
 ```bash
-python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/btc_phase8_guarded_gate_bull_risk_off_override_partial_support/20260602T081225Z
-python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/btc_phase8_guarded_gate_bull_risk_off_override_partial_support/20260602T081225Z
+PHASE8_RUN_DIR=artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-summary --run-dir "$PHASE8_RUN_DIR"
+python scripts/run_marketlab.py phase8-methodology-review --run-dir "$PHASE8_RUN_DIR"
 ```
+
+The generated evidence artifacts are local state, not tracked repository content. Restore the retained run artifacts before rebuilding the summary or methodology review.

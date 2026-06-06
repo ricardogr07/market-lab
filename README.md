@@ -23,11 +23,13 @@ python scripts/run_marketlab.py paper-decision --config configs/experiment.qqq_p
 python scripts/run_marketlab.py paper-agent-approve --config configs/experiment.qqq_paper_daily.yaml --once
 python scripts/run_marketlab.py paper-scheduler --config configs/experiment.qqq_paper_daily.yaml --once
 python scripts/run_marketlab.py paper-report --config configs/experiment.qqq_paper_daily.yaml --start 2026-04-13 --end 2026-05-15
-python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/btc_phase8_guarded_gate_bull_risk_off_override_partial_support/20260602T081225Z
-python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/btc_phase8_guarded_gate_bull_risk_off_override_partial_support/20260602T081225Z
+PHASE8_RUN_DIR=artifacts/runs/<experiment>/<run-id>
+python scripts/run_marketlab.py phase8-summary --run-dir "$PHASE8_RUN_DIR"
+python scripts/run_marketlab.py phase8-methodology-review --run-dir "$PHASE8_RUN_DIR"
 ```
 
 `python scripts/run_marketlab.py ...` is the canonical local invocation path because it always resolves to the source tree under `src/`.
+The retained Phase 8 review commands require a restored local run directory; generated run artifacts are not tracked in fresh checkouts.
 
 For LLM-driven use, the packaged MCP entrypoint is:
 
