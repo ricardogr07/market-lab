@@ -15,13 +15,6 @@ SCRATCH_DIR = Path(os.environ.get('MARKETLAB_PACKAGE_SMOKE_DIR', ROOT / '.packag
 EXPECTED_TEMPLATES = (
     ('weekly_rank', 'weekly_rank.yaml'),
     ('weekly_rank_smoke', 'weekly_rank_smoke.yaml'),
-    ('phase5_allocation_equal', 'phase5_allocation_equal.yaml'),
-    ('phase5_allocation_group', 'phase5_allocation_group.yaml'),
-    ('phase5_ranking_default', 'phase5_ranking_default.yaml'),
-    ('phase5_ranking_capped', 'phase5_ranking_capped.yaml'),
-    ('phase5_mean_variance', 'phase5_mean_variance.yaml'),
-    ('phase5_risk_parity', 'phase5_risk_parity.yaml'),
-    ('phase5_black_litterman', 'phase5_black_litterman.yaml'),
 )
 
 
@@ -154,25 +147,6 @@ def _assert_installed_cli(wheel_path: Path, temp_dir: Path, env: dict[str, str])
         raise RuntimeError('Installed CLI write-config did not print the resolved output path')
     if 'experiment_name: weekly_rank_v1' not in output_path.read_text(encoding='utf-8'):
         raise RuntimeError('Installed CLI write-config did not write the expected template')
-
-    scenario_output_path = temp_dir / 'phase5_black_litterman.yaml'
-    scenario_write_run = _run(
-        [
-            str(marketlab_path),
-            'write-config',
-            '--name',
-            'phase5_black_litterman',
-            '--output',
-            str(scenario_output_path),
-        ],
-        env=env,
-    )
-    if scenario_output_path.resolve() != Path(scenario_write_run.stdout.strip()):
-        raise RuntimeError('Installed CLI phase5 write-config did not print the resolved output path')
-    if 'experiment_name: phase5_black_litterman' not in scenario_output_path.read_text(
-        encoding='utf-8'
-    ):
-        raise RuntimeError('Installed CLI phase5 write-config did not write the expected template')
 
     mcp_help_run = _run([str(marketlab_mcp_path), '--help'], env=env)
     if '--workspace-root' not in mcp_help_run.stdout or '--artifact-root' not in mcp_help_run.stdout:

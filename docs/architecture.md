@@ -39,7 +39,6 @@ This document ties the current pieces together and records the working rules tha
 - Local repo execution:
   - `python scripts/run_marketlab.py run-experiment --config configs/experiment.weekly_rank.yaml`
   - `python scripts/run_marketlab.py train-models --config configs/experiment.weekly_rank.yaml`
-  - `python scripts/run_marketlab.py run-experiment --config configs/experiment.crypto_ts_ml_2024_ytd.yaml`
   - `python scripts/run_marketlab.py phase8-summary --run-dir artifacts/runs/<experiment>/<run-id>`
   - `python scripts/run_marketlab.py phase8-selection-probe --run-dir artifacts/runs/<experiment>/<run-id>`
   - `python scripts/run_marketlab.py phase8-methodology-review --run-dir artifacts/runs/<experiment>/<run-id>`
@@ -798,7 +797,7 @@ Best practice:
 Best practice:
 - Keep ranking prediction-only; do not derive scores from the panel in this layer.
 - Keep the exposure policy explicit: default `long_short` uses `+0.5` total long and `-0.5` total short, while `long_only` uses `+1.0` total long exposure with any missing slots left in cash only when configured.
-- Treat the tracked `configs/experiment.voo_long_only.ytd.yaml` example as a directional timing configuration, not as a cross-sectional ranking benchmark.
+- Treat ad hoc directional timing experiments as research-local configs unless they are promoted into the narrow checked-in config surface.
 
 ### Crypto And BTC Strategy Modules
 

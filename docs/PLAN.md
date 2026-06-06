@@ -2,7 +2,7 @@
 
 ## Current State
 
-Phases 1 through 7 are complete, and Phase 8 is active as a research-first crypto/BTC lane.
+Phases 1 through 7 are complete, and Phase 8 is retained as BTC research evidence for the Phase 9 handoff.
 
 MarketLab is a public research MVP with:
 
@@ -11,9 +11,8 @@ MarketLab is a public research MVP with:
 - reproducible local and CI validation
 - a Dockerized manual runner workflow
 - release automation and a batched release path
-- richer Phase 5 baseline, diagnostics, and scenario-pack coverage
 - a Phase 7 local paper-trading MVP for a configurable daily single-ETF timing loop
-- Phase 8 crypto/BTC research configs, diagnostics, and strict paper-gating methodology
+- retained Phase 8 BTC strict-gate evidence and methodology notes
 - an isolated BTC paper stack that stays separated from the QQQ/VOO paper state
 
 The project now supports a small, reviewable end-to-end research workflow rather than a local-only scaffold.
@@ -35,14 +34,7 @@ The project now supports a small, reviewable end-to-end research workflow rather
 - `marketlab paper-scheduler --config ...`
 - `marketlab paper-report --config ... --start ... --end ...`
 - `marketlab phase8-summary --run-dir ...`
-- `marketlab phase8-selection-probe --run-dir ...`
-- `marketlab phase8-bull-participation --run-dir ... --config ...`
-- `marketlab phase8-score-diagnostic --run-dir ...`
-- `marketlab phase8-target-diagnostic --run-dir ... --config ...`
-- `marketlab phase8-bull-counterfactual --run-dir ... --config ...`
-- `marketlab phase8-regime-policy-sweep --run-dir ... --config ...`
 - `marketlab phase8-methodology-review --run-dir ...`
-- `marketlab phase8-grid-compare --runs-root ... --output ...`
 
 Current workflow surface:
 
@@ -59,11 +51,7 @@ Current workflow surface:
 - local file-backed paper-trading proposals, approvals, and submission state
 - local Docker Compose scheduling for the daily single-ETF paper loop
 - isolated BTC paper proposal, approval, and submission state under `artifacts/btc-paper` / `artifacts-btc-paper`
-- artifact-only Phase 8 diagnostic commands for post-run review, including a consolidated methodology review
-- artifact-only Phase 8 target diagnostics for separating bull-continuation and drawdown-defense labels
-- artifact-only BTC regime-policy sweeps for testing completed-bar exposure policies before expensive retraining
-- research-only BTC score-transform grids for repairing compressed bull-floor fallback scores before tier mapping
-- cross-run BTC Phase 8 grid comparison for bull-upside capture, downside capture, score validity, counterfactual hypotheses, and artifact-pruning review
+- artifact-only Phase 8 diagnostic commands for reviewing retained BTC evidence
 
 ## Phase 4 Outcomes Worth Keeping
 
@@ -99,20 +87,18 @@ Priority direction:
 - month-run paper reporting against consensus, per-model paths, `buy_hold`, and `sma`
 - local Docker Compose scheduler and agent worker plus the Phase 7 operations runbook
 
-## Phase 8 Direction
+## Phase 8 Handoff
 
-Phase 8 is a research lane for crypto and BTC timing, not a production trading lane. It extends the package-first research workflow with intraday bars, indicator-stack baselines, deterministic chart-pattern detectors, direct time-series ML, allocation-utility targets, BTC tiered exposure, and strict benchmark-relative diagnostics.
+Phase 8 is no longer maintained as a broad checked-in research config library. The repo keeps only the winning BTC partial-support handoff config and methodology summary needed to explain the Phase 9 BTC paper boundary.
 
-Current Phase 8 rules:
+Retained Phase 8 rules:
 
-- use checked-in configs for repeatable BTC and crypto experiments
+- keep `configs/experiment.btc_phase8_guarded_gate_bull_risk_off_override_partial_support.yaml` as historical evidence, not as an active research grid
 - keep BTC exposure decisions limited to `0%`, `25%`, `50%`, or `100%`
 - compare selected strategies against BTC buy-and-hold plus static and rebalanced BTC/cash benchmarks
-- treat Phase 8 diagnostic commands as artifact review only
-- use `phase8-methodology-review` to separate deployment readiness from risk allocation, score validity, bull participation, and diagnostic-only counterfactual hypotheses
-- use `phase8-grid-compare`, `phase8-target-diagnostic`, `phase8-regime-policy-sweep`, and the BTC target/score pivot notes before pivoting to heavier ML models
-- use the [BTC Phase 8 Shadow-Confirmation Plan](phase8/BTC/shadow-confirmation-plan.md) as the locked forward-confirmation handoff for the historical partial-support challenger
-- keep crypto/BTC paper work blocked unless the strict research gate passes
+- treat Phase 8 diagnostic commands as artifact review only; they do not approve or resize paper trades
+- use [BTC Phase 8 Methodology](btc-phase8-methodology.md) as the historical handoff summary
+- keep Phase 9 BTC paper isolated from QQQ/VOO paper state and from broad research experiment promotion
 
 ## Phase 9 Boundary
 

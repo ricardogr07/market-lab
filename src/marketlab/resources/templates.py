@@ -6,13 +6,6 @@ from pathlib import Path
 CONFIG_TEMPLATE_NAMES: tuple[str, ...] = (
     "weekly_rank",
     "weekly_rank_smoke",
-    "phase5_allocation_equal",
-    "phase5_allocation_group",
-    "phase5_ranking_default",
-    "phase5_ranking_capped",
-    "phase5_mean_variance",
-    "phase5_risk_parity",
-    "phase5_black_litterman",
 )
 _TEMPLATE_PACKAGE = "marketlab.resources.config_templates"
 
