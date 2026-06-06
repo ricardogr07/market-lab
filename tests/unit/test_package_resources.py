@@ -64,5 +64,3 @@ def test_write_config_template_resolves_relative_output_paths(
 
     assert written_path == (tmp_path / 'nested' / 'template.yaml').resolve()
     assert written_path.read_text(encoding='utf-8').startswith('experiment_name: weekly_rank_v1')
-
-
