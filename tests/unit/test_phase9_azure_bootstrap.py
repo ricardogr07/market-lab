@@ -97,6 +97,7 @@ def test_terraform_ci_is_validation_only() -> None:
 
     assert "contents: read" in workflow
     assert 'terraform_version: "1.15.5"' in workflow
+    assert "terraform_wrapper: false" in workflow
     assert "uv run tox -e terraform" in workflow
     assert "persist-credentials: false" in workflow
 
