@@ -10,7 +10,8 @@ See [docs/btc-phase8-methodology.md](docs/btc-phase8-methodology.md) for the ret
 See [docs/mcp-server.md](docs/mcp-server.md) for the MCP tool surface and the Docker sidecar pattern.
 See [docs/codex-mcp.md](docs/codex-mcp.md) for attaching the Docker-packaged MCP server to a new Codex session.
 See [docs/mcp-vscode-copilot.md](docs/mcp-vscode-copilot.md) for the VS Code stable + GitHub Copilot connection path.
-See [docs/PLAN.md](docs/PLAN.md) for the current project status and Phase 9 boundary.
+See [docs/PLAN.md](docs/PLAN.md) for the complete Phase 9 BTC evidence, Azure
+foundation, and QQQ operations roadmap.
 ## Current Commands
 
 ```bash

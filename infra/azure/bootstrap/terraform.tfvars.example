@@ -1,0 +1,6 @@
+resource_suffix = "abc123"
+location        = "eastus2"
+owner           = "replace-with-approved-owner"
+cost_center     = "replace-with-approved-cost-center"
+
+additional_tags = {}

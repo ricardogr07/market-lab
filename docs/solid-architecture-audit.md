@@ -13,7 +13,8 @@ This audit complements:
   decision checklist used before adding service, port, or adapter boundaries
 - [Phase 7 Paper Trading](paper-trading.md) for the local paper runtime
 - [BTC Phase 8 Methodology](btc-phase8-methodology.md) for the current BTC research gate and isolated paper boundary
-- `CLOUD_MIGRATION_PLAN.md` at the repo root for the later hosted deployment path
+- [Phase 9 Roadmap](PLAN.md) for the Azure foundation, BTC evidence lane, and
+  QQQ hosted-operations path
 
 ## Locked Design Posture
 
