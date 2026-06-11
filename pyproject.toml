@@ -64,6 +64,7 @@ dev = [
 [project.scripts]
 marketlab = "marketlab.cli:main"
 marketlab-mcp = "marketlab.mcp.cli:main"
+phase9-shadow-decision = "marketlab.shadow.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
