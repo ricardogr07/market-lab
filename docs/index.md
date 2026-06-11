@@ -11,5 +11,7 @@ This site is the canonical home for MarketLab's public documentation.
 - [Codex MCP](codex-mcp.md)
 - [VS Code Copilot MCP](mcp-vscode-copilot.md)
 - [Plan](PLAN.md)
+- [Phase 9 P9-02 Worker Plan](phase9/P9-02-WORKER-PLAN.md)
+- [Phase 9 P9-02 Bootstrap Evidence](phase9/P9-02-BOOTSTRAP-EVIDENCE.md)
 
 The root `README.md` remains the repository-facing entrypoint, while the deeper public docs live here.
