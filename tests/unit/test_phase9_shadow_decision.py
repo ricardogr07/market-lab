@@ -171,6 +171,26 @@ def test_shadow_decision_records_explicit_skip(tmp_path: Path) -> None:
     assert result.record["target_allocation"] is None
 
 
+def test_shadow_decision_records_explicit_failure(tmp_path: Path) -> None:
+    journal = ShadowDecisionJournal(tmp_path / "decisions")
+
+    result = _run(
+        _request(),
+        journal=journal,
+        evaluation=_evaluation(
+            status="failed",
+            selection_source="none",
+            fallback_mode="none",
+            target_allocation=None,
+            reason="evaluation_error",
+        ),
+    )
+
+    assert result.record["status"] == "failed"
+    assert result.record["reason"] == "evaluation_error"
+    assert result.record["target_allocation"] is None
+
+
 def test_evaluator_receives_label_safe_decision_context(tmp_path: Path) -> None:
     journal = ShadowDecisionJournal(tmp_path / "decisions")
     captured = {}
