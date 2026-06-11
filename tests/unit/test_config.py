@@ -1731,3 +1731,18 @@ def test_load_config_rejects_openai_backend_without_model(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="paper.agent_model must be set"):
         load_config(config_path)
+
+
+def test_load_config_parses_phase9_shadow_metadata() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = load_config(root / "configs" / "experiment.btc_phase9_shadow_daily.yaml")
+
+    assert config.shadow is not None
+    assert config.shadow.candidate_id == "btc-phase9-shadow-v1"
+    assert config.shadow.behavior_version == "btc-phase8-guarded-gate-v1"
+    assert config.shadow.protocol_start == "2026-06-03"
+    assert config.shadow.protocol_end == "2027-06-02"
+    assert config.shadow.earliest_final_evaluation == "2027-06-16"
+    assert config.shadow.maturity_lag_bars == 14
+    assert config.shadow.code_lock == "ce01124"
+    assert config.shadow.artifact_root == "artifacts/phase9-shadow"
