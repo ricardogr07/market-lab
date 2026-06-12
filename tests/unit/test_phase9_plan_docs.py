@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PLAN = ROOT / "docs" / "PLAN.md"
 P9_02_PLAN = ROOT / "docs" / "phase9" / "P9-02-WORKER-PLAN.md"
 P9_02_EVIDENCE = ROOT / "docs" / "phase9" / "P9-02-BOOTSTRAP-EVIDENCE.md"
+P9_03_PLAN = ROOT / "docs" / "phase9" / "P9-03-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -121,3 +122,35 @@ def test_p9_02_evidence_does_not_publish_live_azure_identifiers() -> None:
     assert "| Subscription | Approved Phase 9 subscription; name and ID retained locally |" in content
     assert "| Resource suffix | Retained locally |" in content
     assert content.count("Name retained locally") == 2
+
+
+def test_p9_03_plan_locks_shadow_scope_and_hashes() -> None:
+    content = P9_03_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-btc-shadow-lock",
+        "ce01124",
+        "2026-06-03",
+        "2027-06-02",
+        "2027-06-16",
+        "btc-phase9-shadow-v1",
+        "paper.enabled: true",
+        "does not fetch market data, run models, schedule work",
+        "cannot be silently reconstructed",
+        "d439acca79ca2108a4d907452b5d442ab67b319d430440d07f14f9adc1295f18",
+        "71beba28529abba3482145094654c5eaf8f12355d92a93830fe746a241129550",
+        "verify_shadow_contract",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_03_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-03-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-03 Worker Plan: phase9/P9-03-WORKER-PLAN.md" in nav
+    assert "phase9/P9-03-WORKER-PLAN.md" in index

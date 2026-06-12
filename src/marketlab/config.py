@@ -459,6 +459,20 @@ class PaperConfig:
 
 
 @dataclass(slots=True)
+class ShadowConfig:
+    candidate_id: str = ""
+    behavior_version: str = ""
+    protocol_start: str = ""
+    protocol_end: str = ""
+    earliest_final_evaluation: str = ""
+    maturity_lag_bars: int = 0
+    code_lock: str = ""
+    artifact_root: str = ""
+    config_hash: str = ""
+    behavior_hash: str = ""
+
+
+@dataclass(slots=True)
 class ExperimentConfig:
     experiment_name: str = "weekly_rank_v1"
     data: DataConfig = field(default_factory=DataConfig)
@@ -476,6 +490,7 @@ class ExperimentConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     artifacts: ArtifactsConfig = field(default_factory=ArtifactsConfig)
     paper: PaperConfig = field(default_factory=PaperConfig)
+    shadow: ShadowConfig | None = None
     base_dir: Path = field(default_factory=Path.cwd, repr=False)
 
     def resolve_path(self, value: str | Path) -> Path:
@@ -1846,6 +1861,11 @@ def load_config(path: str | Path) -> ExperimentConfig:
             visualize_signals=evaluation_payload.get("visualize_signals", False),
         ),
         artifacts=_section(ArtifactsConfig, payload.get("artifacts")),
+        shadow=(
+            _section(ShadowConfig, payload.get("shadow"))
+            if payload.get("shadow") is not None
+            else None
+        ),
         paper=PaperConfig(
             enabled=paper_payload.get("enabled", paper_defaults.enabled),
             data_provider=paper_payload.get("data_provider", paper_defaults.data_provider),
