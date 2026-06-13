@@ -115,7 +115,7 @@ clock.
 ### Planned Command Contract
 
 ```text
-phase9-shadow-decision --config configs/experiment.btc_phase9_shadow_daily.yaml
+phase9-shadow-decision --config configs/experiment.btc_phase9_shadow_daily.yaml --evaluation runtime-shadow-evaluation.json
 phase9-shadow-scheduler --config configs/experiment.btc_phase9_shadow_daily.yaml --once
 phase9-shadow-status --config configs/experiment.btc_phase9_shadow_daily.yaml
 phase9-shadow-report --config configs/experiment.btc_phase9_shadow_daily.yaml [--as-of YYYY-MM-DD]
@@ -316,7 +316,7 @@ working alerts, and a rehearsed rollback.
 | P9-01 | Canonical roadmap, Azure ADR, and protected docs tests | None | Legacy cloud plan removed; BTC, Azure, and QQQ boundaries explicit |
 | [P9-02](phase9/P9-02-WORKER-PLAN.md) | Terraform bootstrap and validation workflow | P9-01 | Remote state backend reproducible; CI validates all roots without applying |
 | [P9-03](phase9/P9-03-WORKER-PLAN.md) | Frozen BTC shadow config and behavior lock | P9-01 | Any drift fails closed; paper remains disabled |
-| P9-04 | Shadow decision service and append-only journal | P9-03 | Label-safe, idempotent, conflict-preserving decisions |
+| [P9-04](phase9/P9-04-WORKER-PLAN.md) | Shadow decision service and append-only journal | P9-03 | Label-safe, idempotent, conflict-preserving decisions |
 | P9-05 | Shadow scheduler, status, monthly, and final reports | P9-04 | Missing and failed runs explicit; reports cannot promote |
 | P9-06 | Azure shadow infrastructure and launch gate | P9-02, P9-05 | Disabled job validates; archive, restore, and alert tests pass |
 | P9-07 | Hosted execution context and deployment registry | P9-01 | All four paper phases share typed, idempotent metadata |

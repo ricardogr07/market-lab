@@ -14,5 +14,6 @@ This site is the canonical home for MarketLab's public documentation.
 - [Phase 9 P9-02 Worker Plan](phase9/P9-02-WORKER-PLAN.md)
 - [Phase 9 P9-02 Bootstrap Evidence](phase9/P9-02-BOOTSTRAP-EVIDENCE.md)
 - [Phase 9 P9-03 Worker Plan](phase9/P9-03-WORKER-PLAN.md)
+- [Phase 9 P9-04 Worker Plan](phase9/P9-04-WORKER-PLAN.md)
 
 The root `README.md` remains the repository-facing entrypoint, while the deeper public docs live here.

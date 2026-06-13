@@ -111,6 +111,8 @@ def test_tox_preflight_tiers_match_expected_commands() -> None:
     assert parser["testenv:typecheck"]["commands"].strip() == (
         "{envpython} -m mypy src/marketlab/config.py src/marketlab/log.py "
         "src/marketlab/data/market.py src/marketlab/shadow/contract.py "
+        "src/marketlab/shadow/decision.py src/marketlab/shadow/journal.py "
+        "src/marketlab/shadow/cli.py "
         "src/marketlab/paper/alpaca.py "
         "src/marketlab/paper/approval_clients.py src/marketlab/paper/notifications.py "
         "src/marketlab/paper/observability.py src/marketlab/paper/contracts.py "
