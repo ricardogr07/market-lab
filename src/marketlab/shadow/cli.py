@@ -11,6 +11,7 @@ from marketlab.shadow import (
     ShadowDecisionEvaluation,
     ShadowDecisionRequest,
     run_shadow_decision,
+    run_shadow_scheduler,
     shadow_bars_from_panel,
     verify_shadow_contract,
 )
@@ -43,6 +44,32 @@ def main(argv: list[str] | None = None) -> int:
         evaluator=lambda context: evaluation,
     )
     print(result.path)
+    return 0
+
+
+def scheduler_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="phase9-shadow-scheduler")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--as-of")
+    args = parser.parse_args(argv)
+    if not args.once:
+        parser.error("--once is required; the scheduler does not run a resident loop.")
+    result = run_shadow_scheduler(
+        args.config,
+        as_of=_parse_as_of(args.as_of),
+    )
+    payload = {
+        "attempts": [str(write.path) for write in result.attempts],
+        "decision": str(result.decision.path) if result.decision is not None else None,
+        "decision_evidence": (
+            str(result.decision_evidence.path)
+            if result.decision_evidence is not None
+            else None
+        ),
+        "label_evidence": [str(write.path) for write in result.label_evidence],
+    }
+    print(json.dumps(payload, sort_keys=True))
     return 0
 
 
