@@ -24,6 +24,7 @@ from marketlab.shadow.journal import (
     canonical_fingerprint,
     normalize_record_fingerprint,
 )
+from marketlab.shadow.evaluator import NativeShadowDecisionEvaluator
 
 __all__ = [
     "ShadowContractError",
@@ -38,6 +39,7 @@ __all__ = [
     "ShadowDecisionStatus",
     "ShadowJournalConflictError",
     "ShadowJournalError",
+    "NativeShadowDecisionEvaluator",
     "VerifiedShadowContract",
     "canonical_fingerprint",
     "normalize_record_fingerprint",
