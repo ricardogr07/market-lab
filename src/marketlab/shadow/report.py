@@ -324,6 +324,26 @@ def _integrity_summary(
             cross_link_errors.append(
                 f"decision_evidence:{record.get('effective_date')}"
             )
+            continue
+        if (
+            record.get("selection_source") != decision.get("selection_source")
+            or record.get("fallback_mode") != decision.get("fallback_mode")
+            or record.get("selected_tier") != decision.get("target_allocation")
+        ):
+            cross_link_errors.append(
+                f"decision_metadata:{record.get('effective_date')}"
+            )
+    for record in attempts:
+        decision_fingerprint = record.get("decision_fingerprint")
+        if decision_fingerprint is None:
+            continue
+        decision = decisions_by_date.get(str(record["effective_date"]))
+        if decision is None or decision_fingerprint != decision.get(
+            "output_fingerprint"
+        ):
+            cross_link_errors.append(
+                f"attempt_decision:{record.get('effective_date')}"
+            )
     for record in labels:
         effective_date = str(record["effective_date"])
         decision = decisions_by_date.get(effective_date)
@@ -336,6 +356,10 @@ def _integrity_summary(
             "decision_evidence_fingerprint"
         ) != evidence.get("output_fingerprint"):
             cross_link_errors.append(f"label_evidence:{effective_date}")
+        if evidence is None or record.get("diagnostic_fingerprint") != evidence.get(
+            "diagnostic_fingerprint"
+        ):
+            cross_link_errors.append(f"label_diagnostic:{effective_date}")
     return {
         "passed": not invariant_errors and not cross_link_errors,
         "invariants_match": not invariant_errors,
@@ -348,12 +372,18 @@ def _integrity_summary(
 
 
 def _active_return(labels: list[dict[str, Any]], *, cost_bps: float) -> dict[str, float]:
-    strategy_returns = [
-        float(record["exposure"]) * float(record["benchmark_return"])
-        - float(record["turnover"]) * cost_bps / 10_000.0
-        for record in labels
-    ]
-    benchmark_returns = [float(record["benchmark_return"]) for record in labels]
+    strategy_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=None,
+        rebalance_daily=True,
+        cost_bps=cost_bps,
+    )
+    benchmark_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=1.0,
+        rebalance_daily=False,
+        cost_bps=0.0,
+    )
     strategy = _compound(strategy_returns)
     benchmark = _compound(benchmark_returns)
     return {
@@ -411,14 +441,36 @@ def _bull_metrics(
         if bool(record.get("gate_bull"))
         and str(record["effective_date"]) in labels_by_date
     ]
+    strategy_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=None,
+        rebalance_daily=True,
+        cost_bps=35.0,
+    )
+    benchmark_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=1.0,
+        rebalance_daily=False,
+        cost_bps=0.0,
+    )
+    returns_by_date = {
+        str(record["effective_date"]): (strategy_return, benchmark_return)
+        for record, strategy_return, benchmark_return in zip(
+            labels,
+            strategy_returns,
+            benchmark_returns,
+            strict=True,
+        )
+    }
     active = [
-        float(record["strategy_return"]) - float(record["benchmark_return"])
+        returns_by_date[str(record["effective_date"])][0]
+        - returns_by_date[str(record["effective_date"])][1]
         for record in bull
     ]
     missed_upside = [
-        float(record["benchmark_return"])
+        returns_by_date[str(record["effective_date"])][1]
         for record in bull
-        if float(record["benchmark_return"]) > 0.0
+        if returns_by_date[str(record["effective_date"])][1] > 0.0
         and float(record["exposure"]) < 1.0 - 1e-9
     ]
     selected_count = sum(
@@ -443,21 +495,22 @@ def _shadow_strict_gate(
     labels: list[dict[str, Any]],
 ) -> pd.DataFrame:
     strategies = [
-        (ML_TUNED_STRATEGY_NAME, None),
-        ("buy_hold", 1.0),
-        ("btc_static_25", 0.25),
-        ("btc_static_50", 0.50),
-        ("btc_static_75", 0.75),
-        ("btc_rebalanced_25", 0.25),
-        ("btc_rebalanced_50", 0.50),
-        ("btc_rebalanced_75", 0.75),
+        (ML_TUNED_STRATEGY_NAME, None, True),
+        ("buy_hold", 1.0, False),
+        ("btc_static_25", 0.25, False),
+        ("btc_static_50", 0.50, False),
+        ("btc_static_75", 0.75, False),
+        ("btc_rebalanced_25", 0.25, True),
+        ("btc_rebalanced_50", 0.50, True),
+        ("btc_rebalanced_75", 0.75, True),
     ]
     summary_rows: list[dict[str, object]] = []
     cost_rows: list[dict[str, object]] = []
-    for strategy, fixed_exposure in strategies:
+    for strategy, fixed_exposure, rebalance_daily in strategies:
         returns_35, exposures, turnovers = _strategy_series(
             labels,
             fixed_exposure=fixed_exposure,
+            rebalance_daily=rebalance_daily,
             cost_bps=35.0,
         )
         summary_rows.append(
@@ -467,6 +520,7 @@ def _shadow_strict_gate(
             returns, _, _ = _strategy_series(
                 labels,
                 fixed_exposure=fixed_exposure,
+                rebalance_daily=rebalance_daily,
                 cost_bps=cost_bps,
             )
             cost_rows.append(
@@ -478,10 +532,30 @@ def _shadow_strict_gate(
             )
     regime_rows = []
     labels_by_date = {str(record["effective_date"]): record for record in labels}
+    actual_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=None,
+        rebalance_daily=True,
+        cost_bps=35.0,
+    )
+    benchmark_returns, _, _ = _strategy_series(
+        labels,
+        fixed_exposure=1.0,
+        rebalance_daily=False,
+        cost_bps=35.0,
+    )
+    active_by_date = {
+        str(record["effective_date"]): actual_return - benchmark_return
+        for record, actual_return, benchmark_return in zip(
+            labels,
+            actual_returns,
+            benchmark_returns,
+            strict=True,
+        )
+    }
     for regime, records in _group_by(decision_evidence, "regime_classification").items():
         active_returns = [
-            float(labels_by_date[str(record["effective_date"])]["strategy_return"])
-            - float(labels_by_date[str(record["effective_date"])]["benchmark_return"])
+            active_by_date[str(record["effective_date"])]
             for record in records
             if str(record["effective_date"]) in labels_by_date
         ]
@@ -548,31 +622,68 @@ def _strategy_series(
     labels: list[dict[str, Any]],
     *,
     fixed_exposure: float | None,
+    rebalance_daily: bool,
     cost_bps: float,
 ) -> tuple[list[float], list[float], list[float]]:
     returns: list[float] = []
     exposures: list[float] = []
     turnovers: list[float] = []
-    previous = 0.0
-    for record in labels:
-        exposure = (
+    close_exposure = 0.0
+    close_cash_weight = 1.0
+    for index, record in enumerate(labels):
+        open_exposure, open_cash, overnight_return = _advance_weights(
+            exposure=close_exposure,
+            cash_weight=close_cash_weight,
+            asset_return=float(record.get("overnight_asset_return", 0.0)),
+        )
+        desired_exposure = (
             float(record["exposure"])
             if fixed_exposure is None
             else fixed_exposure
         )
-        turnover = (
-            float(record["turnover"])
-            if fixed_exposure is None
-            else abs(exposure - previous)
+        should_rebalance = (
+            fixed_exposure is None
+            or rebalance_daily
+            or index == 0
         )
+        target_exposure = desired_exposure if should_rebalance else open_exposure
+        turnover = abs(target_exposure - open_exposure) if should_rebalance else 0.0
+        intraday_exposure, intraday_cash, intraday_return = _advance_weights(
+            exposure=target_exposure,
+            cash_weight=1.0 - target_exposure if should_rebalance else open_cash,
+            asset_return=float(
+                record.get(
+                    "intraday_asset_return",
+                    record.get("daily_benchmark_return", 0.0),
+                )
+            ),
+        )
+        gross_return = (1.0 + overnight_return) * (1.0 + intraday_return) - 1.0
         returns.append(
-            exposure * float(record["benchmark_return"])
-            - turnover * cost_bps / 10_000.0
+            gross_return - turnover * cost_bps / 10_000.0
         )
-        exposures.append(exposure)
+        exposures.append(target_exposure)
         turnovers.append(turnover)
-        previous = exposure
+        close_exposure = intraday_exposure
+        close_cash_weight = intraday_cash
     return returns, exposures, turnovers
+
+
+def _advance_weights(
+    *,
+    exposure: float,
+    cash_weight: float,
+    asset_return: float,
+) -> tuple[float, float, float]:
+    evolved_exposure = exposure * (1.0 + asset_return)
+    portfolio_value = evolved_exposure + cash_weight
+    if abs(portfolio_value) <= 1e-12:
+        raise ShadowReportError("Shadow report portfolio value collapsed to zero.")
+    return (
+        evolved_exposure / portfolio_value,
+        cash_weight / portfolio_value,
+        portfolio_value - 1.0,
+    )
 
 
 def _strategy_summary_row(

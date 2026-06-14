@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from marketlab.shadow.journal import normalize_record_fingerprint
+from marketlab.shadow.journal import ShadowJournalError, normalize_record_fingerprint
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
@@ -29,7 +29,12 @@ class ShadowEvidenceWrite:
 
 class _AppendOnlyStore:
     def _write(self, path: Path, record: dict[str, Any]) -> ShadowEvidenceWrite:
-        normalized = normalize_record_fingerprint(record)
+        try:
+            normalized = normalize_record_fingerprint(record)
+        except (TypeError, ValueError, ShadowJournalError) as exc:
+            raise ShadowEvidenceError(
+                f"Shadow evidence contains non-deterministic values: {path}"
+            ) from exc
         serialized = json.dumps(
             normalized,
             allow_nan=False,
@@ -64,7 +69,7 @@ class _AppendOnlyStore:
             )
         try:
             normalized = normalize_record_fingerprint(payload)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, ShadowJournalError) as exc:
             raise ShadowEvidenceError(
                 f"Shadow evidence contains non-deterministic values: {path}"
             ) from exc

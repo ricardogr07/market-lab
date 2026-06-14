@@ -345,6 +345,8 @@ def build_modeling_dataset(
 def build_scoring_dataset(
     panel: pd.DataFrame,
     config: ExperimentConfig,
+    *,
+    include_terminal_effective_date: bool = False,
 ) -> pd.DataFrame:
     feature_options = asdict(config.features)
     feature_options.pop("indicator_stack_ml_features_enabled", None)
@@ -360,4 +362,28 @@ def build_scoring_dataset(
         feature_columns=feature_columns,
         frequency=config.portfolio.ranking.rebalance_frequency,
     )
+    if include_terminal_effective_date:
+        if config.portfolio.ranking.rebalance_frequency != "bar":
+            raise ValueError(
+                "Terminal scoring rows are only supported for bar-frequency allocation."
+            )
+        terminal = (
+            featured_panel.sort_values(["symbol", "timestamp"])
+            .groupby("symbol", as_index=False)
+            .tail(1)
+            .loc[:, ["symbol", "timestamp", *feature_columns]]
+            .rename(columns={"timestamp": "signal_date"})
+        )
+        terminal["effective_date"] = pd.to_datetime(
+            terminal["signal_date"]
+        ) + pd.Timedelta(days=1)
+        terminal = terminal[
+            ["symbol", "signal_date", "effective_date", *feature_columns]
+        ]
+        snapshots = (
+            pd.concat([snapshots, terminal], ignore_index=True)
+            .drop_duplicates(["symbol", "signal_date"], keep="last")
+            .sort_values(["signal_date", "symbol"])
+            .reset_index(drop=True)
+        )
     return snapshots.dropna(subset=feature_columns).reset_index(drop=True)

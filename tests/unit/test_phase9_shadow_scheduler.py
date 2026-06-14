@@ -123,6 +123,58 @@ def test_scheduler_writes_linked_decision_evidence(tmp_path: Path) -> None:
     assert result.decision_evidence.record["gate_bull"] is True
 
 
+def test_repeated_current_date_runs_add_attempts_but_reuse_decision(
+    tmp_path: Path,
+) -> None:
+    stores = _stores(tmp_path)
+    runtime = datetime(2026, 6, 3, 1, 15, tzinfo=UTC)
+    kwargs = {
+        "as_of": runtime,
+        "evaluator": _evaluation,
+        "panel_refresher": lambda contract: _panel(date(2026, 6, 2)),
+        **stores,
+    }
+
+    first = run_shadow_scheduler(
+        SHADOW_CONFIG,
+        execution_id="execution-1",
+        **kwargs,
+    )
+    second = run_shadow_scheduler(
+        SHADOW_CONFIG,
+        execution_id="execution-2",
+        **kwargs,
+    )
+
+    assert first.decision is not None and first.decision.created is True
+    assert second.decision is not None and second.decision.created is False
+    assert len(stores["attempt_store"].list_for(date(2026, 6, 3))) == 2
+
+
+def test_failed_scheduler_attempt_sanitizes_error_reason(tmp_path: Path) -> None:
+    stores = _stores(tmp_path)
+
+    def _fail(context):
+        raise RuntimeError("token=abc123 secret: hidden")
+
+    with pytest.raises(RuntimeError, match="token"):
+        run_shadow_scheduler(
+            SHADOW_CONFIG,
+            as_of=datetime(2026, 6, 3, 1, 15, tzinfo=UTC),
+            evaluator=_fail,
+            panel_refresher=lambda contract: _panel(date(2026, 6, 2)),
+            execution_id="execution-1",
+            **stores,
+        )
+
+    attempt = stores["attempt_store"].read(date(2026, 6, 3), "execution-1")
+    assert attempt is not None
+    assert attempt["outcome"] == "failed"
+    assert attempt["error_type"] == "RuntimeError"
+    assert "abc123" not in attempt["reason"]
+    assert "hidden" not in attempt["reason"]
+
+
 def test_scheduler_materializes_label_after_fourteen_completed_bars(
     tmp_path: Path,
 ) -> None:
@@ -137,6 +189,17 @@ def test_scheduler_materializes_label_after_fourteen_completed_bars(
         **stores,
     )
 
+    before_maturity = run_shadow_scheduler(
+        SHADOW_CONFIG,
+        as_of=datetime(2026, 6, 16, 1, 15, tzinfo=UTC),
+        evaluator=_evaluation,
+        panel_refresher=lambda contract: _panel(date(2026, 6, 15)),
+        execution_id="execution-before-maturity",
+        **stores,
+    )
+    assert before_maturity.label_evidence == ()
+    assert stores["label_evidence_store"].read(date(2026, 6, 3)) is None
+
     result = run_shadow_scheduler(
         SHADOW_CONFIG,
         as_of=datetime(2026, 6, 17, 1, 15, tzinfo=UTC),
@@ -150,6 +213,15 @@ def test_scheduler_materializes_label_after_fourteen_completed_bars(
     assert label is not None
     assert label["target_end_date"] == "2026-06-16"
     assert len(label["path_adj_closes"]) == 14
+    intraday_return = (
+        label["effective_adj_close"] / label["entry_adj_open"]
+    ) - 1.0
+    expected_gross_return = 0.50 * intraday_return
+    assert label["turnover"] == pytest.approx(0.50)
+    assert label["daily_gross_return"] == pytest.approx(expected_gross_return)
+    assert label["strategy_return"] == pytest.approx(
+        expected_gross_return - 0.50 * 35.0 / 10_000.0
+    )
     assert label["decision_fingerprint"] == stores["journal"].read(
         date(2026, 6, 3)
     )["output_fingerprint"]

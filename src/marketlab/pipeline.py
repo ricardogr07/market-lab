@@ -6252,7 +6252,11 @@ def evaluate_shadow_candidate(
         )
 
     modeling_dataset = build_modeling_dataset(working_panel, config)
-    scoring_dataset = build_scoring_dataset(working_panel, config)
+    scoring_dataset = build_scoring_dataset(
+        working_panel,
+        config,
+        include_terminal_effective_date=True,
+    )
     score_rows = scoring_dataset.loc[
         pd.to_datetime(scoring_dataset["signal_date"]).dt.date.eq(signal_date)
     ].copy()

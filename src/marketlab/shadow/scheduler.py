@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -227,7 +228,7 @@ def _attempt_record(
         "decision_path": decision_path,
         "decision_fingerprint": decision_fingerprint,
         "error_type": error_type,
-        "reason": str(reason) if reason is not None else None,
+        "reason": _sanitized_text(str(reason)) if reason is not None else None,
         **_contract_fields(contract),
     }
 
@@ -288,41 +289,59 @@ def _write_matured_labels(
     }
     decisions = sorted(journal.list(), key=lambda record: record["effective_date"])
     writes: list[ShadowEvidenceWrite] = []
-    previous_allocation = 0.0
+    close_exposure = 0.0
+    close_cash_weight = 1.0
+    last_position: int | None = None
     for decision in decisions:
         effective_date = date.fromisoformat(str(decision["effective_date"]))
         if decision.get("status") != "success":
             continue
-        allocation = float(decision["target_allocation"])
         position = date_positions.get(effective_date)
         if position is None:
-            previous_allocation = allocation
             continue
         end_position = position + contract.maturity_lag_bars - 1
         if end_position >= len(completed):
-            previous_allocation = allocation
-            continue
-        if label_evidence_store.read(effective_date) is not None:
-            previous_allocation = allocation
+            break
+        existing = label_evidence_store.read(effective_date)
+        if existing is not None:
+            close_exposure = float(existing["closing_exposure"])
+            close_cash_weight = float(existing["closing_cash_weight"])
+            last_position = position
             continue
         decision_evidence = decision_evidence_store.read(effective_date)
         if decision_evidence is None:
             raise RuntimeError(
                 f"Missing decision evidence for matured date {effective_date.isoformat()}."
             )
-        path = completed.iloc[position : end_position + 1]
-        writes.append(
-            label_evidence_store.write(
-                _label_evidence_record(
-                    contract=contract,
-                    decision=decision,
-                    decision_evidence=decision_evidence,
-                    path=path,
-                    previous_allocation=previous_allocation,
+        if last_position is not None:
+            for gap_position in range(last_position + 1, position):
+                close_exposure, close_cash_weight = _advance_without_rebalance(
+                    previous_adj_close=float(
+                        completed.iloc[gap_position - 1]["adj_close"]
+                    ),
+                    adj_open=float(completed.iloc[gap_position]["adj_open"]),
+                    adj_close=float(completed.iloc[gap_position]["adj_close"]),
+                    close_exposure=close_exposure,
+                    close_cash_weight=close_cash_weight,
                 )
-            )
+        path = completed.iloc[position : end_position + 1]
+        record = _label_evidence_record(
+            contract=contract,
+            decision=decision,
+            decision_evidence=decision_evidence,
+            path=path,
+            previous_adj_close=(
+                float(completed.iloc[position - 1]["adj_close"])
+                if position > 0 and last_position is not None
+                else None
+            ),
+            close_exposure=close_exposure,
+            close_cash_weight=close_cash_weight,
         )
-        previous_allocation = allocation
+        writes.append(label_evidence_store.write(record))
+        close_exposure = float(record["closing_exposure"])
+        close_cash_weight = float(record["closing_cash_weight"])
+        last_position = position
     return writes
 
 
@@ -332,17 +351,40 @@ def _label_evidence_record(
     decision: dict[str, Any],
     decision_evidence: dict[str, Any],
     path: pd.DataFrame,
-    previous_allocation: float,
+    previous_adj_close: float | None,
+    close_exposure: float,
+    close_cash_weight: float,
 ) -> dict[str, Any]:
     allocation = float(decision["target_allocation"])
     entry_adj_open = float(path.iloc[0]["adj_open"])
+    effective_adj_close = float(path.iloc[0]["adj_close"])
     closes = [float(value) for value in path["adj_close"]]
     exit_adj_close = closes[-1]
     benchmark_return = (exit_adj_close / entry_adj_open) - 1.0
-    turnover = abs(allocation - previous_allocation)
+    overnight_asset_return = (
+        (entry_adj_open / previous_adj_close) - 1.0
+        if previous_adj_close is not None
+        else 0.0
+    )
+    pre_open_exposure, pre_open_cash, overnight_return = _advance_weights(
+        exposure=close_exposure,
+        cash_weight=close_cash_weight,
+        asset_return=overnight_asset_return,
+    )
+    turnover = abs(allocation - pre_open_exposure)
+    intraday_asset_return = (effective_adj_close / entry_adj_open) - 1.0
+    closing_exposure, closing_cash_weight, intraday_return = _advance_weights(
+        exposure=allocation,
+        cash_weight=1.0 - allocation,
+        asset_return=intraday_asset_return,
+    )
+    daily_gross_return = (1.0 + overnight_return) * (1.0 + intraday_return) - 1.0
     base_cost_bps = float(contract.config.portfolio.costs.bps_per_trade)
-    strategy_return = allocation * benchmark_return - (
-        turnover * base_cost_bps / 10_000.0
+    strategy_return = daily_gross_return - turnover * base_cost_bps / 10_000.0
+    daily_benchmark_return = (
+        (effective_adj_close / previous_adj_close) - 1.0
+        if previous_adj_close is not None
+        else intraday_asset_return
     )
     path_returns = [(value / entry_adj_open) - 1.0 for value in closes]
     forward_drawdown = min(0.0, min(path_returns))
@@ -378,22 +420,69 @@ def _label_evidence_record(
             decision_evidence["diagnostic_fingerprint"]
         ),
         "entry_adj_open": entry_adj_open,
+        "effective_adj_close": effective_adj_close,
+        "previous_adj_close": previous_adj_close,
         "path_adj_closes": closes,
         "exit_adj_close": exit_adj_close,
         "benchmark_return": benchmark_return,
+        "daily_benchmark_return": daily_benchmark_return,
+        "overnight_asset_return": overnight_asset_return,
+        "intraday_asset_return": intraday_asset_return,
+        "daily_gross_return": daily_gross_return,
         "strategy_return": strategy_return,
         "realized_utility": utilities[allocation],
         "realized_target_weight": realized_target_weight,
         "forward_drawdown": forward_drawdown,
         "forward_realized_volatility": realized_volatility,
         "exposure": allocation,
-        "previous_exposure": previous_allocation,
+        "pre_open_exposure": pre_open_exposure,
+        "pre_open_cash_weight": pre_open_cash,
+        "closing_exposure": closing_exposure,
+        "closing_cash_weight": closing_cash_weight,
         "turnover": turnover,
         "cost_bps": base_cost_bps,
         "regime_classification": decision_evidence.get("regime_classification"),
         "gate_bull": bool(decision_evidence.get("gate_bull", False)),
         **_contract_fields(contract),
     }
+
+
+def _advance_without_rebalance(
+    *,
+    previous_adj_close: float,
+    adj_open: float,
+    adj_close: float,
+    close_exposure: float,
+    close_cash_weight: float,
+) -> tuple[float, float]:
+    open_exposure, open_cash, _ = _advance_weights(
+        exposure=close_exposure,
+        cash_weight=close_cash_weight,
+        asset_return=(adj_open / previous_adj_close) - 1.0,
+    )
+    next_exposure, next_cash, _ = _advance_weights(
+        exposure=open_exposure,
+        cash_weight=open_cash,
+        asset_return=(adj_close / adj_open) - 1.0,
+    )
+    return next_exposure, next_cash
+
+
+def _advance_weights(
+    *,
+    exposure: float,
+    cash_weight: float,
+    asset_return: float,
+) -> tuple[float, float, float]:
+    evolved_exposure = exposure * (1.0 + asset_return)
+    portfolio_value = evolved_exposure + cash_weight
+    if abs(portfolio_value) <= 1e-12:
+        raise RuntimeError("Shadow label portfolio value collapsed to zero.")
+    return (
+        evolved_exposure / portfolio_value,
+        cash_weight / portfolio_value,
+        portfolio_value - 1.0,
+    )
 
 
 def _allocation_utility(
@@ -439,9 +528,20 @@ def _gate_bull(diagnostics: dict[str, object]) -> bool:
 
 
 def _sanitized_reason(exc: Exception) -> str:
-    reason = " ".join(str(exc).split())
+    reason = _sanitized_text(str(exc))
     if not reason:
         return type(exc).__name__
+    return reason
+
+
+def _sanitized_text(value: str) -> str:
+    reason = " ".join(value.split())
+    reason = re.sub(
+        r"(?i)\b(api[_-]?key|token|password|secret)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        reason,
+    )
+    reason = re.sub(r"://[^/@\s]+@", "://[redacted]@", reason)
     return reason[:500]
 
 

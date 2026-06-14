@@ -58,8 +58,8 @@ def _populate(tmp_path: Path):
             "effective_date": "2026-06-03",
             "score": 0.20,
             "tier": 0.25,
-            "benchmark_return": -0.02,
-            "strategy_return": -0.006,
+            "benchmark_return": 0.0,
+            "strategy_return": -0.000875,
             "utility": -0.10,
             "target": 0.25,
             "turnover": 0.25,
@@ -70,7 +70,7 @@ def _populate(tmp_path: Path):
             "score": 0.80,
             "tier": 1.0,
             "benchmark_return": 0.10,
-            "strategy_return": 0.12,
+            "strategy_return": 0.097375,
             "utility": 0.20,
             "target": 1.0,
             "turnover": 0.75,
@@ -124,6 +124,12 @@ def _populate(tmp_path: Path):
                 "decision_evidence_fingerprint": evidence["output_fingerprint"],
                 "diagnostic_fingerprint": evidence["diagnostic_fingerprint"],
                 "benchmark_return": fixture["benchmark_return"],
+                "daily_benchmark_return": fixture["benchmark_return"],
+                "overnight_asset_return": 0.0,
+                "intraday_asset_return": fixture["benchmark_return"],
+                "daily_gross_return": (
+                    fixture["tier"] * fixture["benchmark_return"]
+                ),
                 "strategy_return": fixture["strategy_return"],
                 "realized_utility": fixture["utility"],
                 "realized_target_weight": fixture["target"],
@@ -173,6 +179,21 @@ def test_status_classifies_successful_dates_from_canonical_records(
     assert status["integrity_errors"] == []
 
 
+def test_status_marks_success_without_mature_label_as_label_pending(
+    tmp_path: Path,
+) -> None:
+    stores = _populate(tmp_path)
+    stores["label_evidence_store"].path_for(date(2026, 6, 4)).unlink()
+
+    status = build_shadow_status(
+        SHADOW_CONFIG,
+        as_of=date(2026, 6, 4),
+        **stores,
+    )
+
+    assert status["counts"] == {"label-pending": 1, "successful": 1}
+
+
 def test_monthly_report_calculates_exact_cost_scenarios_and_is_deterministic(
     tmp_path: Path,
 ) -> None:
@@ -194,10 +215,10 @@ def test_monthly_report_calculates_exact_cost_scenarios_and_is_deterministic(
         **stores,
     )
 
-    strategy_35 = (1.0 + (0.25 * -0.02 - 0.25 * 35 / 10_000)) * (
+    strategy_35 = (1.0 + (0.25 * 0.0 - 0.25 * 35 / 10_000)) * (
         1.0 + (1.0 * 0.10 - 0.75 * 35 / 10_000)
     ) - 1.0
-    benchmark = (1.0 - 0.02) * (1.0 + 0.10) - 1.0
+    benchmark = (1.0 + 0.0) * (1.0 + 0.10) - 1.0
     assert report["active_returns"]["35_bps"]["active_return"] == pytest.approx(
         strategy_35 - benchmark
     )
@@ -206,6 +227,8 @@ def test_monthly_report_calculates_exact_cost_scenarios_and_is_deterministic(
     ]["35_bps"]["active_return"]
     assert report["provisional"] is True
     assert report["promotion_decision"] is None
+    assert report["graduation_checks"]["zero_best_active_fallback"] is True
+    assert report["graduation_checks"]["zero_regime_policy_fallback"] is True
     assert second_report == report
     assert second_json.read_bytes() == original_json
     assert second_md.read_bytes() == original_markdown
@@ -228,6 +251,22 @@ def test_reports_fail_closed_on_tampered_evidence(tmp_path: Path) -> None:
     path = stores["label_evidence_store"].path_for(date(2026, 6, 3))
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["benchmark_return"] = 0.99
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ShadowReportError, match="fingerprint"):
+        write_monthly_shadow_report(
+            SHADOW_CONFIG,
+            as_of=date(2026, 6, 4),
+            output_root=tmp_path / "reports" / "monthly",
+            **stores,
+        )
+
+
+def test_reports_fail_closed_on_tampered_attempt(tmp_path: Path) -> None:
+    stores = _populate(tmp_path)
+    path = stores["attempt_store"].path_for(date(2026, 6, 3), "execution-1")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["outcome"] = "failed"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ShadowReportError, match="fingerprint"):

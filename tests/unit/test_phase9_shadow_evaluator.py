@@ -106,3 +106,23 @@ def test_native_evaluator_returns_deterministic_phase8_diagnostics(monkeypatch) 
     assert first.input_payload["raw_score"] == 0.61
     assert first.input_payload["regime_classification"] == "bull"
     assert len(str(first.input_payload["diagnostic_fingerprint"])) == 64
+
+
+def test_terminal_scoring_row_uses_next_day_without_future_panel_data() -> None:
+    contract = verify_shadow_contract(SHADOW_CONFIG)
+    bars = _bars()
+    panel = pd.DataFrame([bar.as_fingerprint_payload() for bar in bars])
+    panel["timestamp"] = pd.to_datetime(panel["timestamp"]).dt.tz_localize(None)
+
+    scoring = build_scoring_dataset(
+        panel,
+        contract.config,
+        include_terminal_effective_date=True,
+    )
+    latest = scoring.iloc[-1]
+
+    assert pd.Timestamp(latest["signal_date"]).date() == bars[-1].timestamp.date()
+    assert pd.Timestamp(latest["effective_date"]).date() == (
+        bars[-1].timestamp.date() + timedelta(days=1)
+    )
+    assert pd.Timestamp(panel["timestamp"].max()).date() == bars[-1].timestamp.date()
