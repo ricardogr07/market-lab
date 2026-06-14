@@ -130,8 +130,11 @@ contract.
 ```text
 artifacts/phase9-shadow/
   decisions/<effective-date>.json
+  attempts/<effective-date>/<attempt-id>.json
+  evidence/decisions/<effective-date>.json
+  evidence/labels/<effective-date>.json
   reports/monthly/<year-month>/
-  reports/final/
+  reports/final/<as-of>/
   state/status.json
 ```
 
@@ -355,6 +358,9 @@ Phase 9 is complete when:
 
 - the BTC shadow lane is running under the frozen contract and its final
   evidence decision is recorded after `June 16, 2027`
+
+P9-05 implementation details are frozen in
+[the worker plan](phase9/P9-05-WORKER-PLAN.md).
 - QQQ paper decision, approval, submission, reconciliation, notifications, and
   reporting run from Azure
 - PostgreSQL is canonical QQQ workflow state and Blob Storage contains the

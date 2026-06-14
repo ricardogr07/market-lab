@@ -8,6 +8,7 @@ P9_02_PLAN = ROOT / "docs" / "phase9" / "P9-02-WORKER-PLAN.md"
 P9_02_EVIDENCE = ROOT / "docs" / "phase9" / "P9-02-BOOTSTRAP-EVIDENCE.md"
 P9_03_PLAN = ROOT / "docs" / "phase9" / "P9-03-WORKER-PLAN.md"
 P9_04_PLAN = ROOT / "docs" / "phase9" / "P9-04-WORKER-PLAN.md"
+P9_05_PLAN = ROOT / "docs" / "phase9" / "P9-05-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -187,3 +188,41 @@ def test_p9_04_plan_is_linked_from_docs_and_cli_metadata() -> None:
     assert "Phase 9 P9-04 Worker Plan: phase9/P9-04-WORKER-PLAN.md" in nav
     assert "phase9/P9-04-WORKER-PLAN.md" in index
     assert 'phase9-shadow-decision = "marketlab.shadow.cli:main"' in pyproject
+
+
+def test_p9_05_plan_locks_operations_and_reporting_scope() -> None:
+    content = P9_05_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-btc-shadow-operations",
+        "ShadowDecisionEvaluator",
+        "cannot reconstruct an earlier decision",
+        "attempts/<effective-date>/<attempt-id>.json",
+        "evidence/decisions/<effective-date>.json",
+        "evidence/labels/<effective-date>.json",
+        "state/status.json",
+        "2027-06-16",
+        "35 bps",
+        "50 bps",
+        "signal_validity_gate",
+        "bull_participation_gate",
+        "never approves trading",
+        "P9-15",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_05_plan_is_linked_from_docs_and_cli_metadata() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "phase9/P9-05-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-05 Worker Plan: phase9/P9-05-WORKER-PLAN.md" in nav
+    assert "phase9/P9-05-WORKER-PLAN.md" in index
+    assert 'phase9-shadow-scheduler = "marketlab.shadow.cli:scheduler_main"' in pyproject
+    assert 'phase9-shadow-status = "marketlab.shadow.cli:status_main"' in pyproject
+    assert 'phase9-shadow-report = "marketlab.shadow.cli:report_main"' in pyproject
