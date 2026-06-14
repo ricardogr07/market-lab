@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,9 @@ from marketlab.shadow import (
     run_shadow_scheduler,
     shadow_bars_from_panel,
     verify_shadow_contract,
+    write_final_shadow_report,
+    write_monthly_shadow_report,
+    write_shadow_status,
 )
 from marketlab.shadow.decision import ShadowDecisionStatus
 
@@ -73,6 +76,38 @@ def scheduler_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def status_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="phase9-shadow-status")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--as-of")
+    args = parser.parse_args(argv)
+    as_of = _parse_report_date(args.as_of)
+    path, _ = write_shadow_status(args.config, as_of=as_of)
+    print(path)
+    return 0
+
+
+def report_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="phase9-shadow-report")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--as-of")
+    args = parser.parse_args(argv)
+    as_of = _parse_report_date(args.as_of)
+    contract = verify_shadow_contract(args.config)
+    if as_of >= contract.earliest_final_evaluation:
+        json_path, markdown_path, _ = write_final_shadow_report(
+            args.config,
+            as_of=as_of,
+        )
+    else:
+        json_path, markdown_path, _ = write_monthly_shadow_report(
+            args.config,
+            as_of=as_of,
+        )
+    print(json.dumps({"json": str(json_path), "markdown": str(markdown_path)}))
+    return 0
+
+
 def _load_evaluation(path: Path) -> ShadowDecisionEvaluation:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -103,6 +138,18 @@ def _parse_as_of(value: str | None) -> datetime:
     if parsed.tzinfo is None:
         raise RuntimeError("--as-of must include an explicit timezone.")
     return parsed.astimezone(UTC)
+
+
+def _parse_report_date(value: str | None) -> date:
+    if value is None:
+        return datetime.now(UTC).date()
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise RuntimeError("--as-of must use YYYY-MM-DD format.") from exc
+    if parsed.isoformat() != value:
+        raise RuntimeError("--as-of must use YYYY-MM-DD format.")
+    return parsed
 
 
 def _string_value(payload: dict[str, Any], key: str) -> str:

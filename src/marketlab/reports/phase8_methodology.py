@@ -7,6 +7,11 @@ from typing import Any
 
 import pandas as pd
 
+from marketlab.reports.phase8_gates import (
+    calculate_bull_participation_gate,
+    calculate_signal_validity_gate,
+)
+
 STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
 
 PHASE8_METHODOLOGY_REVIEW_COLUMNS = [
@@ -509,7 +514,26 @@ def _signal_validity_gate_rows(rows: list[dict[str, object]], score_summary: pd.
         )
         return
 
-    passes = [
+    values = {
+        metric: (
+            _summary_value(score_summary, metric).get("value")
+            if _summary_value(score_summary, metric) is not None
+            else pd.NA
+        )
+        for metric in (
+            "score_target_weight_correlation",
+            "score_forward_return_correlation",
+            "score_realized_utility_correlation",
+            "predicted_tier_100_fraction",
+            "any_selected_oos_predicted_tier_100",
+        )
+    }
+    gate = calculate_signal_validity_gate(values)
+    for metric in (
+        "score_target_weight_correlation",
+        "score_forward_return_correlation",
+        "score_realized_utility_correlation",
+    ):
         _append_numeric_summary_condition(
             rows,
             summary=score_summary,
@@ -520,42 +544,31 @@ def _signal_validity_gate_rows(rows: list[dict[str, object]], score_summary: pd.
             predicate=lambda value: value > 0.0,
             source_artifact=source,
         )
-        for metric in (
-            "score_target_weight_correlation",
-            "score_forward_return_correlation",
-            "score_realized_utility_correlation",
-        )
-    ]
-    passes.append(
-        _append_numeric_summary_condition(
-            rows,
-            summary=score_summary,
-            methodology_gate="signal_validity_gate",
-            section="tier_support",
-            metric="predicted_tier_100_fraction",
-            required="> 0",
-            predicate=lambda value: value > 0.0,
-            source_artifact=source,
-        )
+    _append_numeric_summary_condition(
+        rows,
+        summary=score_summary,
+        methodology_gate="signal_validity_gate",
+        section="tier_support",
+        metric="predicted_tier_100_fraction",
+        required="> 0",
+        predicate=lambda value: value > 0.0,
+        source_artifact=source,
     )
-    passes.append(
-        _append_bool_summary_condition(
-            rows,
-            summary=score_summary,
-            methodology_gate="signal_validity_gate",
-            section="tier_support",
-            metric="any_selected_oos_predicted_tier_100",
-            source_artifact=source,
-        )
+    _append_bool_summary_condition(
+        rows,
+        summary=score_summary,
+        methodology_gate="signal_validity_gate",
+        section="tier_support",
+        metric="any_selected_oos_predicted_tier_100",
+        source_artifact=source,
     )
-    overall = all(passes)
     _append(
         rows,
         methodology_gate="signal_validity_gate",
         section="summary",
         metric="overall",
-        passed=overall,
-        value=overall,
+        passed=gate.passed,
+        value=gate.passed,
         required="score relationships and selected OOS 100% support pass",
         source_artifact=source,
     )
@@ -579,56 +592,63 @@ def _bull_participation_gate_rows(
         )
         return
 
-    passes = [
+    values = {
+        metric: (
+            _summary_value(bull_summary, metric).get("value")
+            if _summary_value(bull_summary, metric) is not None
+            else pd.NA
+        )
+        for metric in (
+            "gate_bull_average_long_exposure",
+            "gate_bull_active_return_sum",
+            "gate_bull_underexposed_positive_benchmark_return_sum",
+            "selected_fold_fraction",
+        )
+    }
+    gate = calculate_bull_participation_gate(values)
+    for section, metric, required, predicate in (
+        (
+            "exposure",
+            "gate_bull_average_long_exposure",
+            ">= 0.50",
+            lambda value: value >= 0.50,
+        ),
+        (
+            "active_return",
+            "gate_bull_active_return_sum",
+            "> 0",
+            lambda value: value > 0.0,
+        ),
+        (
+            "missed_upside",
+            "gate_bull_underexposed_positive_benchmark_return_sum",
+            "<= 0",
+            lambda value: value <= 0.0,
+        ),
+        (
+            "selection_context",
+            "selected_fold_fraction",
+            ">= 0.75",
+            lambda value: value >= 0.75,
+        ),
+    ):
         _append_numeric_summary_condition(
             rows,
             summary=bull_summary,
             methodology_gate="bull_participation_gate",
-            section="exposure",
-            metric="gate_bull_average_long_exposure",
-            required=">= 0.50",
-            predicate=lambda value: value >= 0.50,
+            section=section,
+            metric=metric,
+            required=required,
+            predicate=predicate,
             source_artifact=source,
-        ),
-        _append_numeric_summary_condition(
-            rows,
-            summary=bull_summary,
-            methodology_gate="bull_participation_gate",
-            section="active_return",
-            metric="gate_bull_active_return_sum",
-            required="> 0",
-            predicate=lambda value: value > 0.0,
-            source_artifact=source,
-        ),
-        _append_numeric_summary_condition(
-            rows,
-            summary=bull_summary,
-            methodology_gate="bull_participation_gate",
-            section="missed_upside",
-            metric="gate_bull_underexposed_positive_benchmark_return_sum",
-            required="<= 0",
-            predicate=lambda value: value <= 0.0,
-            source_artifact=source,
-        ),
-        _append_numeric_summary_condition(
-            rows,
-            summary=bull_summary,
-            methodology_gate="bull_participation_gate",
-            section="selection_context",
-            metric="selected_fold_fraction",
-            required=">= 0.75",
-            predicate=lambda value: value >= 0.75,
-            source_artifact=source,
-        ),
-    ]
-    overall = all(passes)
+        )
     _append(
         rows,
         methodology_gate="bull_participation_gate",
         section="summary",
         metric="overall",
-        passed=overall,
-        value=overall,
+        passed=gate.passed,
+        value=gate.passed,
         required="bull exposure, bull active return, missed-upside, and fold coverage pass",
         source_artifact=source,
     )
