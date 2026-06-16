@@ -175,6 +175,63 @@ def test_failed_scheduler_attempt_sanitizes_error_reason(tmp_path: Path) -> None
     assert "hidden" not in attempt["reason"]
 
 
+def test_scheduler_records_panel_refresh_failure_as_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    stores = _stores(tmp_path)
+
+    def _refresh_failure(contract):
+        raise OSError("provider token=abc123 unavailable")
+
+    with pytest.raises(OSError, match="provider"):
+        run_shadow_scheduler(
+            SHADOW_CONFIG,
+            as_of=datetime(2026, 6, 3, 1, 15, tzinfo=UTC),
+            evaluator=_evaluation,
+            panel_refresher=_refresh_failure,
+            execution_id="execution-1",
+            **stores,
+        )
+
+    attempt = stores["attempt_store"].read(date(2026, 6, 3), "execution-1")
+    assert attempt is not None
+    assert attempt["outcome"] == "failed"
+    assert attempt["error_type"] == "OSError"
+    assert "abc123" not in attempt["reason"]
+
+
+def test_scheduler_records_failed_attempt_when_decision_evidence_write_fails(
+    tmp_path: Path,
+) -> None:
+    stores = _stores(tmp_path)
+
+    class FailingDecisionEvidenceStore(ShadowDecisionEvidenceStore):
+        def write(self, record):
+            raise RuntimeError("evidence conflict token=abc123")
+
+    stores["decision_evidence_store"] = FailingDecisionEvidenceStore(
+        tmp_path / "evidence" / "decisions"
+    )
+
+    with pytest.raises(RuntimeError, match="evidence conflict"):
+        run_shadow_scheduler(
+            SHADOW_CONFIG,
+            as_of=datetime(2026, 6, 3, 1, 15, tzinfo=UTC),
+            evaluator=_evaluation,
+            panel_refresher=lambda contract: _panel(date(2026, 6, 2)),
+            execution_id="execution-1",
+            **stores,
+        )
+
+    attempts = stores["attempt_store"].list_for(date(2026, 6, 3))
+    assert [attempt["outcome"] for attempt in attempts] == ["failed"]
+    assert attempts[0]["error_type"] == "RuntimeError"
+    assert "abc123" not in attempts[0]["reason"]
+    decision = stores["journal"].read(date(2026, 6, 3))
+    assert decision is not None
+    assert attempts[0]["decision_fingerprint"] == decision["output_fingerprint"]
+
+
 def test_scheduler_materializes_label_after_fourteen_completed_bars(
     tmp_path: Path,
 ) -> None:

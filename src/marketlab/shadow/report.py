@@ -316,6 +316,12 @@ def _integrity_summary(
     evidence_by_date = {
         str(record["effective_date"]): record for record in decision_evidence
     }
+    for effective_date, decision_record in decisions_by_date.items():
+        if (
+            decision_record.get("status") == "success"
+            and effective_date not in evidence_by_date
+        ):
+            cross_link_errors.append(f"missing_decision_evidence:{effective_date}")
     for record in decision_evidence:
         decision = decisions_by_date.get(str(record["effective_date"]))
         if decision is None or record.get("decision_fingerprint") != decision.get(

@@ -278,6 +278,28 @@ def test_reports_fail_closed_on_tampered_attempt(tmp_path: Path) -> None:
         )
 
 
+def test_report_integrity_requires_decision_evidence_for_successful_decisions(
+    tmp_path: Path,
+) -> None:
+    stores = _populate(tmp_path)
+    stores["decision_evidence_store"].path_for(date(2026, 6, 4)).unlink()
+    stores["label_evidence_store"].path_for(date(2026, 6, 4)).unlink()
+
+    _, _, report = write_monthly_shadow_report(
+        SHADOW_CONFIG,
+        as_of=date(2026, 6, 4),
+        output_root=tmp_path / "reports" / "monthly",
+        **stores,
+    )
+
+    assert report["integrity"]["passed"] is False
+    assert (
+        "missing_decision_evidence:2026-06-04"
+        in report["integrity"]["cross_link_errors"]
+    )
+    assert report["graduation_checks"]["fingerprint_integrity"] is False
+
+
 def test_final_report_remains_informational(tmp_path: Path) -> None:
     stores = _populate(tmp_path)
 

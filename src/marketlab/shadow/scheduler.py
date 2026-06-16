@@ -92,14 +92,16 @@ def run_shadow_scheduler(
             )
         )
 
-    panel = (panel_refresher or _refresh_panel)(contract)
     decision: ShadowDecisionResult | None = None
     evidence_write: ShadowEvidenceWrite | None = None
+    panel: pd.DataFrame | None = None
     current_date = runtime.date()
     if contract.protocol_start <= current_date <= contract.protocol_end:
         attempt_id = execution_id or uuid4().hex
         selected_evaluator = evaluator or NativeShadowDecisionEvaluator()
         captured: dict[str, ShadowDecisionEvaluation] = {}
+        decision_path: str | None = None
+        decision_fingerprint: str | None = None
 
         def _evaluate(context):
             evaluation = selected_evaluator(context)
@@ -107,6 +109,7 @@ def run_shadow_scheduler(
             return evaluation
 
         try:
+            panel = (panel_refresher or _refresh_panel)(contract)
             decision = run_shadow_decision(
                 ShadowDecisionRequest(
                     contract=contract,
@@ -120,6 +123,14 @@ def run_shadow_scheduler(
             decision_path = str(decision.path)
             decision_fingerprint = str(decision.record["output_fingerprint"])
             outcome = str(decision.record["status"])
+            if evaluation.status == "success":
+                evidence_write = selected_decision_evidence.write(
+                    _decision_evidence_record(
+                        contract=contract,
+                        decision=decision,
+                        evaluation=evaluation,
+                    )
+                )
             attempts.append(
                 selected_attempts.write(
                     _attempt_record(
@@ -136,14 +147,6 @@ def run_shadow_scheduler(
                     )
                 )
             )
-            if evaluation.status == "success":
-                evidence_write = selected_decision_evidence.write(
-                    _decision_evidence_record(
-                        contract=contract,
-                        decision=decision,
-                        evaluation=evaluation,
-                    )
-                )
         except Exception as exc:
             attempts.append(
                 selected_attempts.write(
@@ -155,12 +158,17 @@ def run_shadow_scheduler(
                         started_at=runtime,
                         completed_at=datetime.now(UTC),
                         outcome="failed",
+                        decision_path=decision_path,
+                        decision_fingerprint=decision_fingerprint,
                         error_type=type(exc).__name__,
                         reason=_sanitized_reason(exc),
                     )
                 )
             )
             raise
+
+    if panel is None:
+        panel = (panel_refresher or _refresh_panel)(contract)
 
     labels = _write_matured_labels(
         contract=contract,
