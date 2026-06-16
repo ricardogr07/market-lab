@@ -65,6 +65,9 @@ dev = [
 marketlab = "marketlab.cli:main"
 marketlab-mcp = "marketlab.mcp.cli:main"
 phase9-shadow-decision = "marketlab.shadow.cli:main"
+phase9-shadow-scheduler = "marketlab.shadow.cli:scheduler_main"
+phase9-shadow-status = "marketlab.shadow.cli:status_main"
+phase9-shadow-report = "marketlab.shadow.cli:report_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

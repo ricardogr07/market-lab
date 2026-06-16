@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from marketlab.config import (
 from marketlab.data.market import load_symbol_frames
 from marketlab.data.panel import build_market_panel, load_panel_csv, save_panel_csv
 from marketlab.evaluation import (
+    WalkForwardFold,
     build_walk_forward_folds,
     folds_to_frame,
     slice_fold_rows,
@@ -138,7 +139,11 @@ from marketlab.strategies.tiered_allocation import (
 from marketlab.strategies.tiered_allocation import (
     generate_weights as tiered_allocation_weights,
 )
-from marketlab.targets import apply_allocation_utility_profile, build_modeling_dataset
+from marketlab.targets import (
+    apply_allocation_utility_profile,
+    build_modeling_dataset,
+    build_scoring_dataset,
+)
 
 LOGGER = logging.getLogger(__name__)
 ML_TUNED_STRATEGY_NAME = "ml_indicator_tuned__long_only__cash"
@@ -237,6 +242,16 @@ class ModelScoreOutput:
     predictions: pd.DataFrame
     feature_importance: pd.DataFrame
     calibration_status: str = "not_applicable"
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowCandidateEvaluation:
+    selection_source: str
+    target_allocation: float
+    raw_score: float | None
+    selected_tier: float
+    regime_classification: str
+    diagnostics: dict[str, object]
 
 
 def _concat_backtest_results(results: list[BacktestResult]) -> BacktestResult:
@@ -4182,7 +4197,14 @@ def _build_ml_strategy_tuning_outputs(
     folds: list,
     buy_hold_performance: pd.DataFrame,
     baseline_performance: pd.DataFrame,
-) -> tuple[BacktestResult | None, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[
+    BacktestResult | None,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
     candidate_columns = [
         "fold_id",
         "model_name",
@@ -4442,6 +4464,7 @@ def _build_ml_strategy_tuning_outputs(
             pd.DataFrame(columns=selection_columns),
             pd.DataFrame(columns=allocation_probability_columns),
             pd.DataFrame(columns=feature_importance_columns),
+            pd.DataFrame(columns=["strategy", "effective_date", "symbol", "weight"]),
         )
 
     feature_columns = modeling_feature_columns(modeling_dataset)
@@ -5788,6 +5811,7 @@ def _build_ml_strategy_tuning_outputs(
             selections,
             pd.DataFrame(columns=allocation_probability_columns),
             pd.DataFrame(columns=feature_importance_columns),
+            pd.DataFrame(columns=["strategy", "effective_date", "symbol", "weight"]),
         )
 
     selected_weights = (
@@ -5811,7 +5835,14 @@ def _build_ml_strategy_tuning_outputs(
         if feature_importance_frames
         else pd.DataFrame(columns=feature_importance_columns)
     )
-    return tuned_result, candidates, selections, allocation_probability_diagnostics, feature_importance
+    return (
+        tuned_result,
+        candidates,
+        selections,
+        allocation_probability_diagnostics,
+        feature_importance,
+        selected_weights,
+    )
 
 
 def train_models(config: ExperimentConfig) -> TrainModelsArtifacts:
@@ -6102,6 +6133,7 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
             ml_strategy_tuning_selections,
             allocation_probability_diagnostics,
             feature_importance,
+            _,
         ) = _build_ml_strategy_tuning_outputs(
             config=config,
             panel=panel,
@@ -6197,6 +6229,166 @@ def run_experiment(config: ExperimentConfig) -> ExperimentArtifacts:
         allocation_probability_diagnostics=allocation_probability_diagnostics,
         feature_importance=feature_importance,
     )
+
+
+def evaluate_shadow_candidate(
+    *,
+    config: ExperimentConfig,
+    panel: pd.DataFrame,
+    signal_date: date,
+) -> ShadowCandidateEvaluation:
+    """Score one completed BTC bar through the frozen Phase 8 candidate path."""
+    working_panel = panel.copy()
+    working_panel["timestamp"] = pd.to_datetime(working_panel["timestamp"])
+    working_panel = working_panel.loc[
+        working_panel["timestamp"].dt.date <= signal_date
+    ].copy()
+    if working_panel.empty:
+        raise RuntimeError("Shadow evaluation requires completed panel rows.")
+    latest_panel_date = pd.Timestamp(working_panel["timestamp"].max()).date()
+    if latest_panel_date != signal_date:
+        raise RuntimeError(
+            "Shadow evaluation panel must end on the completed signal date."
+        )
+
+    modeling_dataset = build_modeling_dataset(working_panel, config)
+    scoring_dataset = build_scoring_dataset(
+        working_panel,
+        config,
+        include_terminal_effective_date=True,
+    )
+    score_rows = scoring_dataset.loc[
+        pd.to_datetime(scoring_dataset["signal_date"]).dt.date.eq(signal_date)
+    ].copy()
+    if len(score_rows) != 1:
+        raise RuntimeError(
+            "Shadow evaluation requires exactly one BTC scoring row for the signal date."
+        )
+
+    score_rows["target_end_date"] = pd.Timestamp(signal_date)
+    score_rows["forward_return"] = 0.0
+    score_rows["forward_drawdown"] = 0.0
+    score_rows["forward_realized_volatility"] = 0.0
+    score_rows["target"] = 0
+    score_rows["target_weight"] = 0.0
+    for suffix in (0, 25, 50, 100):
+        score_rows[f"allocation_utility_{suffix}"] = 0.0
+
+    label_cutoff = pd.Timestamp(signal_date)
+    mature_rows = modeling_dataset.loc[
+        pd.to_datetime(modeling_dataset["target_end_date"]).le(label_cutoff)
+    ].copy()
+    train_start = label_cutoff - pd.DateOffset(
+        years=config.evaluation.walk_forward.train_years
+    )
+    mature_rows = mature_rows.loc[
+        pd.to_datetime(mature_rows["signal_date"]).ge(train_start)
+    ].copy()
+    if mature_rows.empty:
+        raise RuntimeError("Shadow evaluation has no mature training rows.")
+
+    combined_dataset = pd.concat(
+        [mature_rows, score_rows.reindex(columns=mature_rows.columns)],
+        ignore_index=True,
+    )
+    combined_dataset = _with_completed_bar_gate_labels(
+        combined_dataset,
+        panel=working_panel,
+        config=config,
+    )
+    mature_rows = combined_dataset.loc[
+        pd.to_datetime(combined_dataset["signal_date"]).dt.date.ne(signal_date)
+    ]
+    fold = WalkForwardFold(
+        fold_id=1,
+        train_start=pd.Timestamp(mature_rows["signal_date"].min()),
+        train_end=pd.Timestamp(mature_rows["signal_date"].max()),
+        label_cutoff=label_cutoff,
+        test_start=pd.Timestamp(signal_date),
+        test_end=pd.Timestamp(signal_date),
+        train_rows=len(mature_rows),
+        test_rows=1,
+    )
+
+    baseline_outputs = run_baselines(config, working_panel)[0]
+    buy_hold_performance = baseline_outputs.performance.loc[
+        baseline_outputs.performance["strategy"].astype(str).eq("buy_hold")
+    ].copy()
+    (
+        _,
+        candidates,
+        selections,
+        probability_diagnostics,
+        _,
+        selected_weights,
+    ) = _build_ml_strategy_tuning_outputs(
+        config=config,
+        panel=working_panel,
+        modeling_dataset=combined_dataset,
+        folds=[fold],
+        buy_hold_performance=buy_hold_performance,
+        baseline_performance=baseline_outputs.performance,
+    )
+    if selections.empty or selected_weights.empty:
+        raise RuntimeError("Frozen shadow candidate did not produce a selection.")
+
+    selection = selections.iloc[-1]
+    selection_source = str(selection["selection_source"])
+    if selection_source == "none":
+        raise RuntimeError("Frozen shadow candidate produced no valid selection.")
+    effective_date = pd.Timestamp(score_rows.iloc[0]["effective_date"])
+    weight_rows = selected_weights.loc[
+        pd.to_datetime(selected_weights["effective_date"]).eq(effective_date)
+    ]
+    if len(weight_rows) != 1:
+        raise RuntimeError("Frozen shadow candidate did not produce one BTC allocation.")
+    target_allocation = float(weight_rows.iloc[0]["weight"])
+
+    scored = probability_diagnostics.loc[
+        pd.to_datetime(probability_diagnostics["signal_date"]).dt.date.eq(signal_date)
+    ]
+    score_row = scored.iloc[-1] if not scored.empty else None
+    raw_score = (
+        float(score_row["raw_expected_allocation_score"])
+        if score_row is not None
+        and pd.notna(score_row.get("raw_expected_allocation_score"))
+        else None
+    )
+    latest_row = combined_dataset.loc[
+        pd.to_datetime(combined_dataset["signal_date"]).dt.date.eq(signal_date)
+    ].iloc[-1]
+    regime = (
+        str(score_row["runtime_regime"])
+        if score_row is not None and pd.notna(score_row.get("runtime_regime"))
+        else _allocation_regime_label(latest_row)
+    )
+    diagnostics = {
+        "candidate_count": int(len(candidates)),
+        "selection": _json_mapping(selection.to_dict()),
+        "prediction": _json_mapping(score_row.to_dict()) if score_row is not None else {},
+    }
+    return ShadowCandidateEvaluation(
+        selection_source=selection_source,
+        target_allocation=target_allocation,
+        raw_score=raw_score,
+        selected_tier=target_allocation,
+        regime_classification=regime,
+        diagnostics=diagnostics,
+    )
+
+
+def _json_mapping(values: dict[object, object]) -> dict[str, object]:
+    return {str(key): _json_value(value) for key, value in values.items()}
+
+
+def _json_value(value: object) -> object:
+    if value is None or value is pd.NA or pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        return value.item()
+    return value
 
 
 
