@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = ROOT / "infra" / "azure" / "bootstrap"
+PHASE9_SHADOW = ROOT / "infra" / "azure" / "phase9-shadow"
 MAIN = BOOTSTRAP / "main.tf"
 VERSIONS = BOOTSTRAP / "versions.tf"
 LOCK = BOOTSTRAP / ".terraform.lock.hcl"
@@ -146,9 +147,13 @@ def test_operator_values_and_terraform_state_are_ignored() -> None:
     assert "**/terraform.rc" in ignored
     assert "**/credentials.tfrc.json" in ignored
     assert "infra/azure/bootstrap/backend.tf" in ignored
+    assert "infra/azure/phase9-shadow/backend.tf" in ignored
     assert (BOOTSTRAP / "backend.tf.example").exists()
     assert (BOOTSTRAP / "backend.hcl.example").exists()
     assert (BOOTSTRAP / "terraform.tfvars.example").exists()
+    assert (PHASE9_SHADOW / "backend.tf.example").exists()
+    assert (PHASE9_SHADOW / "backend.hcl.example").exists()
+    assert (PHASE9_SHADOW / "terraform.tfvars.example").exists()
 
 
 def test_bootstrap_runbook_preserves_supervision_gates() -> None:
@@ -166,3 +171,138 @@ def test_bootstrap_runbook_preserves_supervision_gates() -> None:
         "separately reviewed destroy plan",
     ]
     assert all(clause in runbook for clause in required)
+
+
+def test_phase9_shadow_resource_scope_is_locked() -> None:
+    content = (PHASE9_SHADOW / "main.tf").read_text(encoding="utf-8")
+    resource_types = re.findall(r'^resource\s+"([^"]+)"\s+"[^"]+"\s+\{', content, re.MULTILINE)
+
+    assert resource_types == [
+        "azurerm_resource_group",
+        "azurerm_user_assigned_identity",
+        "azurerm_container_registry",
+        "azurerm_log_analytics_workspace",
+        "azurerm_application_insights",
+        "azurerm_container_app_environment",
+        "azurerm_storage_account",
+        "azurerm_storage_share",
+        "azurerm_storage_container",
+        "azurerm_storage_management_policy",
+        "azurerm_container_app_environment_storage",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_container_app_job",
+        "azurerm_monitor_action_group",
+        "azurerm_monitor_scheduled_query_rules_alert_v2",
+        "azurerm_monitor_scheduled_query_rules_alert_v2",
+    ]
+
+
+def test_phase9_shadow_launch_gate_defaults_to_disabled_schedule() -> None:
+    main = _normalized(PHASE9_SHADOW / "main.tf")
+    variables = _normalized(PHASE9_SHADOW / "variables.tf")
+    tfvars = _normalized(PHASE9_SHADOW / "terraform.tfvars.example")
+
+    required = [
+        "default = false",
+        "for_each = var.enable_shadow_schedule ? [] : [1]",
+        "for_each = var.enable_shadow_schedule ? [1] : []",
+        "launch_gate_evidence_uri must be an https URI before enable_shadow_schedule can be true",
+        '"15 1 * * *"',
+        '"phase9-shadow-scheduler"',
+        '"/app/configs/experiment.btc_phase9_shadow_daily.yaml"',
+        '"--once"',
+        "marketlab_image_digest must be an immutable sha256 digest",
+    ]
+
+    assert all(clause in variables or clause in main or clause in tfvars for clause in required)
+    assert "enable_shadow_schedule = false" in tfvars
+    assert "enable_shadow_alerts = false" in tfvars
+
+
+def test_phase9_shadow_storage_archive_and_restore_controls_are_documented() -> None:
+    main = _normalized(PHASE9_SHADOW / "main.tf")
+    runbook = _normalized(PHASE9_SHADOW / "README.md")
+
+    required_main = [
+        'account_replication_type = "ZRS"',
+        'account_kind = "StorageV2"',
+        'min_tls_version = "TLS1_2"',
+        "https_traffic_only_enabled = true",
+        "allow_nested_items_to_be_public = false",
+        "versioning_enabled = true",
+        'name = "phase9-shadow-live"',
+        'name = "phase9-shadow-archive"',
+        'container_access_type = "private"',
+        "azurerm_storage_management_policy",
+        "delete_after_days_since_creation_greater_than = var.archive_retention_days",
+        "delete_after_days_since_creation = var.archive_retention_days",
+        'path = "/app/artifacts"',
+        'storage_type = "AzureFile"',
+    ]
+    required_runbook = [
+        "Archive Snapshot",
+        "Restore Check",
+        "az storage copy",
+        "snapshots/$snapshotDate",
+        "restore-check/$snapshotDate",
+        "Never overwrite the live artifact tree",
+        "`450` day lifecycle retention policy",
+        "must not become the P9-09 generic Blob or Service Bus adapter layer",
+    ]
+
+    assert all(clause in main for clause in required_main)
+    assert all(clause in runbook for clause in required_runbook)
+
+
+def test_phase9_shadow_identity_alerts_and_no_public_ingress_are_locked() -> None:
+    main_content = (PHASE9_SHADOW / "main.tf").read_text(encoding="utf-8")
+    main = " ".join(main_content.split())
+
+    required = [
+        'type = "UserAssigned"',
+        "identity_ids = [azurerm_user_assigned_identity.shadow.id]",
+        "identity = azurerm_user_assigned_identity.shadow.id",
+        'role_definition_name = "AcrPull"',
+        'role_definition_name = "Storage Blob Data Contributor"',
+        'role_definition_name = "Storage File Data SMB Share Contributor"',
+        "azurerm_monitor_action_group",
+        "azurerm_monitor_scheduled_query_rules_alert_v2",
+        "job_failures",
+        "missing_evidence",
+        "ContainerAppSystemLogs_CL",
+        "ContainerAppConsoleLogs_CL",
+    ]
+    forbidden = [
+        'resource "azurerm_container_app"',
+        'resource "azurerm_key_vault"',
+        'resource "azurerm_servicebus',
+        'ingress {',
+        "alpaca",
+        "broker",
+        "approval",
+        "telegram",
+    ]
+
+    assert all(clause in main for clause in required)
+    assert all(clause.lower() not in main_content.lower() for clause in forbidden)
+
+
+def test_phase9_shadow_backend_provider_and_tox_validation_are_locked() -> None:
+    backend = _normalized(PHASE9_SHADOW / "backend.tf.example")
+    backend_hcl = _normalized(PHASE9_SHADOW / "backend.hcl.example")
+    versions = _normalized(PHASE9_SHADOW / "versions.tf")
+    lock = _normalized(PHASE9_SHADOW / ".terraform.lock.hcl")
+    tox = _normalized(ROOT / "tox.ini")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'backend "azurerm" { use_azuread_auth = true use_cli = true }' in backend
+    assert "key = \"phase9-shadow.tfstate\"" in backend_hcl
+    assert 'required_version = "= 1.15.5"' in versions
+    assert 'version = "~> 4.74.0"' in versions
+    assert 'resource_provider_registrations = "none"' in versions
+    assert 'version = "4.74.0"' in lock
+    assert "phase9-shadow init -backend=false -lockfile=readonly -input=false" in tox
+    assert "phase9-shadow validate -no-color" in tox
+    assert "infra/azure/phase9-shadow/.terraform.lock.hcl" in workflow
