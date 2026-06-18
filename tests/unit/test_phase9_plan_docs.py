@@ -9,6 +9,7 @@ P9_02_EVIDENCE = ROOT / "docs" / "phase9" / "P9-02-BOOTSTRAP-EVIDENCE.md"
 P9_03_PLAN = ROOT / "docs" / "phase9" / "P9-03-WORKER-PLAN.md"
 P9_04_PLAN = ROOT / "docs" / "phase9" / "P9-04-WORKER-PLAN.md"
 P9_05_PLAN = ROOT / "docs" / "phase9" / "P9-05-WORKER-PLAN.md"
+P9_06_PLAN = ROOT / "docs" / "phase9" / "P9-06-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -226,3 +227,38 @@ def test_p9_05_plan_is_linked_from_docs_and_cli_metadata() -> None:
     assert 'phase9-shadow-scheduler = "marketlab.shadow.cli:scheduler_main"' in pyproject
     assert 'phase9-shadow-status = "marketlab.shadow.cli:status_main"' in pyproject
     assert 'phase9-shadow-report = "marketlab.shadow.cli:report_main"' in pyproject
+
+
+def test_p9_06_plan_locks_shadow_azure_launch_gate_scope() -> None:
+    content = P9_06_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-btc-shadow-azure",
+        "feat(phase9): add BTC shadow Azure launch gate",
+        "infra/azure/phase9-shadow/",
+        "phase9-shadow.tfstate",
+        "disabled scheduled Container Apps Job",
+        "marketlab phase9-shadow-scheduler --config /app/configs/experiment.btc_phase9_shadow_daily.yaml --once",
+        "enable_shadow_schedule = true",
+        "launch_gate_evidence_uri",
+        "append-only journal conflict handling is proven",
+        "archive copy from Azure Files to Blob succeeds",
+        "restore from a dated Blob snapshot into a scratch path succeeds",
+        "no broker, approval, Alpaca, Telegram, Service Bus, or Key Vault secret",
+        "must not become the P9-09 generic artifact store",
+        "Terraform validation is format, backend-disabled init, and validate only",
+        "Azure apply without separate explicit approval",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_06_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-06-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-06 Worker Plan: phase9/P9-06-WORKER-PLAN.md" in nav
+    assert "phase9/P9-06-WORKER-PLAN.md" in index

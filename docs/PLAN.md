@@ -321,7 +321,7 @@ working alerts, and a rehearsed rollback.
 | [P9-03](phase9/P9-03-WORKER-PLAN.md) | Frozen BTC shadow config and behavior lock | P9-01 | Any drift fails closed; paper remains disabled |
 | [P9-04](phase9/P9-04-WORKER-PLAN.md) | Shadow decision service and append-only journal | P9-03 | Label-safe, idempotent, conflict-preserving decisions |
 | P9-05 | Shadow scheduler, status, monthly, and final reports | P9-04 | Missing and failed runs explicit; reports cannot promote |
-| P9-06 | Azure shadow infrastructure and launch gate | P9-02, P9-05 | Disabled job validates; archive, restore, and alert tests pass |
+| [P9-06](phase9/P9-06-WORKER-PLAN.md) | Azure shadow infrastructure and launch gate | P9-02, P9-05 | Disabled job validates; archive, restore, and alert tests pass |
 | P9-07 | Hosted execution context and deployment registry | P9-01 | All four paper phases share typed, idempotent metadata |
 | P9-08 | PostgreSQL repositories and migrations | P9-07 | Filesystem, SQLite, and PostgreSQL contract suites pass |
 | P9-09 | Blob artifact store, outbox, and Service Bus adapters | P9-08 | Artifact parity and duplicate-delivery tests pass |
@@ -360,7 +360,9 @@ Phase 9 is complete when:
   evidence decision is recorded after `June 16, 2027`
 
 P9-05 implementation details are frozen in
-[the worker plan](phase9/P9-05-WORKER-PLAN.md).
+[the worker plan](phase9/P9-05-WORKER-PLAN.md). P9-06 infrastructure and
+launch-gate details are frozen in
+[the Azure shadow worker plan](phase9/P9-06-WORKER-PLAN.md).
 - QQQ paper decision, approval, submission, reconciliation, notifications, and
   reporting run from Azure
 - PostgreSQL is canonical QQQ workflow state and Blob Storage contains the
