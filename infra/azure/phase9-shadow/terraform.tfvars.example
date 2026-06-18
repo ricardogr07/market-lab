@@ -1,0 +1,18 @@
+resource_suffix = "abc123"
+location        = "eastus2"
+owner           = "replace-with-approved-owner"
+cost_center     = "replace-with-approved-cost-center"
+alert_email     = "operator@example.com"
+
+marketlab_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+enable_shadow_schedule    = false
+enable_shadow_alerts      = false
+launch_gate_evidence_uri  = ""
+archive_retention_days    = 450
+live_share_quota_gb       = 16
+shadow_cron_expression    = "15 1 * * *"
+container_repository      = "marketlab"
+shadow_config_path        = "/app/configs/experiment.btc_phase9_shadow_daily.yaml"
+
+additional_tags = {}

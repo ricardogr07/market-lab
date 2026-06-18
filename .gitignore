@@ -24,6 +24,7 @@ __pycache__/
 **/terraform.rc
 **/credentials.tfrc.json
 infra/azure/bootstrap/backend.tf
+infra/azure/phase9-shadow/backend.tf
 .terraform.tfstate.lock.info
 crash.log
 crash.*.log

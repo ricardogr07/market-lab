@@ -1,0 +1,4 @@
+resource_group_name  = "rg-marketlab-terraform-abc123"
+storage_account_name = "mltfabc123"
+container_name       = "tfstate"
+key                  = "phase9-shadow.tfstate"
