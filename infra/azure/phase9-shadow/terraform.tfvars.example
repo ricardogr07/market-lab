@@ -8,6 +8,7 @@ marketlab_image_digest = "sha256:00000000000000000000000000000000000000000000000
 
 enable_shadow_schedule    = false
 enable_shadow_alerts      = false
+create_shadow_job         = false
 launch_gate_evidence_uri  = ""
 archive_retention_days    = 450
 live_share_quota_gb       = 16

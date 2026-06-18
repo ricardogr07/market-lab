@@ -206,6 +206,8 @@ def test_phase9_shadow_launch_gate_defaults_to_disabled_schedule() -> None:
 
     required = [
         "default = false",
+        "create_shadow_job",
+        "enable_shadow_schedule requires create_shadow_job",
         "for_each = var.enable_shadow_schedule ? [] : [1]",
         "for_each = var.enable_shadow_schedule ? [1] : []",
         "launch_gate_evidence_uri must be an https URI before enable_shadow_schedule can be true",
@@ -217,6 +219,7 @@ def test_phase9_shadow_launch_gate_defaults_to_disabled_schedule() -> None:
     ]
 
     assert all(clause in variables or clause in main or clause in tfvars for clause in required)
+    assert "create_shadow_job = false" in tfvars
     assert "enable_shadow_schedule = false" in tfvars
     assert "enable_shadow_alerts = false" in tfvars
 
@@ -273,6 +276,7 @@ def test_phase9_shadow_identity_alerts_and_no_public_ingress_are_locked() -> Non
         "missing_evidence",
         "ContainerAppSystemLogs_CL",
         "ContainerAppConsoleLogs_CL",
+        "count = var.create_shadow_job ? 1 : 0",
     ]
     forbidden = [
         'resource "azurerm_container_app"',

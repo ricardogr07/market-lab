@@ -52,13 +52,18 @@ The scheduled job runs the existing container image entrypoint through the
 marketlab phase9-shadow-scheduler --config /app/configs/experiment.btc_phase9_shadow_daily.yaml --once
 ```
 
-The job remains launch-blocked until `enable_shadow_schedule = true` is set in
-an explicitly reviewed Terraform change. The default is `false`.
+The first supervised apply keeps `create_shadow_job = false` so Azure can
+create the ACR before an image exists. After the immutable image digest is
+published to that ACR and reviewed, a second supervised apply may set
+`create_shadow_job = true` while still creating only a manual-trigger job. The
+job remains launch-blocked until `enable_shadow_schedule = true` is set in an
+explicitly reviewed Terraform change. Both defaults are `false`.
 
 ## Launch Gate
 
-The launch gate is intentionally manual and evidence-driven. The schedule may
-not be enabled until all evidence below is attached to the supervised change:
+The launch gate is intentionally manual and evidence-driven. Job creation and
+schedule enablement are separate reviewed changes. The schedule may not be
+enabled until all evidence below is attached to the supervised change:
 
 - P9-05 scheduler command succeeds from the immutable image digest
 - frozen config and behavior hashes still pass `verify_shadow_contract`

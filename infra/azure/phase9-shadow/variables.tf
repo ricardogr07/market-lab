@@ -96,6 +96,17 @@ variable "enable_shadow_schedule" {
   description = "Explicit launch-gate switch. False creates only a manual-trigger job."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.enable_shadow_schedule || var.create_shadow_job
+    error_message = "enable_shadow_schedule requires create_shadow_job because the scheduled trigger belongs to the Container Apps Job."
+  }
+}
+
+variable "create_shadow_job" {
+  description = "Explicit job-creation switch. Keep false until the reviewed immutable image digest exists in the shadow ACR."
+  type        = bool
+  default     = false
 }
 
 variable "enable_shadow_alerts" {

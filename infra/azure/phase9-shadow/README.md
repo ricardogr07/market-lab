@@ -46,7 +46,8 @@ P9-06 provisions only:
 - Azure Container Registry with admin access disabled
 - Log Analytics and Application Insights
 - Container Apps environment
-- Container Apps Job using the existing Docker entrypoint:
+- Container Apps Job using the existing Docker entrypoint, created only after
+  the reviewed immutable image digest exists in ACR:
   `marketlab phase9-shadow-scheduler --config /app/configs/experiment.btc_phase9_shadow_daily.yaml --once`
 - StorageV2 account with Azure Files live artifacts and a private, versioned
   Blob archive container
@@ -59,6 +60,11 @@ account key because Container Apps environment storage requires it; the key
 must remain protected in Terraform state and is not a broker, provider, or
 approval secret.
 
+The first supervised apply keeps `create_shadow_job = false` so Azure can
+create the ACR before an image exists. After the immutable image digest is
+published to that ACR and reviewed, a second supervised apply may set
+`create_shadow_job = true` while keeping `enable_shadow_schedule = false`.
+
 ## Launch Gate
 
 The default variable state is:
@@ -66,9 +72,12 @@ The default variable state is:
 ```hcl
 enable_shadow_schedule = false
 enable_shadow_alerts   = false
+create_shadow_job      = false
 ```
 
-With that default, Terraform creates a manual-trigger job only. A scheduled
+With that default, Terraform creates no job resource, avoiding an apply-time
+image pull failure against an empty new ACR. After image publication,
+`create_shadow_job = true` creates a manual-trigger job only. A scheduled
 trigger is emitted only when `enable_shadow_schedule = true`. That change is
 invalid unless `launch_gate_evidence_uri` points to a reviewed evidence
 package proving:

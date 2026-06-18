@@ -15,7 +15,12 @@ output "container_registry_login_server" {
 
 output "container_app_job_name" {
   description = "Container Apps Job name for the BTC shadow scheduler."
-  value       = azurerm_container_app_job.shadow_scheduler.name
+  value       = "caj-ml-p9-shadow-${var.resource_suffix}"
+}
+
+output "container_app_job_created" {
+  description = "Whether the Container Apps Job resource is included in this apply."
+  value       = var.create_shadow_job
 }
 
 output "schedule_enabled" {

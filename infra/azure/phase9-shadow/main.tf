@@ -35,7 +35,7 @@ resource "azurerm_container_registry" "shadow" {
   admin_enabled                 = false
   anonymous_pull_enabled        = false
   public_network_access_enabled = true
-  export_policy_enabled         = false
+  export_policy_enabled         = true
   quarantine_policy_enabled     = false
   trust_policy_enabled          = false
   tags                          = local.tags
@@ -193,6 +193,8 @@ resource "azurerm_role_assignment" "shadow_file_live_artifacts" {
 }
 
 resource "azurerm_container_app_job" "shadow_scheduler" {
+  count = var.create_shadow_job ? 1 : 0
+
   name                         = "caj-ml-p9-shadow-${var.resource_suffix}"
   resource_group_name          = azurerm_resource_group.shadow.name
   location                     = azurerm_resource_group.shadow.location
@@ -310,8 +312,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failures" {
     query                   = <<-KQL
       ContainerAppSystemLogs_CL
       | where TimeGenerated > ago(15m)
-      | where JobName_s == "${azurerm_container_app_job.shadow_scheduler.name}"
-          or ContainerAppName_s == "${azurerm_container_app_job.shadow_scheduler.name}"
+      | where JobName_s == "caj-ml-p9-shadow-${var.resource_suffix}"
+          or ContainerAppName_s == "caj-ml-p9-shadow-${var.resource_suffix}"
       | where Reason_s has_any ("Failed", "Error")
           or Log_s has_any ("failed", "error", "exception")
     KQL
@@ -349,7 +351,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "missing_evidence" {
     query                   = <<-KQL
       ContainerAppConsoleLogs_CL
       | where TimeGenerated > ago(26h)
-      | where ContainerAppName_s == "${azurerm_container_app_job.shadow_scheduler.name}"
+      | where ContainerAppName_s == "caj-ml-p9-shadow-${var.resource_suffix}"
       | where Log_s has_any ("decision_evidence", "label_evidence", "state/status.json")
     KQL
     time_aggregation_method = "Count"
