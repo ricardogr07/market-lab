@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from collections.abc import Callable
 from time import perf_counter
 
@@ -47,9 +48,17 @@ from marketlab.reports.phase8_target_profile_sweep import (
     write_phase8_target_profile_sweep,
 )
 from marketlab.resources.templates import CONFIG_TEMPLATE_NAMES, write_config_template
+from marketlab.shadow import cli as shadow_cli
 from marketlab.targets import build_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
+
+SHADOW_COMMANDS = {
+    "phase9-shadow-decision": "main",
+    "phase9-shadow-scheduler": "scheduler_main",
+    "phase9-shadow-status": "status_main",
+    "phase9-shadow-report": "report_main",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,6 +97,25 @@ def build_parser() -> argparse.ArgumentParser:
     paper_report.add_argument("--config", required=True)
     paper_report.add_argument("--start", required=True)
     paper_report.add_argument("--end", required=True)
+
+    phase9_shadow_decision = subparsers.add_parser("phase9-shadow-decision")
+    phase9_shadow_decision.add_argument("--config", required=True)
+    phase9_shadow_decision.add_argument("--evaluation", required=True)
+    phase9_shadow_decision.add_argument("--panel")
+    phase9_shadow_decision.add_argument("--as-of")
+
+    phase9_shadow_scheduler = subparsers.add_parser("phase9-shadow-scheduler")
+    phase9_shadow_scheduler.add_argument("--config", required=True)
+    phase9_shadow_scheduler.add_argument("--once", action="store_true")
+    phase9_shadow_scheduler.add_argument("--as-of")
+
+    phase9_shadow_status = subparsers.add_parser("phase9-shadow-status")
+    phase9_shadow_status.add_argument("--config", required=True)
+    phase9_shadow_status.add_argument("--as-of")
+
+    phase9_shadow_report = subparsers.add_parser("phase9-shadow-report")
+    phase9_shadow_report.add_argument("--config", required=True)
+    phase9_shadow_report.add_argument("--as-of")
 
     subparsers.add_parser("list-configs")
 
@@ -286,8 +314,13 @@ def _run_paper_report_command(
 
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
+
+    if args.command in SHADOW_COMMANDS:
+        shadow_main = getattr(shadow_cli, SHADOW_COMMANDS[args.command])
+        return shadow_main(raw_args[1:])
 
     if args.command == "list-configs":
         for template_name in CONFIG_TEMPLATE_NAMES:
@@ -349,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         panel, _ = prepare_data(config)
         modeling_dataset = build_modeling_dataset(panel, config)
-        output_path = (
+        sweep_output_path = (
             args.output
             if args.output is not None
             else "artifacts/runs/phase8_btc_target_profile_sweep.csv"
@@ -358,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             write_phase8_target_profile_sweep(
                 modeling_dataset,
                 config=config,
-                output_path=output_path,
+                output_path=sweep_output_path,
             )
         )
         return 0
@@ -479,18 +512,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "backtest":
-        artifacts = backtest(config)
-        print(artifacts.run_dir)
+        backtest_artifacts = backtest(config)
+        print(backtest_artifacts.run_dir)
         return 0
 
     if args.command == "run-experiment":
-        artifacts = run_experiment(config)
-        print(artifacts.run_dir)
+        experiment_artifacts = run_experiment(config)
+        print(experiment_artifacts.run_dir)
         return 0
 
     if args.command == "train-models":
-        artifacts = train_models(config)
-        print(artifacts.run_dir)
+        training_artifacts = train_models(config)
+        print(training_artifacts.run_dir)
         return 0
 
     parser.error(f"Unsupported command: {args.command}")

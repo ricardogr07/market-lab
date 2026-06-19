@@ -44,6 +44,7 @@ jobs:
             pyproject.toml
             tox.ini
             infra/azure/bootstrap/.terraform.lock.hcl
+            infra/azure/phase9-shadow/.terraform.lock.hcl
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
