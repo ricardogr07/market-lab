@@ -27,18 +27,19 @@ def _path_token(value: str) -> str:
     return quote(value, safe="")
 
 
-def _write_idempotent_metadata(path: Path, payload: dict[str, str]) -> None:
+def _write_idempotent_metadata(path: Path, payload: dict[str, str]) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with path.open("x", encoding="utf-8") as handle:
             handle.write(f"{json.dumps(payload, indent=2, sort_keys=True)}\n")
-        return
+        return True
     except FileExistsError:
         existing = _json_load(path)
     if existing != payload:
         raise PaperDeploymentRegistryConflictError(
             f"Hosted execution idempotency conflict at {path}."
         )
+    return False
 
 
 class FilesystemPaperTradeRepository(PaperTradeRepository):
@@ -215,8 +216,14 @@ class FilesystemPaperDeploymentRegistry(PaperDeploymentRegistry):
         self,
         context: PaperHostedExecutionContext,
     ) -> PaperPhaseRunRecord:
-        _write_idempotent_metadata(self._phase_run_path(context), context.as_metadata())
-        self.record_deployment(context)
+        phase_run_path = self._phase_run_path(context)
+        phase_run_created = _write_idempotent_metadata(phase_run_path, context.as_metadata())
+        try:
+            self.record_deployment(context)
+        except Exception:
+            if phase_run_created:
+                phase_run_path.unlink(missing_ok=True)
+            raise
         return PaperPhaseRunRecord.from_context(context)
 
 

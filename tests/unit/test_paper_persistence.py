@@ -436,6 +436,27 @@ def test_deployment_registry_rejects_idempotency_replays_in_a_different_phase(
         )
 
 
+def test_filesystem_deployment_registry_rolls_back_phase_run_on_deployment_conflict(
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / "filesystem-registry-deployment-conflict",
+        symbol="QQQ",
+    )
+    registry = build_filesystem_paper_deployment_registry(config)
+    registry.record_deployment(_hosted_context(idempotency_key="existing-deployment-key"))
+    conflicting_context = _hosted_context(idempotency_key="rolled-back-phase-run-key")
+
+    with pytest.raises(PaperDeploymentRegistryConflictError):
+        registry.record_phase_run(conflicting_context)
+
+    assert not (
+        config.paper_state_dir
+        / "phase-runs"
+        / "rolled-back-phase-run-key.json"
+    ).exists()
+
+
 def test_filesystem_deployment_registry_writes_stable_layout(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path / "filesystem-registry-layout", symbol="QQQ")
     registry = build_filesystem_paper_deployment_registry(config)
