@@ -22,6 +22,7 @@ from marketlab.paper.approval_clients import build_default_paper_approval_client
 from marketlab.paper.contracts import (
     PaperApprovalClientDecision,
     PaperApprovalEvaluationRequest,
+    PaperHostedExecutionContext,
 )
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.service import PaperStateStore, run_paper_decision
@@ -52,6 +53,23 @@ def _stderr_records(stderr: str) -> list[dict[str, object]]:
         for line in stderr.splitlines()
         if line.strip() != ""
     ]
+
+
+def _hosted_context(**overrides: str) -> PaperHostedExecutionContext:
+    payload = {
+        "deployment_id": "qqq-paper-dev",
+        "environment": "dev",
+        "phase": "agent_approve",
+        "execution_id": "agent-exec",
+        "correlation_id": "agent-corr",
+        "idempotency_key": "agent-idem",
+        "trigger_source": "service-bus",
+        "requested_at": "2026-06-19T12:00:00+00:00",
+        "config_version": "config-v1",
+        "image_digest": "sha256:abc123",
+    }
+    payload.update(overrides)
+    return PaperHostedExecutionContext.from_metadata(payload)
 
 
 def test_agent_worker_approves_with_openai_backend(monkeypatch, tmp_path: Path) -> None:
@@ -234,6 +252,50 @@ def test_agent_worker_supports_injected_approval_client_and_notification_sink(
     assert proposal["approval_backend"] == "fake"
     assert proposal["approval_model"] == "fake-model"
     assert proposal["approval_fallback_used"] is True
+
+
+def test_agent_worker_derives_hosted_context_per_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    run_paper_decision(
+        config,
+        now=datetime(2026, 4, 10, 20, 10, tzinfo=UTC),
+        provider=FakeAlpacaProvider(symbol="QQQ"),
+        broker=FakeAlpacaBroker(symbol="QQQ"),
+    )
+    proposal = PaperStateStore(config).latest_proposal()
+    assert proposal is not None
+    captured: list[PaperHostedExecutionContext | None] = []
+
+    def _fake_decide(*args, **kwargs):
+        captured.append(kwargs["hosted_context"])
+        proposal_id = kwargs["proposal_id"]
+        return {
+            "proposal_id": proposal_id,
+            "proposal_path": "proposal.json",
+            "approval_path": "approval.json",
+            "status_path": "status.json",
+            "status": {"event": "paper-approve", "status": "approved"},
+        }
+
+    monkeypatch.setattr(agent_module, "decide_paper_proposal", _fake_decide)
+
+    result = run_agent_approval_iteration(
+        config,
+        now=datetime(2026, 4, 10, 20, 30, tzinfo=UTC),
+        broker=FakeAlpacaBroker(symbol="QQQ"),
+        approval_client=FakePaperApprovalClient(),
+        hosted_context=_hosted_context(),
+    )
+
+    assert result["processed_count"] == 1
+    assert len(captured) == 1
+    assert captured[0] is not None
+    assert captured[0].phase == "agent_approve"
+    assert captured[0].idempotency_key == f"agent-idem:agent_approve:{proposal['proposal_id']}"
+    assert captured[0].correlation_id == "agent-corr"
 
 
 def test_agent_worker_overrides_primary_rejection_when_evidence_requires_approval(

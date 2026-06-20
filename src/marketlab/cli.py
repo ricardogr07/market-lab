@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Callable
 from time import perf_counter
@@ -26,7 +27,9 @@ from marketlab.paper import (
     run_paper_submit,
     run_scheduler_loop,
 )
+from marketlab.paper.contracts import PaperHostedExecutionContext, PaperHostedPhase
 from marketlab.paper.observability import (
+    hosted_execution_details,
     paper_execution_context,
     root_execution_context,
 )
@@ -53,12 +56,84 @@ from marketlab.targets import build_modeling_dataset
 
 LOGGER = logging.getLogger(__name__)
 
+HOSTED_METADATA_ENV = {
+    "deployment_id": "MARKETLAB_DEPLOYMENT_ID",
+    "environment": "MARKETLAB_ENVIRONMENT",
+    "execution_id": "MARKETLAB_EXECUTION_ID",
+    "correlation_id": "MARKETLAB_CORRELATION_ID",
+    "idempotency_key": "MARKETLAB_IDEMPOTENCY_KEY",
+    "trigger_source": "MARKETLAB_TRIGGER_SOURCE",
+    "requested_at": "MARKETLAB_REQUESTED_AT",
+    "config_version": "MARKETLAB_CONFIG_VERSION",
+    "image_digest": "MARKETLAB_IMAGE_DIGEST",
+}
+HOSTED_COMMAND_PHASES: dict[str, PaperHostedPhase] = {
+    "paper-decision": "decision",
+    "paper-submit": "submit",
+    "paper-approve": "agent_approve",
+    "paper-agent-approve": "agent_approve",
+    "paper-scheduler": "decision",
+}
 SHADOW_COMMANDS = {
     "phase9-shadow-decision": "main",
     "phase9-shadow-scheduler": "scheduler_main",
     "phase9-shadow-status": "status_main",
     "phase9-shadow-report": "report_main",
 }
+
+
+def _add_hosted_execution_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--deployment-id", dest="hosted_deployment_id")
+    command.add_argument("--environment", dest="hosted_environment")
+    command.add_argument("--execution-id", dest="hosted_execution_id")
+    command.add_argument("--correlation-id", dest="hosted_correlation_id")
+    command.add_argument("--idempotency-key", dest="hosted_idempotency_key")
+    command.add_argument("--trigger-source", dest="hosted_trigger_source")
+    command.add_argument("--requested-at", dest="hosted_requested_at")
+    command.add_argument("--config-version", dest="hosted_config_version")
+    command.add_argument("--image-digest", dest="hosted_image_digest")
+
+
+def _hosted_value(args: argparse.Namespace, field_name: str) -> str:
+    explicit = str(getattr(args, f"hosted_{field_name}", "") or "").strip()
+    if explicit != "":
+        return explicit
+    return os.environ.get(HOSTED_METADATA_ENV[field_name], "").strip()
+
+
+def _resolve_hosted_execution_context(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    *,
+    phase: PaperHostedPhase,
+    allow_env_phase: bool = False,
+) -> PaperHostedExecutionContext | None:
+    values = {
+        field_name: _hosted_value(args, field_name)
+        for field_name in HOSTED_METADATA_ENV
+    }
+    env_phase = os.environ.get("MARKETLAB_PHASE", "").strip()
+    if env_phase != "" and not allow_env_phase and env_phase != phase:
+        parser.error(f"MARKETLAB_PHASE={env_phase!r} does not match command phase {phase!r}.")
+    resolved_phase = env_phase if allow_env_phase and env_phase != "" else phase
+    if not any(values.values()) and env_phase == "":
+        return None
+    missing = [field_name for field_name, value in values.items() if value == ""]
+    if missing:
+        parser.error(
+            "Hosted paper execution metadata is incomplete; missing: "
+            + ", ".join(missing)
+        )
+    try:
+        return PaperHostedExecutionContext.from_metadata(
+            {
+                **values,
+                "phase": resolved_phase,
+            }
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    raise AssertionError("parser.error should exit")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,15 +147,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     paper_decision = subparsers.add_parser("paper-decision")
     paper_decision.add_argument("--config", required=True)
+    _add_hosted_execution_arguments(paper_decision)
 
     paper_submit = subparsers.add_parser("paper-submit")
     paper_submit.add_argument("--config", required=True)
+    _add_hosted_execution_arguments(paper_submit)
 
     paper_approve = subparsers.add_parser("paper-approve")
     paper_approve.add_argument("--config", required=True)
     paper_approve.add_argument("--proposal-id", required=True)
     paper_approve.add_argument("--decision", required=True, choices=("approve", "reject"))
     paper_approve.add_argument("--actor", required=True, choices=("agent", "manual"))
+    _add_hosted_execution_arguments(paper_approve)
 
     paper_status = subparsers.add_parser("paper-status")
     paper_status.add_argument("--config", required=True)
@@ -88,10 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     paper_agent_approve = subparsers.add_parser("paper-agent-approve")
     paper_agent_approve.add_argument("--config", required=True)
     paper_agent_approve.add_argument("--once", action="store_true")
+    _add_hosted_execution_arguments(paper_agent_approve)
 
     paper_scheduler = subparsers.add_parser("paper-scheduler")
     paper_scheduler.add_argument("--config", required=True)
     paper_scheduler.add_argument("--once", action="store_true")
+    _add_hosted_execution_arguments(paper_scheduler)
 
     paper_report = subparsers.add_parser("paper-report")
     paper_report.add_argument("--config", required=True)
@@ -178,12 +258,15 @@ def _run_logged_paper_command(
     *,
     action: Callable[[ExecutionContext], tuple[int, str | None]],
     proposal_id: str | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> int:
     root_context = root_execution_context(
-        deployment="local_cli",
+        deployment=hosted_context.deployment_id if hosted_context is not None else "local_cli",
         phase=command_name,
         proposal_id=proposal_id,
-        details={"command": command_name},
+        details=hosted_execution_details(hosted_context, {"command": command_name}),
+        execution_id=hosted_context.execution_id if hosted_context is not None else None,
+        correlation_id=hosted_context.correlation_id if hosted_context is not None else None,
     )
     emit_structured_log(
         LOGGER,
@@ -207,7 +290,7 @@ def _run_logged_paper_command(
                 phase=command_name,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"command": command_name},
+                details=hosted_execution_details(hosted_context, {"command": command_name}),
             ),
             exc_info=exc,
         )
@@ -222,7 +305,7 @@ def _run_logged_paper_command(
             phase=command_name,
             outcome=outcome or "success",
             duration_ms=duration_ms_since(start_time),
-            details={"command": command_name},
+            details=hosted_execution_details(hosted_context, {"command": command_name}),
         ),
     )
     return exit_code
@@ -232,8 +315,13 @@ def _run_paper_decision_command(
     config,
     *,
     execution_context: ExecutionContext,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> tuple[int, str | None]:
-    result = run_paper_decision(config, execution_context=execution_context)
+    result = run_paper_decision(
+        config,
+        execution_context=execution_context,
+        hosted_context=hosted_context,
+    )
     print(result.get("proposal_path", result["status_path"]))
     return 0, str(result.get("status", {}).get("status", "success"))
 
@@ -242,8 +330,13 @@ def _run_paper_submit_command(
     config,
     *,
     execution_context: ExecutionContext,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> tuple[int, str | None]:
-    result = run_paper_submit(config, execution_context=execution_context)
+    result = run_paper_submit(
+        config,
+        execution_context=execution_context,
+        hosted_context=hosted_context,
+    )
     print(result.get("submission_path", result["status_path"]))
     return 0, str(result.get("status", {}).get("status", "success"))
 
@@ -255,6 +348,7 @@ def _run_paper_approve_command(
     decision: str,
     actor: str,
     execution_context: ExecutionContext,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> tuple[int, str | None]:
     result = decide_paper_proposal(
         config,
@@ -262,6 +356,7 @@ def _run_paper_approve_command(
         decision=decision,
         actor=actor,
         execution_context=execution_context,
+        hosted_context=hosted_context,
     )
     print(result["approval_path"])
     return 0, str(result.get("status", {}).get("status", "success"))
@@ -282,9 +377,10 @@ def _run_paper_agent_approve_command(
     *,
     once: bool,
     execution_context: ExecutionContext,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> tuple[int, str | None]:
     del execution_context
-    run_agent_approval_loop(config, once=once)
+    run_agent_approval_loop(config, once=once, hosted_context=hosted_context)
     return 0, "success"
 
 
@@ -293,9 +389,10 @@ def _run_paper_scheduler_command(
     *,
     once: bool,
     execution_context: ExecutionContext,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> tuple[int, str | None]:
     del execution_context
-    run_scheduler_loop(config, once=once)
+    run_scheduler_loop(config, once=once, hosted_context=hosted_context)
     return 0, "success"
 
 
@@ -433,23 +530,35 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     load_env_file()
+    hosted_context = None
+    if args.command in HOSTED_COMMAND_PHASES:
+        hosted_context = _resolve_hosted_execution_context(
+            args,
+            parser,
+            phase=HOSTED_COMMAND_PHASES[args.command],
+            allow_env_phase=args.command == "paper-scheduler",
+        )
     config = load_config(args.config)
 
     if args.command == "paper-decision":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_decision_command(
                 config,
                 execution_context=execution_context,
+                hosted_context=hosted_context,
             ),
         )
 
     if args.command == "paper-submit":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_submit_command(
                 config,
                 execution_context=execution_context,
+                hosted_context=hosted_context,
             ),
         )
 
@@ -457,18 +566,21 @@ def main(argv: list[str] | None = None) -> int:
         return _run_logged_paper_command(
             args.command,
             proposal_id=args.proposal_id,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_approve_command(
                 config,
                 proposal_id=args.proposal_id,
                 decision=args.decision,
                 actor=args.actor,
                 execution_context=execution_context,
+                hosted_context=hosted_context,
             ),
         )
 
     if args.command == "paper-status":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_status_command(
                 config,
                 execution_context=execution_context,
@@ -478,26 +590,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "paper-agent-approve":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_agent_approve_command(
                 config,
                 once=args.once,
                 execution_context=execution_context,
+                hosted_context=hosted_context,
             ),
         )
 
     if args.command == "paper-scheduler":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_scheduler_command(
                 config,
                 once=args.once,
                 execution_context=execution_context,
+                hosted_context=hosted_context,
             ),
         )
 
     if args.command == "paper-report":
         return _run_logged_paper_command(
             args.command,
+            hosted_context=hosted_context,
             action=lambda execution_context: _run_paper_report_command(
                 config,
                 start_date=args.start,

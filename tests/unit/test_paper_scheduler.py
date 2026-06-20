@@ -9,6 +9,7 @@ from tests._paper_fakes import FakePaperNotificationSink, build_phase7_paper_con
 
 from marketlab.log import configure_logging
 from marketlab.paper import scheduler
+from marketlab.paper.contracts import PaperHostedExecutionContext
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
 
 
@@ -37,6 +38,23 @@ def _stderr_records(stderr: str) -> list[dict[str, object]]:
         for line in stderr.splitlines()
         if line.strip() != ""
     ]
+
+
+def _hosted_context(**overrides: str) -> PaperHostedExecutionContext:
+    payload = {
+        "deployment_id": "qqq-paper-dev",
+        "environment": "dev",
+        "phase": "decision",
+        "execution_id": "scheduler-exec",
+        "correlation_id": "scheduler-corr",
+        "idempotency_key": "scheduler-idem",
+        "trigger_source": "container-app-job",
+        "requested_at": "2026-06-19T12:00:00+00:00",
+        "config_version": "config-v1",
+        "image_digest": "sha256:abc123",
+    }
+    payload.update(overrides)
+    return PaperHostedExecutionContext.from_metadata(payload)
 
 
 def test_scheduler_iteration_runs_each_phase_once_per_market_date(
@@ -102,6 +120,48 @@ def test_scheduler_iteration_forwards_injected_notification_sink(
     )
 
     assert forwarded_sinks == [sink, sink]
+
+
+def test_scheduler_iteration_derives_hosted_contexts_for_due_phases(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path)
+    captured: list[PaperHostedExecutionContext | None] = []
+
+    def _fake_decision(*args, **kwargs):
+        captured.append(kwargs["hosted_context"])
+        return {"proposal_path": "proposal.json", "status_path": "status.json", "status": {}}
+
+    def _fake_submit(*args, **kwargs):
+        captured.append(kwargs["hosted_context"])
+        return {"submission_path": "submission.json", "status_path": "status.json", "status": {}}
+
+    def _fake_reconcile(*args, **kwargs):
+        captured.append(kwargs["hosted_context"])
+        return None
+
+    monkeypatch.setattr(scheduler, "run_paper_decision", _fake_decision)
+    monkeypatch.setattr(scheduler, "run_paper_submit", _fake_submit)
+    monkeypatch.setattr(scheduler, "reconcile_latest_submission_status", _fake_reconcile)
+
+    scheduler.run_scheduler_iteration(
+        config,
+        now=datetime(2026, 4, 10, 23, 10, tzinfo=UTC),
+        hosted_context=_hosted_context(),
+    )
+
+    assert [context.phase if context is not None else "" for context in captured] == [
+        "decision",
+        "submit",
+        "reconcile",
+    ]
+    assert [context.idempotency_key if context is not None else "" for context in captured] == [
+        "scheduler-idem:decision:2026-04-10",
+        "scheduler-idem:submit:2026-04-10",
+        "scheduler-idem:reconcile:2026-04-10",
+    ]
+    assert all(context.correlation_id == "scheduler-corr" for context in captured if context is not None)
 
 
 def test_scheduler_iteration_appends_submission_reconciliation_events(

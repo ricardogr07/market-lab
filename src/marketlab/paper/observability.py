@@ -9,6 +9,7 @@ from marketlab.log import (
     create_execution_context,
     current_execution_context,
 )
+from marketlab.paper.contracts import PaperHostedExecutionContext
 
 
 def _first_non_empty(*values: object) -> str | None:
@@ -27,6 +28,8 @@ def root_execution_context(
     trade_date: str | None = None,
     provider: str | None = None,
     details: Mapping[str, Any] | None = None,
+    execution_id: str | None = None,
+    correlation_id: str | None = None,
 ) -> ExecutionContext:
     return create_execution_context(
         deployment=deployment,
@@ -35,6 +38,46 @@ def root_execution_context(
         trade_date=trade_date,
         provider=provider,
         details=details,
+        execution_id=execution_id,
+        correlation_id=correlation_id,
+    )
+
+
+def hosted_execution_details(
+    hosted_context: PaperHostedExecutionContext | None,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged = {str(key): value for key, value in (details or {}).items()}
+    if hosted_context is None:
+        return merged
+    merged.update(
+        {
+            "hosted_environment": hosted_context.environment,
+            "hosted_phase": hosted_context.phase,
+            "idempotency_key": hosted_context.idempotency_key,
+            "trigger_source": hosted_context.trigger_source,
+            "requested_at": hosted_context.requested_at,
+            "config_version": hosted_context.config_version,
+            "image_digest": hosted_context.image_digest,
+        }
+    )
+    return merged
+
+
+def hosted_root_execution_context(
+    hosted_context: PaperHostedExecutionContext,
+    *,
+    phase: str,
+    provider: str | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> ExecutionContext:
+    return root_execution_context(
+        deployment=hosted_context.deployment_id,
+        phase=phase,
+        provider=provider,
+        execution_id=hosted_context.execution_id,
+        correlation_id=hosted_context.correlation_id,
+        details=hosted_execution_details(hosted_context, details),
     )
 
 
