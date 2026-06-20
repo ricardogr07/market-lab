@@ -4,10 +4,254 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, runtime_checkable
+from typing import Any, Literal, cast, runtime_checkable
 
 import pandas as pd
 from typing_extensions import Protocol
+
+PaperHostedEnvironment = Literal["dev", "uat", "paper-prod"]
+PaperHostedPhase = Literal["decision", "agent_approve", "submit", "reconcile"]
+
+PAPER_HOSTED_ENVIRONMENTS: frozenset[PaperHostedEnvironment] = frozenset(
+    ("dev", "uat", "paper-prod")
+)
+PAPER_HOSTED_PHASES: frozenset[PaperHostedPhase] = frozenset(
+    ("decision", "agent_approve", "submit", "reconcile")
+)
+PAPER_HOSTED_METADATA_FIELDS = (
+    "deployment_id",
+    "environment",
+    "phase",
+    "execution_id",
+    "correlation_id",
+    "idempotency_key",
+    "trigger_source",
+    "requested_at",
+    "config_version",
+    "image_digest",
+)
+
+
+class PaperDeploymentRegistryConflictError(RuntimeError):
+    """Raised when a hosted idempotency key is replayed with different metadata."""
+
+
+def _validated_hosted_metadata(payload: Mapping[str, Any]) -> dict[str, str]:
+    extra_keys = sorted(set(payload) - set(PAPER_HOSTED_METADATA_FIELDS))
+    if extra_keys:
+        joined = ", ".join(extra_keys)
+        raise ValueError(f"Paper hosted execution metadata contains unsupported fields: {joined}")
+    missing = [
+        key
+        for key in PAPER_HOSTED_METADATA_FIELDS
+        if str(payload.get(key, "")).strip() == ""
+    ]
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(f"Paper hosted execution metadata is missing required fields: {joined}")
+    metadata = {key: str(payload[key]).strip() for key in PAPER_HOSTED_METADATA_FIELDS}
+    environment = metadata["environment"]
+    if environment not in PAPER_HOSTED_ENVIRONMENTS:
+        allowed = ", ".join(PAPER_HOSTED_ENVIRONMENTS)
+        raise ValueError(f"Unsupported paper hosted environment: {environment}. Expected one of: {allowed}")
+    phase = metadata["phase"]
+    if phase not in PAPER_HOSTED_PHASES:
+        allowed = ", ".join(PAPER_HOSTED_PHASES)
+        raise ValueError(f"Unsupported paper hosted phase: {phase}. Expected one of: {allowed}")
+    try:
+        datetime.fromisoformat(metadata["requested_at"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Paper hosted requested_at must be an ISO-8601 datetime.") from exc
+    return metadata
+
+
+def _derive_hosted_value(value: str, *, suffix: str) -> str:
+    suffix_value = suffix.strip()
+    if suffix_value == "":
+        return value
+    return f"{value}:{suffix_value}"
+
+
+@dataclass(slots=True, frozen=True)
+class PaperHostedExecutionContext:
+    deployment_id: str
+    environment: PaperHostedEnvironment
+    phase: PaperHostedPhase
+    execution_id: str
+    correlation_id: str
+    idempotency_key: str
+    trigger_source: str
+    requested_at: str
+    config_version: str
+    image_digest: str
+
+    def __post_init__(self) -> None:
+        _validated_hosted_metadata(self.as_metadata())
+
+    @classmethod
+    def from_metadata(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> PaperHostedExecutionContext:
+        metadata = _validated_hosted_metadata(payload)
+        return cls(
+            deployment_id=metadata["deployment_id"],
+            environment=cast(PaperHostedEnvironment, metadata["environment"]),
+            phase=cast(PaperHostedPhase, metadata["phase"]),
+            execution_id=metadata["execution_id"],
+            correlation_id=metadata["correlation_id"],
+            idempotency_key=metadata["idempotency_key"],
+            trigger_source=metadata["trigger_source"],
+            requested_at=metadata["requested_at"],
+            config_version=metadata["config_version"],
+            image_digest=metadata["image_digest"],
+        )
+
+    def as_metadata(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "environment": self.environment,
+            "phase": self.phase,
+            "execution_id": self.execution_id,
+            "correlation_id": self.correlation_id,
+            "idempotency_key": self.idempotency_key,
+            "trigger_source": self.trigger_source,
+            "requested_at": self.requested_at,
+            "config_version": self.config_version,
+            "image_digest": self.image_digest,
+        }
+
+    def derive(
+        self,
+        *,
+        phase: PaperHostedPhase,
+        suffix: str = "",
+    ) -> PaperHostedExecutionContext:
+        if self.phase == phase and suffix.strip() == "":
+            return self
+        return PaperHostedExecutionContext(
+            deployment_id=self.deployment_id,
+            environment=self.environment,
+            phase=phase,
+            execution_id=_derive_hosted_value(self.execution_id, suffix=phase if suffix == "" else suffix),
+            correlation_id=self.correlation_id,
+            idempotency_key=_derive_hosted_value(
+                self.idempotency_key,
+                suffix=phase if suffix == "" else suffix,
+            ),
+            trigger_source=self.trigger_source,
+            requested_at=self.requested_at,
+            config_version=self.config_version,
+            image_digest=self.image_digest,
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class PaperDeploymentRecord:
+    deployment_id: str
+    environment: PaperHostedEnvironment
+    phase: PaperHostedPhase
+    execution_id: str
+    correlation_id: str
+    idempotency_key: str
+    trigger_source: str
+    requested_at: str
+    config_version: str
+    image_digest: str
+
+    @classmethod
+    def from_context(
+        cls,
+        context: PaperHostedExecutionContext,
+    ) -> PaperDeploymentRecord:
+        return cls(
+            deployment_id=context.deployment_id,
+            environment=context.environment,
+            phase=context.phase,
+            execution_id=context.execution_id,
+            correlation_id=context.correlation_id,
+            idempotency_key=context.idempotency_key,
+            trigger_source=context.trigger_source,
+            requested_at=context.requested_at,
+            config_version=context.config_version,
+            image_digest=context.image_digest,
+        )
+
+    @classmethod
+    def from_metadata(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> PaperDeploymentRecord:
+        context = PaperHostedExecutionContext.from_metadata(payload)
+        return cls.from_context(context)
+
+    def as_metadata(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "environment": self.environment,
+            "phase": self.phase,
+            "execution_id": self.execution_id,
+            "correlation_id": self.correlation_id,
+            "idempotency_key": self.idempotency_key,
+            "trigger_source": self.trigger_source,
+            "requested_at": self.requested_at,
+            "config_version": self.config_version,
+            "image_digest": self.image_digest,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class PaperPhaseRunRecord:
+    deployment_id: str
+    environment: PaperHostedEnvironment
+    phase: PaperHostedPhase
+    execution_id: str
+    correlation_id: str
+    idempotency_key: str
+    trigger_source: str
+    requested_at: str
+    config_version: str
+    image_digest: str
+
+    @classmethod
+    def from_context(
+        cls,
+        context: PaperHostedExecutionContext,
+    ) -> PaperPhaseRunRecord:
+        return cls(
+            deployment_id=context.deployment_id,
+            environment=context.environment,
+            phase=context.phase,
+            execution_id=context.execution_id,
+            correlation_id=context.correlation_id,
+            idempotency_key=context.idempotency_key,
+            trigger_source=context.trigger_source,
+            requested_at=context.requested_at,
+            config_version=context.config_version,
+            image_digest=context.image_digest,
+        )
+
+    @classmethod
+    def from_metadata(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> PaperPhaseRunRecord:
+        context = PaperHostedExecutionContext.from_metadata(payload)
+        return cls.from_context(context)
+
+    def as_metadata(self) -> dict[str, str]:
+        return {
+            "deployment_id": self.deployment_id,
+            "environment": self.environment,
+            "phase": self.phase,
+            "execution_id": self.execution_id,
+            "correlation_id": self.correlation_id,
+            "idempotency_key": self.idempotency_key,
+            "trigger_source": self.trigger_source,
+            "requested_at": self.requested_at,
+            "config_version": self.config_version,
+            "image_digest": self.image_digest,
+        }
 
 
 def _string_field(payload: dict[str, Any], key: str) -> str:
@@ -158,6 +402,19 @@ class PaperUnitOfWork(Protocol):
 @runtime_checkable
 class PaperUnitOfWorkFactory(Protocol):
     def __call__(self) -> PaperUnitOfWork: ...
+
+
+@runtime_checkable
+class PaperDeploymentRegistry(Protocol):
+    def record_deployment(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperDeploymentRecord: ...
+
+    def record_phase_run(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperPhaseRunRecord: ...
 
 
 @runtime_checkable
