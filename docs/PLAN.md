@@ -323,7 +323,7 @@ working alerts, and a rehearsed rollback.
 | P9-05 | Shadow scheduler, status, monthly, and final reports | P9-04 | Missing and failed runs explicit; reports cannot promote |
 | [P9-06](phase9/P9-06-WORKER-PLAN.md) | Azure shadow infrastructure and launch gate | P9-02, P9-05 | Disabled job validates; archive, restore, and alert tests pass |
 | [P9-07](phase9/P9-07-WORKER-PLAN.md) | Hosted execution context and deployment registry | P9-01 | All four paper phases share typed, idempotent metadata |
-| P9-08 | PostgreSQL repositories and migrations | P9-07 | Filesystem, SQLite, and PostgreSQL contract suites pass |
+| [P9-08](phase9/P9-08-WORKER-PLAN.md) | PostgreSQL repositories and migrations | P9-07 | Filesystem, SQLite, and PostgreSQL contract suites pass |
 | P9-09 | Blob artifact store, outbox, and Service Bus adapters | P9-08 | Artifact parity and duplicate-delivery tests pass |
 | P9-10 | QQQ Azure Terraform and deployment pipeline | P9-02, P9-09 | Dev environment deploys disabled-by-default jobs using managed identity |
 | P9-11 | QQQ state importer and operational runbooks | P9-08, P9-09 | Repeatable import, checksum report, backup, restore, and rollback documented |
@@ -364,7 +364,9 @@ P9-05 implementation details are frozen in
 launch-gate details are frozen in
 [the Azure shadow worker plan](phase9/P9-06-WORKER-PLAN.md). P9-07 hosted
 execution and registry details are frozen in
-[the hosted execution worker plan](phase9/P9-07-WORKER-PLAN.md).
+[the hosted execution worker plan](phase9/P9-07-WORKER-PLAN.md). P9-08
+PostgreSQL persistence details are frozen in
+[the PostgreSQL worker plan](phase9/P9-08-WORKER-PLAN.md).
 - QQQ paper decision, approval, submission, reconciliation, notifications, and
   reporting run from Azure
 - PostgreSQL is canonical QQQ workflow state and Blob Storage contains the
