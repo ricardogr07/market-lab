@@ -33,6 +33,7 @@ from marketlab.paper.observability import (
     paper_execution_context,
     root_execution_context,
 )
+from marketlab.paper.persistence import migrate_paper_postgres_database
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
 from marketlab.reports.phase8_bull_counterfactual import (
     write_phase8_bull_counterfactual,
@@ -177,6 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
     paper_report.add_argument("--config", required=True)
     paper_report.add_argument("--start", required=True)
     paper_report.add_argument("--end", required=True)
+
+    paper_db_migrate = subparsers.add_parser("paper-db-migrate")
+    paper_db_migrate.add_argument("--config", required=True)
 
     phase9_shadow_decision = subparsers.add_parser("phase9-shadow-decision")
     phase9_shadow_decision.add_argument("--config", required=True)
@@ -539,6 +543,14 @@ def main(argv: list[str] | None = None) -> int:
             allow_env_phase=args.command == "paper-scheduler",
         )
     config = load_config(args.config)
+
+    if args.command == "paper-db-migrate":
+        try:
+            schema_version = migrate_paper_postgres_database(config)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Applied paper database schema version: {schema_version}")
+        return 0
 
     if args.command == "paper-decision":
         return _run_logged_paper_command(
