@@ -16,6 +16,10 @@ EXPECTED_TEMPLATES = (
     ('weekly_rank', 'weekly_rank.yaml'),
     ('weekly_rank_smoke', 'weekly_rank_smoke.yaml'),
 )
+EXPECTED_POSTGRES_MIGRATIONS = (
+    '001_paper_control.sql',
+    '002_proposal_listing_index.sql',
+)
 
 
 def _find_artifacts() -> tuple[Path, Path]:
@@ -67,6 +71,11 @@ def _assert_wheel_contents(wheel_path: Path) -> None:
         if template_path not in names:
             raise RuntimeError(f'Wheel is missing packaged template {template_path}')
 
+    for migration_name in EXPECTED_POSTGRES_MIGRATIONS:
+        migration_path = f'marketlab/paper/persistence/migrations/{migration_name}'
+        if migration_path not in names:
+            raise RuntimeError(f'Wheel is missing PostgreSQL migration {migration_path}')
+
 
 def _assert_sdist_contents(sdist_path: Path) -> None:
     with _open_tar_with_retry(sdist_path) as archive:
@@ -79,6 +88,11 @@ def _assert_sdist_contents(sdist_path: Path) -> None:
         suffix = f'/src/marketlab/resources/config_templates/{template_name}'
         if not any(name.endswith(suffix) for name in names):
             raise RuntimeError(f'sdist is missing packaged template {template_name}')
+
+    for migration_name in EXPECTED_POSTGRES_MIGRATIONS:
+        suffix = f'/src/marketlab/paper/persistence/migrations/{migration_name}'
+        if not any(name.endswith(suffix) for name in names):
+            raise RuntimeError(f'sdist is missing PostgreSQL migration {migration_name}')
 
 
 def _venv_paths(venv_dir: Path) -> tuple[Path, Path, Path]:

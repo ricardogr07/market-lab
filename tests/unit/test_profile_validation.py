@@ -117,10 +117,11 @@ def test_tox_preflight_tiers_match_expected_commands() -> None:
         "src/marketlab/paper/approval_clients.py src/marketlab/paper/notifications.py "
         "src/marketlab/paper/observability.py src/marketlab/paper/contracts.py "
         "src/marketlab/paper/persistence/filesystem.py src/marketlab/paper/persistence/sqlite.py "
+        "src/marketlab/paper/persistence/postgres.py "
         "src/marketlab/paper/application/decision.py src/marketlab/paper/application/approval.py "
         "src/marketlab/paper/application/submission.py "
         "src/marketlab/paper/application/reconciliation.py src/marketlab/paper/service.py "
-        "src/marketlab/paper/agent.py src/marketlab/paper/scheduler.py"
+        "src/marketlab/paper/agent.py src/marketlab/paper/scheduler.py src/marketlab/cli.py"
     )
 
     assert parser["testenv:preflight-fast"]["basepython"] == "py312"

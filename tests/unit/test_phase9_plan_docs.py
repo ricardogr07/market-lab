@@ -11,6 +11,7 @@ P9_04_PLAN = ROOT / "docs" / "phase9" / "P9-04-WORKER-PLAN.md"
 P9_05_PLAN = ROOT / "docs" / "phase9" / "P9-05-WORKER-PLAN.md"
 P9_06_PLAN = ROOT / "docs" / "phase9" / "P9-06-WORKER-PLAN.md"
 P9_07_PLAN = ROOT / "docs" / "phase9" / "P9-07-WORKER-PLAN.md"
+P9_08_PLAN = ROOT / "docs" / "phase9" / "P9-08-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -298,3 +299,36 @@ def test_p9_07_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-07-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-07 Worker Plan: phase9/P9-07-WORKER-PLAN.md" in nav
     assert "phase9/P9-07-WORKER-PLAN.md" in index
+
+
+def test_p9_08_plan_locks_postgres_persistence_scope() -> None:
+    content = P9_08_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-postgres-persistence",
+        "MARKETLAB_PAPER_POSTGRES_DSN",
+        "PaperTradeRepository",
+        "PaperStatusRepository",
+        "PaperUnitOfWork",
+        "PaperDeploymentRegistry",
+        "jsonb",
+        "paper-db-migrate",
+        "PostgreSQL advisory lock",
+        "checksum",
+        "forward-only",
+        "Blob Storage, an outbox, Service Bus",
+        "destructive down migrations are not supported",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_08_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-08-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-08 Worker Plan: phase9/P9-08-WORKER-PLAN.md" in nav
+    assert "phase9/P9-08-WORKER-PLAN.md" in index

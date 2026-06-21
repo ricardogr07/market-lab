@@ -189,6 +189,37 @@ def test_paper_status_keeps_json_stdout_and_structured_logs_on_stderr(
     assert all(record["phase"] == "paper-status" for record in records)
 
 
+def test_paper_db_migrate_runs_only_the_explicit_migration_command(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    received: list[object] = []
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+    monkeypatch.setattr(
+        cli,
+        "migrate_paper_postgres_database",
+        lambda received_config: received.append(received_config) or 2,
+    )
+
+    exit_code = cli.main(["paper-db-migrate", "--config", "postgres.yaml"])
+
+    assert exit_code == 0
+    assert received == [config]
+    assert capsys.readouterr().out.strip() == "Applied paper database schema version: 2"
+
+
+def test_paper_db_migrate_rejects_a_non_postgres_config(
+) -> None:
+    with repo_scratch_dir("postgres_migrate_filesystem_config") as root:
+        config_path = write_phase7_paper_config(root / "config.yaml")
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main(["paper-db-migrate", "--config", str(config_path)])
+
+    assert excinfo.value.code == 2
+
+
 def test_paper_decision_keeps_path_stdout_and_structured_logs_on_stderr(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

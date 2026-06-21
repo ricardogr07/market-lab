@@ -131,6 +131,50 @@ The main persisted surfaces are:
 
 This is the shared contract between the CLI, the scheduler, and the MCP paper tools.
 
+## PostgreSQL Control State
+
+Filesystem remains the default paper persistence backend. PostgreSQL is an
+opt-in P9-08 control-state backend for QQQ preparation; it preserves the
+existing JSON artifacts as a temporary local review mirror. It does not add
+Blob Storage, an outbox, Service Bus, Azure resources, or any change to broker
+or approval behavior.
+
+To use it locally, make an untracked copy of the paper configuration and set
+only the backend in that copy:
+
+```yaml
+paper:
+  persistence_backend: "postgres"
+```
+
+The connection is configured exclusively with
+`MARKETLAB_PAPER_POSTGRES_DSN`. Do not put a DSN, password, or other database
+credential in YAML, checked-in configuration, logs, or command output. The
+included `docker/compose.postgres.yml` service is only a disposable
+development database for the PostgreSQL test suite; it is not a QQQ runtime
+service.
+
+Initialize or upgrade the schema explicitly before running any paper command:
+
+```bash
+export MARKETLAB_PAPER_POSTGRES_DSN='<local DSN supplied outside the repository>'
+python scripts/run_marketlab.py paper-db-migrate --config configs/local.qqq-postgres.yaml
+```
+
+`paper-db-migrate` requires `paper.persistence_backend: "postgres"`, takes a
+PostgreSQL advisory lock, applies only new numbered SQL migrations, validates
+the checksum of every recorded migration, and reports the resulting schema
+version. It does not create providers, call a broker, send notifications, or
+run scheduler work. Normal paper commands never apply migrations implicitly.
+
+Migrations are forward-only and append-only. Never edit, remove, reorder, or
+reuse a numbered migration after it has been applied. There are no destructive
+down migrations. Before an upgrade, take and verify a PostgreSQL backup using
+your approved database tooling. If an upgrade must be rolled back, restore the
+database backup and then add a forward corrective migration; do not manually
+drop tables or attempt a down migration. P9-11 owns the production import and
+restore rehearsal.
+
 ## Alpaca Environment
 
 Keep credentials in environment variables, not YAML. For local runs, copy `.env.example` to `.env` in the repo root and fill in the paper credentials:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from tests._paper_fakes import (
     FakePaperNotificationSink,
     build_phase7_paper_config,
 )
+from tests._postgres import postgres_dsn_from_environment, reset_postgres_database
 
 import marketlab.paper.service as service_module
 from marketlab.paper.application import ReconciliationService
@@ -28,9 +30,12 @@ from marketlab.paper.contracts import (
     PaperUnitOfWorkFactory,
 )
 from marketlab.paper.persistence import (
+    apply_postgres_migrations,
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_deployment_registry,
     build_filesystem_paper_uow_factory,
+    build_postgres_paper_deployment_registry,
+    build_postgres_paper_uow_factory,
     build_sqlite_paper_deployment_registry,
     build_sqlite_paper_uow_factory,
 )
@@ -38,6 +43,42 @@ from marketlab.paper.persistence import (
     sqlite as sqlite_module,
 )
 from marketlab.paper.state import PaperStateStore, _json_load
+
+PERSISTENCE_ADAPTER_KINDS = (
+    ["filesystem", "sqlite", "postgres"]
+    if os.environ.get("MARKETLAB_PAPER_POSTGRES_DSN", "").strip() != ""
+    else ["filesystem", "sqlite"]
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_postgres_persistence_database(request: pytest.FixtureRequest) -> None:
+    callspec = getattr(request.node, "callspec", None)
+    adapter_kind = None if callspec is None else callspec.params.get("adapter_kind")
+    if adapter_kind != "postgres":
+        yield
+        return
+    dsn = postgres_dsn_from_environment()
+    assert dsn is not None
+    reset_postgres_database(dsn)
+    apply_postgres_migrations(dsn=dsn)
+    try:
+        yield
+    finally:
+        reset_postgres_database(dsn)
+
+
+@pytest.fixture
+def postgres_persistence_database() -> str:
+    dsn = postgres_dsn_from_environment()
+    if dsn is None:
+        pytest.skip("MARKETLAB_PAPER_POSTGRES_DSN is required for PostgreSQL persistence tests.")
+    reset_postgres_database(dsn)
+    apply_postgres_migrations(dsn=dsn)
+    try:
+        yield dsn
+    finally:
+        reset_postgres_database(dsn)
 
 
 @dataclass
@@ -347,6 +388,8 @@ def _build_factory(
         return build_filesystem_paper_uow_factory(config)
     if adapter_kind == "sqlite":
         return build_sqlite_paper_uow_factory(config)
+    if adapter_kind == "postgres":
+        return build_postgres_paper_uow_factory(config)
     if adapter_kind == "memory":
         return InMemoryPaperUnitOfWorkFactory(tmp_path / "memory-root")
     raise ValueError(f"Unknown adapter kind: {adapter_kind}")
@@ -357,6 +400,8 @@ def _build_registry(*, adapter_kind: str, config) -> PaperDeploymentRegistry:
         return build_filesystem_paper_deployment_registry(config)
     if adapter_kind == "sqlite":
         return build_sqlite_paper_deployment_registry(config)
+    if adapter_kind == "postgres":
+        return build_postgres_paper_deployment_registry(config)
     raise ValueError(f"Unknown adapter kind: {adapter_kind}")
 
 
@@ -377,7 +422,7 @@ def _hosted_context(**overrides: str) -> PaperHostedExecutionContext:
     return PaperHostedExecutionContext.from_metadata(payload)
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_deployment_registry_accepts_identical_idempotency_replays(
     adapter_kind: str,
     tmp_path: Path,
@@ -397,7 +442,7 @@ def test_deployment_registry_accepts_identical_idempotency_replays(
     assert second.as_metadata() == context.as_metadata()
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_deployment_registry_rejects_conflicting_idempotency_replays(
     adapter_kind: str,
     tmp_path: Path,
@@ -414,7 +459,7 @@ def test_deployment_registry_rejects_conflicting_idempotency_replays(
         registry.record_phase_run(_hosted_context(image_digest="sha256:changed"))
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_deployment_registry_rejects_idempotency_replays_in_a_different_phase(
     adapter_kind: str,
     tmp_path: Path,
@@ -509,7 +554,7 @@ def test_sqlite_deployment_registry_uses_local_tables_only(tmp_path: Path) -> No
     assert not (config.paper_state_dir / "deployments").exists()
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_paper_repository_contract_stages_until_commit(adapter_kind: str, tmp_path: Path) -> None:
     config = build_phase7_paper_config(
         tmp_path / adapter_kind,
@@ -546,7 +591,7 @@ def test_paper_repository_contract_stages_until_commit(adapter_kind: str, tmp_pa
         assert uow.status.read_status() is None
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str, tmp_path: Path) -> None:
     config = build_phase7_paper_config(
         tmp_path / f"{adapter_kind}-persist",
@@ -629,7 +674,7 @@ def test_paper_repository_contract_persists_and_orders_records(adapter_kind: str
     assert _json_load(store.status_path) == status
 
 
-@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+@pytest.mark.parametrize("adapter_kind", PERSISTENCE_ADAPTER_KINDS)
 def test_trade_repository_retry_backup_preserves_attempt_artifacts(
     adapter_kind: str,
     tmp_path: Path,
@@ -703,6 +748,47 @@ def test_sqlite_commit_rolls_back_when_artifact_mirror_write_fails(
         return original_json_dump(path, payload)
 
     monkeypatch.setattr(sqlite_module, "_json_dump", _failing_json_dump)
+
+    with pytest.raises(PermissionError, match="simulated artifact write failure"):
+        with factory() as uow:
+            uow.trades.save_proposal(proposal)
+            uow.commit()
+
+    with factory() as uow:
+        assert uow.trades.get_proposal(proposal["proposal_id"]) is None
+
+    store = PaperStateStore(config)
+    assert not store.trade_proposal_path("2026-04-13").exists()
+    assert not store.inbox_proposal_path(proposal["proposal_id"]).exists()
+
+
+def test_postgres_commit_rolls_back_when_artifact_mirror_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    postgres_persistence_database: str,
+    tmp_path: Path,
+) -> None:
+    del postgres_persistence_database
+    from marketlab.paper.persistence import postgres as postgres_module
+
+    config = build_phase7_paper_config(
+        tmp_path / "postgres-failure",
+        symbol="QQQ",
+        persistence_backend="postgres",
+    )
+    factory = build_postgres_paper_uow_factory(config)
+    proposal = _proposal_payload(
+        proposal_id="proposal-rollback",
+        trade_date="2026-04-13",
+        created_at="2026-04-10T20:10:00+00:00",
+    )
+    original_json_dump = postgres_module._json_dump
+
+    def _failing_json_dump(path: Path, payload: dict[str, Any]) -> Path:
+        if path.name == "proposal.json":
+            raise PermissionError("simulated artifact write failure")
+        return original_json_dump(path, payload)
+
+    monkeypatch.setattr(postgres_module, "_json_dump", _failing_json_dump)
 
     with pytest.raises(PermissionError, match="simulated artifact write failure"):
         with factory() as uow:

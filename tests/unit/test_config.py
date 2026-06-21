@@ -1699,6 +1699,23 @@ def test_load_config_rejects_unknown_paper_persistence_backend(tmp_path: Path) -
         load_config(config_path)
 
 
+def test_load_config_accepts_postgres_paper_persistence_backend(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "persistence_backend": "postgres",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.paper.persistence_backend == "postgres"
+
+
 def test_load_config_rejects_sqlite_backend_without_db_path(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "config.yaml",

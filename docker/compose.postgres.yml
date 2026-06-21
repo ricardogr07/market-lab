@@ -1,0 +1,19 @@
+services:
+  marketlab-postgres-test:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: marketlab_test
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d marketlab_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    volumes:
+      - marketlab-postgres-test-data:/var/lib/postgresql/data
+
+volumes:
+  marketlab-postgres-test-data:

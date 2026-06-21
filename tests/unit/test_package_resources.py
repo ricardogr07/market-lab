@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from importlib import metadata
+from importlib import metadata, resources
 from pathlib import Path
 
 import pytest
@@ -64,3 +64,13 @@ def test_write_config_template_resolves_relative_output_paths(
 
     assert written_path == (tmp_path / 'nested' / 'template.yaml').resolve()
     assert written_path.read_text(encoding='utf-8').startswith('experiment_name: weekly_rank_v1')
+
+
+def test_postgres_migrations_are_packaged_resources() -> None:
+    migration_names = sorted(
+        resource.name
+        for resource in resources.files('marketlab.paper.persistence.migrations').iterdir()
+        if resource.name.endswith('.sql')
+    )
+
+    assert migration_names == ['001_paper_control.sql', '002_proposal_listing_index.sql']

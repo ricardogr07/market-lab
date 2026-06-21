@@ -66,6 +66,8 @@ from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
     build_filesystem_paper_deployment_registry,
     build_filesystem_paper_uow_factory,
+    build_postgres_paper_deployment_registry,
+    build_postgres_paper_uow_factory,
     build_sqlite_paper_deployment_registry,
     build_sqlite_paper_uow_factory,
 )
@@ -85,6 +87,8 @@ def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
         return build_filesystem_paper_uow_factory(config)
     if config.paper.persistence_backend == "sqlite":
         return build_sqlite_paper_uow_factory(config)
+    if config.paper.persistence_backend == "postgres":
+        return build_postgres_paper_uow_factory(config)
     raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
 
 
@@ -93,6 +97,8 @@ def _paper_deployment_registry(config: ExperimentConfig) -> PaperDeploymentRegis
         return build_filesystem_paper_deployment_registry(config)
     if config.paper.persistence_backend == "sqlite":
         return build_sqlite_paper_deployment_registry(config)
+    if config.paper.persistence_backend == "postgres":
+        return build_postgres_paper_deployment_registry(config)
     raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
 
 

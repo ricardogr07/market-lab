@@ -25,6 +25,7 @@ dependencies = [
   "matplotlib>=3.8",
   "openai>=1.0",
   "pandas>=2.2",
+  "psycopg[binary]>=3.2,<4",
   "PyYAML>=6.0",
   "yfinance>=0.2",
   "scikit-learn>=1.4",
@@ -75,6 +76,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "marketlab.resources.config_templates" = ["*.yaml"]
+"marketlab.paper.persistence" = ["migrations/*.sql"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
