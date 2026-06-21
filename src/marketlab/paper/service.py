@@ -25,8 +25,11 @@ from marketlab.paper.contracts import (
     PaperBroker,
     PaperBrokerFactory,
     PaperDecisionRequest,
+    PaperDeploymentRegistry,
     PaperHistoryProvider,
     PaperHistoryProviderFactory,
+    PaperHostedExecutionContext,
+    PaperHostedPhase,
     PaperNotificationSink,
     PaperReconciliationRequest,
     PaperSubmissionRequest,
@@ -54,10 +57,16 @@ from marketlab.paper.core import (
     validate_paper_trading_config,
 )
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
-from marketlab.paper.observability import paper_execution_context
+from marketlab.paper.observability import (
+    hosted_execution_details,
+    hosted_root_execution_context,
+    paper_execution_context,
+)
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
+    build_filesystem_paper_deployment_registry,
     build_filesystem_paper_uow_factory,
+    build_sqlite_paper_deployment_registry,
     build_sqlite_paper_uow_factory,
 )
 from marketlab.paper.state import PaperStateStore
@@ -76,6 +85,14 @@ def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
         return build_filesystem_paper_uow_factory(config)
     if config.paper.persistence_backend == "sqlite":
         return build_sqlite_paper_uow_factory(config)
+    raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
+
+
+def _paper_deployment_registry(config: ExperimentConfig) -> PaperDeploymentRegistry:
+    if config.paper.persistence_backend == "filesystem":
+        return build_filesystem_paper_deployment_registry(config)
+    if config.paper.persistence_backend == "sqlite":
+        return build_sqlite_paper_deployment_registry(config)
     raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
 
 
@@ -103,6 +120,40 @@ def _paper_state_store(config: ExperimentConfig) -> PaperStateStore:
     return PaperStateStore(config)
 
 
+def _ensure_hosted_phase(
+    config: ExperimentConfig,
+    hosted_context: PaperHostedExecutionContext | None,
+    *,
+    expected_phase: PaperHostedPhase,
+) -> None:
+    if hosted_context is None:
+        return
+    if hosted_context.phase != expected_phase:
+        raise ValueError(
+            "Hosted paper execution metadata phase mismatch: "
+            f"expected {expected_phase}, got {hosted_context.phase}."
+        )
+    _paper_deployment_registry(config).record_phase_run(hosted_context)
+
+
+def _paper_phase_context(
+    execution_context: ExecutionContext | None,
+    hosted_context: PaperHostedExecutionContext | None,
+    *,
+    phase: str,
+    provider: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> ExecutionContext | None:
+    if hosted_context is None:
+        return execution_context
+    return hosted_root_execution_context(
+        hosted_context,
+        phase=phase,
+        provider=provider,
+        details=details,
+    )
+
+
 def _decision_notification_outcome(status: dict[str, Any]) -> str:
     outcome = str(status.get("status", ""))
     if outcome == SUBMISSION_SKIPPED:
@@ -120,13 +171,23 @@ def run_paper_decision(
     broker: PaperBroker | None = None,
     notification_sink: PaperNotificationSink | None = None,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any]:
+    _ensure_hosted_phase(config, hosted_context, expected_phase="decision")
+    context_details = hosted_execution_details(hosted_context, {"component": "paper_service"})
     decision_context = paper_execution_context(
-        execution_context,
+        _paper_phase_context(
+            execution_context,
+            hosted_context,
+            phase="paper-decision",
+            provider=config.paper.data_provider,
+            details=context_details,
+        ),
         phase="paper-decision",
+        deployment=hosted_context.deployment_id if hosted_context is not None else None,
         provider=config.paper.data_provider,
-        refresh_execution_id=True,
-        details={"component": "paper_service"},
+        refresh_execution_id=hosted_context is None,
+        details=context_details,
     )
     emit_structured_log(
         LOGGER,
@@ -169,7 +230,7 @@ def run_paper_decision(
                 provider=config.paper.data_provider,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "paper_service"},
+                details=context_details,
             ),
             exc_info=exc,
         )
@@ -187,13 +248,16 @@ def run_paper_decision(
             provider=config.paper.data_provider,
             outcome=_decision_notification_outcome(result.status),
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "paper_service",
-                "status_path": result.status_path,
-                "proposal_path": result.proposal_path,
-                "evidence_path": result.evidence_path,
-                "notification_path": str(notification_path),
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "paper_service",
+                    "status_path": result.status_path,
+                    "proposal_path": result.proposal_path,
+                    "evidence_path": result.evidence_path,
+                    "notification_path": str(notification_path),
+                },
+            ),
         ),
     )
     return result.as_legacy_payload()
@@ -248,14 +312,27 @@ def decide_paper_proposal(
     now: datetime | None = None,
     notification_sink: PaperNotificationSink | None = None,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any]:
+    _ensure_hosted_phase(config, hosted_context, expected_phase="agent_approve")
+    context_details = hosted_execution_details(
+        hosted_context,
+        {"component": "paper_service", "actor": actor, "decision": decision},
+    )
     approval_context = paper_execution_context(
-        execution_context,
+        _paper_phase_context(
+            execution_context,
+            hosted_context,
+            phase="paper-approve",
+            provider=provider,
+            details=context_details,
+        ),
         phase="paper-approve",
+        deployment=hosted_context.deployment_id if hosted_context is not None else None,
         proposal={"proposal_id": proposal_id},
         provider=provider,
-        refresh_execution_id=True,
-        details={"component": "paper_service", "actor": actor, "decision": decision},
+        refresh_execution_id=hosted_context is None,
+        details=context_details,
     )
     emit_structured_log(
         LOGGER,
@@ -303,7 +380,7 @@ def decide_paper_proposal(
                 provider=provider,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "paper_service", "actor": actor, "decision": decision},
+                details=context_details,
             ),
             exc_info=exc,
         )
@@ -321,13 +398,16 @@ def decide_paper_proposal(
             approval=result.approval,
             provider=provider,
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "paper_service",
-                "status_path": result.status_path,
-                "proposal_path": result.proposal_path,
-                "approval_path": result.approval_path,
-                "notification_path": notification_path,
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "paper_service",
+                    "status_path": result.status_path,
+                    "proposal_path": result.proposal_path,
+                    "approval_path": result.approval_path,
+                    "notification_path": notification_path,
+                },
+            ),
         ),
     )
     return result.as_legacy_payload()
@@ -339,13 +419,23 @@ def reconcile_latest_submission_status(
     now: datetime | None = None,
     broker: PaperBroker | None = None,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any] | None:
+    _ensure_hosted_phase(config, hosted_context, expected_phase="reconcile")
+    context_details = hosted_execution_details(hosted_context, {"component": "paper_service"})
     reconciliation_context = paper_execution_context(
-        execution_context,
+        _paper_phase_context(
+            execution_context,
+            hosted_context,
+            phase="paper-submit-reconcile",
+            provider=config.paper.broker,
+            details=context_details,
+        ),
         phase="paper-submit-reconcile",
+        deployment=hosted_context.deployment_id if hosted_context is not None else None,
         provider=config.paper.broker,
-        refresh_execution_id=True,
-        details={"component": "paper_service"},
+        refresh_execution_id=hosted_context is None,
+        details=context_details,
     )
     emit_structured_log(
         LOGGER,
@@ -379,7 +469,7 @@ def reconcile_latest_submission_status(
                 provider=config.paper.broker,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "paper_service"},
+                details=context_details,
             ),
             exc_info=exc,
         )
@@ -396,7 +486,7 @@ def reconcile_latest_submission_status(
                 provider=config.paper.broker,
                 outcome="no_reconciliation_update",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "paper_service"},
+                details=context_details,
             ),
         )
         return None
@@ -412,11 +502,14 @@ def reconcile_latest_submission_status(
             provider=config.paper.broker,
             outcome=result.poll_status or result.order_status,
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "paper_service",
-                "submission_path": result.submission_path,
-                "order_status_path": result.order_status_path,
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "paper_service",
+                    "submission_path": result.submission_path,
+                    "order_status_path": result.order_status_path,
+                },
+            ),
         ),
     )
     return result.as_legacy_payload()
@@ -430,13 +523,26 @@ def run_paper_submit(
     notification_sink: PaperNotificationSink | None = None,
     retry_failed_submission: bool = False,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any]:
+    _ensure_hosted_phase(config, hosted_context, expected_phase="submit")
+    context_details = hosted_execution_details(
+        hosted_context,
+        {"component": "paper_service", "retry_failed_submission": retry_failed_submission},
+    )
     submission_context = paper_execution_context(
-        execution_context,
+        _paper_phase_context(
+            execution_context,
+            hosted_context,
+            phase="paper-submit",
+            provider=config.paper.broker,
+            details=context_details,
+        ),
         phase="paper-submit",
+        deployment=hosted_context.deployment_id if hosted_context is not None else None,
         provider=config.paper.broker,
-        refresh_execution_id=True,
-        details={"component": "paper_service", "retry_failed_submission": retry_failed_submission},
+        refresh_execution_id=hosted_context is None,
+        details=context_details,
     )
     emit_structured_log(
         LOGGER,
@@ -480,10 +586,7 @@ def run_paper_submit(
                 provider=config.paper.broker,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={
-                    "component": "paper_service",
-                    "retry_failed_submission": retry_failed_submission,
-                },
+                details=context_details,
             ),
             exc_info=exc,
         )
@@ -501,12 +604,15 @@ def run_paper_submit(
             submission=result.submission,
             provider=config.paper.broker,
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "paper_service",
-                "status_path": result.status_path,
-                "submission_path": result.submission_path,
-                "notification_path": str(notification_path),
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "paper_service",
+                    "status_path": result.status_path,
+                    "submission_path": result.submission_path,
+                    "notification_path": str(notification_path),
+                },
+            ),
         ),
     )
     legacy = result.as_legacy_payload()

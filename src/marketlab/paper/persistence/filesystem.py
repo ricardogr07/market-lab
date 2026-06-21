@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from marketlab.config import ExperimentConfig
 from marketlab.paper.contracts import (
     PaperArtifactStore,
+    PaperDeploymentRecord,
+    PaperDeploymentRegistry,
+    PaperDeploymentRegistryConflictError,
+    PaperHostedExecutionContext,
+    PaperPhaseRunRecord,
     PaperStatusRepository,
     PaperTradeRepository,
     PaperUnitOfWork,
@@ -14,6 +21,25 @@ from marketlab.paper.contracts import (
 )
 from marketlab.paper.core import _now_utc
 from marketlab.paper.state import PaperStateStore, _json_dump, _json_load
+
+
+def _path_token(value: str) -> str:
+    return quote(value, safe="")
+
+
+def _write_idempotent_metadata(path: Path, payload: dict[str, str]) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(f"{json.dumps(payload, indent=2, sort_keys=True)}\n")
+        return True
+    except FileExistsError:
+        existing = _json_load(path)
+    if existing != payload:
+        raise PaperDeploymentRegistryConflictError(
+            f"Hosted execution idempotency conflict at {path}."
+        )
+    return False
 
 
 class FilesystemPaperTradeRepository(PaperTradeRepository):
@@ -158,6 +184,49 @@ class FilesystemPaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+class FilesystemPaperDeploymentRegistry(PaperDeploymentRegistry):
+    def __init__(self, config: ExperimentConfig) -> None:
+        self._store = PaperStateStore(config)
+
+    def _deployment_path(self, context: PaperHostedExecutionContext) -> Path:
+        return (
+            self._store.state_root
+            / "deployments"
+            / context.environment
+            / _path_token(context.deployment_id)
+            / context.phase
+            / f"{_path_token(context.execution_id)}.json"
+        )
+
+    def _phase_run_path(self, context: PaperHostedExecutionContext) -> Path:
+        return (
+            self._store.state_root
+            / "phase-runs"
+            / f"{_path_token(context.idempotency_key)}.json"
+        )
+
+    def record_deployment(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperDeploymentRecord:
+        _write_idempotent_metadata(self._deployment_path(context), context.as_metadata())
+        return PaperDeploymentRecord.from_context(context)
+
+    def record_phase_run(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperPhaseRunRecord:
+        phase_run_path = self._phase_run_path(context)
+        phase_run_created = _write_idempotent_metadata(phase_run_path, context.as_metadata())
+        try:
+            self.record_deployment(context)
+        except Exception:
+            if phase_run_created:
+                phase_run_path.unlink(missing_ok=True)
+            raise
+        return PaperPhaseRunRecord.from_context(context)
+
+
 class FilesystemPaperUnitOfWork(PaperUnitOfWork):
     def __init__(self, config: ExperimentConfig) -> None:
         self._store = PaperStateStore(config)
@@ -201,6 +270,12 @@ class FilesystemPaperUnitOfWorkFactory(PaperUnitOfWorkFactory):
 
 def build_filesystem_paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
     return FilesystemPaperUnitOfWorkFactory(config)
+
+
+def build_filesystem_paper_deployment_registry(
+    config: ExperimentConfig,
+) -> PaperDeploymentRegistry:
+    return FilesystemPaperDeploymentRegistry(config)
 
 
 class FilesystemPaperArtifactStore(PaperArtifactStore):

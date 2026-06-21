@@ -21,6 +21,7 @@ from marketlab.paper.contracts import (
     PaperApprovalEvaluationRequest,
     PaperApprovalResult,
     PaperBroker,
+    PaperHostedExecutionContext,
     PaperNotificationSink,
 )
 from marketlab.paper.notifications import (
@@ -28,7 +29,11 @@ from marketlab.paper.notifications import (
     build_error_fingerprint,
     build_telegram_paper_notification_sink,
 )
-from marketlab.paper.observability import paper_execution_context
+from marketlab.paper.observability import (
+    hosted_execution_details,
+    hosted_root_execution_context,
+    paper_execution_context,
+)
 from marketlab.paper.service import (
     APPROVAL_PENDING,
     _now_utc,
@@ -82,6 +87,19 @@ def _paper_notification_sink(config: ExperimentConfig) -> PaperNotificationSink:
 
 def _paper_approval_client(config: ExperimentConfig) -> PaperApprovalClient:
     return build_default_paper_approval_client(config)
+
+
+def _derive_agent_approval_context(
+    hosted_context: PaperHostedExecutionContext | None,
+    *,
+    proposal_id: str,
+) -> PaperHostedExecutionContext | None:
+    if hosted_context is None:
+        return None
+    return hosted_context.derive(
+        phase="agent_approve",
+        suffix=f"agent_approve:{proposal_id}",
+    )
 
 
 def _notify_worker_error(
@@ -156,13 +174,26 @@ def run_agent_approval_iteration(
     notification_sink: PaperNotificationSink | None = None,
     approval_client: PaperApprovalClient | None = None,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any]:
+    iteration_details = hosted_execution_details(
+        hosted_context,
+        {"component": "agent_iteration"},
+    )
     iteration_context = paper_execution_context(
-        execution_context,
+        (
+            hosted_root_execution_context(
+                hosted_context,
+                phase="paper-approve",
+                details=iteration_details,
+            )
+            if hosted_context is not None
+            else execution_context
+        ),
         phase="paper-approve",
-        deployment="paper_agent",
-        refresh_execution_id=True,
-        details={"component": "agent_iteration"},
+        deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
+        refresh_execution_id=hosted_context is None,
+        details=iteration_details,
     )
     emit_structured_log(
         LOGGER,
@@ -181,8 +212,8 @@ def run_agent_approval_iteration(
             paper_execution_context(
                 iteration_context,
                 phase="paper-approve",
-                deployment="paper_agent",
-                details={"component": "agent_iteration"},
+                deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
+                details=iteration_details,
             )
         ):
             if config.paper.execution_mode != "agent_approval":
@@ -229,12 +260,20 @@ def run_agent_approval_iteration(
                             fallback_reason=str(exc),
                             now=now,
                             notification_sink=notification_sink,
+                            hosted_context=_derive_agent_approval_context(
+                                hosted_context,
+                                proposal_id=str(proposal["proposal_id"]),
+                            ),
                             execution_context=paper_execution_context(
                                 iteration_context,
                                 phase="paper-approve",
-                                deployment="paper_agent",
+                                deployment=(
+                                    hosted_context.deployment_id
+                                    if hosted_context is not None
+                                    else "paper_agent"
+                                ),
                                 proposal=proposal,
-                                refresh_execution_id=True,
+                                refresh_execution_id=hosted_context is None,
                             ),
                         )
                         approval_result = PaperApprovalResult.from_legacy(result)
@@ -271,13 +310,21 @@ def run_agent_approval_iteration(
                             fallback_reason=decision.fallback_reason,
                             now=now,
                             notification_sink=notification_sink,
+                            hosted_context=_derive_agent_approval_context(
+                                hosted_context,
+                                proposal_id=str(proposal["proposal_id"]),
+                            ),
                             execution_context=paper_execution_context(
                                 iteration_context,
                                 phase="paper-approve",
-                                deployment="paper_agent",
+                                deployment=(
+                                    hosted_context.deployment_id
+                                    if hosted_context is not None
+                                    else "paper_agent"
+                                ),
                                 proposal=proposal,
                                 provider=decision.provider,
-                                refresh_execution_id=True,
+                                refresh_execution_id=hosted_context is None,
                             ),
                         )
                         approval_result = PaperApprovalResult.from_legacy(result)
@@ -320,10 +367,10 @@ def run_agent_approval_iteration(
             execution_context=paper_execution_context(
                 iteration_context,
                 phase="paper-approve",
-                deployment="paper_agent",
+                deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "agent_iteration"},
+                details=iteration_details,
             ),
             exc_info=exc,
         )
@@ -336,14 +383,17 @@ def run_agent_approval_iteration(
         execution_context=paper_execution_context(
             iteration_context,
             phase="paper-approve",
-            deployment="paper_agent",
+            deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
             outcome="processed" if summary["processed_count"] > 0 else state.get("last_result", "idle"),
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "agent_iteration",
-                "agent_state_path": summary["agent_state_path"],
-                "processed_count": summary["processed_count"],
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "agent_iteration",
+                    "agent_state_path": summary["agent_state_path"],
+                    "processed_count": summary["processed_count"],
+                },
+            ),
         ),
     )
     return summary
@@ -355,13 +405,27 @@ def run_agent_approval_loop(
     once: bool = False,
     notification_sink: PaperNotificationSink | None = None,
     approval_client: PaperApprovalClient | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> None:
     while True:
+        loop_details = hosted_execution_details(
+            hosted_context,
+            {"component": "agent_loop", "once": once},
+        )
         loop_context = paper_execution_context(
+            (
+                hosted_root_execution_context(
+                    hosted_context,
+                    phase="paper-approve",
+                    details=loop_details,
+                )
+                if hosted_context is not None
+                else None
+            ),
             phase="paper-approve",
-            deployment="paper_agent",
-            refresh_execution_id=True,
-            details={"component": "agent_loop", "once": once},
+            deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
+            refresh_execution_id=hosted_context is None,
+            details=loop_details,
         )
         emit_structured_log(
             LOGGER,
@@ -379,6 +443,7 @@ def run_agent_approval_loop(
                     notification_sink=notification_sink,
                     approval_client=approval_client,
                     execution_context=loop_context,
+                    hosted_context=hosted_context,
                 )
         except Exception as exc:
             loop_error = exc
@@ -409,14 +474,17 @@ def run_agent_approval_loop(
                 execution_context=paper_execution_context(
                     loop_context,
                     phase="paper-approve",
-                    deployment="paper_agent",
+                    deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
                     outcome="error",
                     duration_ms=duration_ms_since(start_time),
-                    details={
-                        "component": "agent_loop",
-                        "agent_state_path": summary["agent_state_path"],
-                        "duplicate_suppressed": notification_path is None,
-                    },
+                    details=hosted_execution_details(
+                        hosted_context,
+                        {
+                            "component": "agent_loop",
+                            "agent_state_path": summary["agent_state_path"],
+                            "duplicate_suppressed": notification_path is None,
+                        },
+                    ),
                 ),
                 exc_info=exc,
             )
@@ -429,14 +497,17 @@ def run_agent_approval_loop(
                 execution_context=paper_execution_context(
                     loop_context,
                     phase="paper-approve",
-                    deployment="paper_agent",
+                    deployment=hosted_context.deployment_id if hosted_context is not None else "paper_agent",
                     outcome="processed" if summary["processed_count"] > 0 else "idle",
                     duration_ms=duration_ms_since(start_time),
-                    details={
-                        "component": "agent_loop",
-                        "agent_state_path": summary["agent_state_path"],
-                        "processed_count": summary["processed_count"],
-                    },
+                    details=hosted_execution_details(
+                        hosted_context,
+                        {
+                            "component": "agent_loop",
+                            "agent_state_path": summary["agent_state_path"],
+                            "processed_count": summary["processed_count"],
+                        },
+                    ),
                 ),
             )
         print(json.dumps(summary, indent=2, sort_keys=True))

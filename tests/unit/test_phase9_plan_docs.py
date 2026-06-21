@@ -10,6 +10,7 @@ P9_03_PLAN = ROOT / "docs" / "phase9" / "P9-03-WORKER-PLAN.md"
 P9_04_PLAN = ROOT / "docs" / "phase9" / "P9-04-WORKER-PLAN.md"
 P9_05_PLAN = ROOT / "docs" / "phase9" / "P9-05-WORKER-PLAN.md"
 P9_06_PLAN = ROOT / "docs" / "phase9" / "P9-06-WORKER-PLAN.md"
+P9_07_PLAN = ROOT / "docs" / "phase9" / "P9-07-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -262,3 +263,38 @@ def test_p9_06_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-06-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-06 Worker Plan: phase9/P9-06-WORKER-PLAN.md" in nav
     assert "phase9/P9-06-WORKER-PLAN.md" in index
+
+
+def test_p9_07_plan_locks_hosted_execution_registry_scope() -> None:
+    content = P9_07_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-hosted-execution-registry",
+        "feat(phase9): add hosted paper execution registry",
+        "deployment_id environment phase execution_id correlation_id idempotency_key trigger_source requested_at config_version image_digest",
+        "Supported environments are `dev`, `uat`, and `paper-prod`",
+        "Supported phases are `decision`, `agent_approve`, `submit`, and `reconcile`",
+        "PaperHostedExecutionContext",
+        "PaperDeploymentRegistry",
+        "artifacts/paper/state/deployments/",
+        "artifacts/paper/state/phase-runs/",
+        "Duplicate `idempotency_key` values with identical metadata are accepted",
+        "conflicting metadata raise before a paper phase creates providers, calls brokers, sends notifications",
+        "does not add PostgreSQL, Blob Storage, Service Bus, QQQ Terraform, Azure SDK calls",
+        "scheduler derives child phase contexts for `decision`, `submit`, and `reconcile`",
+        "agent approval worker derives one `agent_approve` context per proposal",
+        "Explicit flags win over environment values",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_07_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-07-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-07 Worker Plan: phase9/P9-07-WORKER-PLAN.md" in nav
+    assert "phase9/P9-07-WORKER-PLAN.md" in index

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +18,9 @@ from tests._paper_fakes import (
 import marketlab.paper.service as service_module
 from marketlab.paper.application import ReconciliationService
 from marketlab.paper.contracts import (
+    PaperDeploymentRegistry,
+    PaperDeploymentRegistryConflictError,
+    PaperHostedExecutionContext,
     PaperReconciliationRequest,
     PaperStatusRepository,
     PaperTradeRepository,
@@ -24,7 +29,9 @@ from marketlab.paper.contracts import (
 )
 from marketlab.paper.persistence import (
     build_filesystem_paper_artifact_store,
+    build_filesystem_paper_deployment_registry,
     build_filesystem_paper_uow_factory,
+    build_sqlite_paper_deployment_registry,
     build_sqlite_paper_uow_factory,
 )
 from marketlab.paper.persistence import (
@@ -343,6 +350,163 @@ def _build_factory(
     if adapter_kind == "memory":
         return InMemoryPaperUnitOfWorkFactory(tmp_path / "memory-root")
     raise ValueError(f"Unknown adapter kind: {adapter_kind}")
+
+
+def _build_registry(*, adapter_kind: str, config) -> PaperDeploymentRegistry:
+    if adapter_kind == "filesystem":
+        return build_filesystem_paper_deployment_registry(config)
+    if adapter_kind == "sqlite":
+        return build_sqlite_paper_deployment_registry(config)
+    raise ValueError(f"Unknown adapter kind: {adapter_kind}")
+
+
+def _hosted_context(**overrides: str) -> PaperHostedExecutionContext:
+    payload = {
+        "deployment_id": "qqq-paper-dev",
+        "environment": "dev",
+        "phase": "decision",
+        "execution_id": "exec-1",
+        "correlation_id": "corr-1",
+        "idempotency_key": "idem-1",
+        "trigger_source": "scheduler",
+        "requested_at": "2026-06-19T12:00:00+00:00",
+        "config_version": "config-v1",
+        "image_digest": "sha256:abc123",
+    }
+    payload.update(overrides)
+    return PaperHostedExecutionContext.from_metadata(payload)
+
+
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+def test_deployment_registry_accepts_identical_idempotency_replays(
+    adapter_kind: str,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / f"{adapter_kind}-registry",
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
+    registry = _build_registry(adapter_kind=adapter_kind, config=config)
+    context = _hosted_context()
+
+    first = registry.record_phase_run(context)
+    second = registry.record_phase_run(context)
+
+    assert first.as_metadata() == context.as_metadata()
+    assert second.as_metadata() == context.as_metadata()
+
+
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+def test_deployment_registry_rejects_conflicting_idempotency_replays(
+    adapter_kind: str,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / f"{adapter_kind}-registry-conflict",
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
+    registry = _build_registry(adapter_kind=adapter_kind, config=config)
+    registry.record_phase_run(_hosted_context())
+
+    with pytest.raises(PaperDeploymentRegistryConflictError):
+        registry.record_phase_run(_hosted_context(image_digest="sha256:changed"))
+
+
+@pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])
+def test_deployment_registry_rejects_idempotency_replays_in_a_different_phase(
+    adapter_kind: str,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / f"{adapter_kind}-registry-cross-phase-conflict",
+        symbol="QQQ",
+        persistence_backend=adapter_kind,
+    )
+    registry = _build_registry(adapter_kind=adapter_kind, config=config)
+    registry.record_phase_run(_hosted_context())
+
+    with pytest.raises(PaperDeploymentRegistryConflictError):
+        registry.record_phase_run(
+            _hosted_context(
+                phase="submit",
+                execution_id="submit-exec-1",
+            )
+        )
+
+
+def test_filesystem_deployment_registry_rolls_back_phase_run_on_deployment_conflict(
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / "filesystem-registry-deployment-conflict",
+        symbol="QQQ",
+    )
+    registry = build_filesystem_paper_deployment_registry(config)
+    registry.record_deployment(_hosted_context(idempotency_key="existing-deployment-key"))
+    conflicting_context = _hosted_context(idempotency_key="rolled-back-phase-run-key")
+
+    with pytest.raises(PaperDeploymentRegistryConflictError):
+        registry.record_phase_run(conflicting_context)
+
+    assert not (
+        config.paper_state_dir
+        / "phase-runs"
+        / "rolled-back-phase-run-key.json"
+    ).exists()
+
+
+def test_filesystem_deployment_registry_writes_stable_layout(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(tmp_path / "filesystem-registry-layout", symbol="QQQ")
+    registry = build_filesystem_paper_deployment_registry(config)
+    context = _hosted_context(
+        phase="submit",
+        execution_id="exec/submit",
+        idempotency_key="idem/submit",
+    )
+
+    registry.record_phase_run(context)
+
+    phase_run_path = (
+        config.paper_state_dir
+        / "phase-runs"
+        / "idem%2Fsubmit.json"
+    )
+    deployment_path = (
+        config.paper_state_dir
+        / "deployments"
+        / "dev"
+        / "qqq-paper-dev"
+        / "submit"
+        / "exec%2Fsubmit.json"
+    )
+    assert json.loads(phase_run_path.read_text(encoding="utf-8")) == context.as_metadata()
+    assert json.loads(deployment_path.read_text(encoding="utf-8")) == context.as_metadata()
+
+
+def test_sqlite_deployment_registry_uses_local_tables_only(tmp_path: Path) -> None:
+    config = build_phase7_paper_config(
+        tmp_path / "sqlite-registry-layout",
+        symbol="QQQ",
+        persistence_backend="sqlite",
+    )
+    registry = build_sqlite_paper_deployment_registry(config)
+    context = _hosted_context(phase="reconcile", idempotency_key="idem-reconcile")
+
+    registry.record_phase_run(context)
+
+    with sqlite3.connect(config.paper_sqlite_db_path) as connection:
+        phase_rows = connection.execute(
+            "SELECT payload_json FROM paper_phase_run_records"
+        ).fetchall()
+        deployment_rows = connection.execute(
+            "SELECT payload_json FROM paper_deployment_records"
+        ).fetchall()
+    assert [json.loads(row[0]) for row in phase_rows] == [context.as_metadata()]
+    assert [json.loads(row[0]) for row in deployment_rows] == [context.as_metadata()]
+    assert not (config.paper_state_dir / "phase-runs").exists()
+    assert not (config.paper_state_dir / "deployments").exists()
 
 
 @pytest.mark.parametrize("adapter_kind", ["filesystem", "sqlite"])

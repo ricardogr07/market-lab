@@ -17,6 +17,8 @@ from marketlab.log import (
 )
 from marketlab.paper.contracts import (
     PaperDecisionResult,
+    PaperHostedExecutionContext,
+    PaperHostedPhase,
     PaperNotificationSink,
     PaperReconciliationResult,
     PaperSubmissionResult,
@@ -26,7 +28,11 @@ from marketlab.paper.notifications import (
     build_error_fingerprint,
     build_telegram_paper_notification_sink,
 )
-from marketlab.paper.observability import paper_execution_context
+from marketlab.paper.observability import (
+    hosted_execution_details,
+    hosted_root_execution_context,
+    paper_execution_context,
+)
 from marketlab.paper.service import (
     PaperStateStore,
     _clock_value,
@@ -73,6 +79,17 @@ def _clear_scheduler_error_state(state: dict[str, Any]) -> None:
 
 def _paper_notification_sink(config: ExperimentConfig) -> PaperNotificationSink:
     return build_telegram_paper_notification_sink(config)
+
+
+def _derive_hosted_phase_context(
+    hosted_context: PaperHostedExecutionContext | None,
+    *,
+    phase: PaperHostedPhase,
+    suffix: str,
+) -> PaperHostedExecutionContext | None:
+    if hosted_context is None:
+        return None
+    return hosted_context.derive(phase=phase, suffix=f"{phase}:{suffix}")
 
 
 def _notify_scheduler_error(
@@ -129,13 +146,26 @@ def run_scheduler_iteration(
     now: datetime | None = None,
     notification_sink: PaperNotificationSink | None = None,
     execution_context: ExecutionContext | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> dict[str, Any]:
+    iteration_details = hosted_execution_details(
+        hosted_context,
+        {"component": "scheduler_iteration"},
+    )
     iteration_context = paper_execution_context(
-        execution_context,
+        (
+            hosted_root_execution_context(
+                hosted_context,
+                phase="paper-scheduler",
+                details=iteration_details,
+            )
+            if hosted_context is not None
+            else execution_context
+        ),
         phase="paper-scheduler",
-        deployment="paper_scheduler",
-        refresh_execution_id=True,
-        details={"component": "scheduler_iteration"},
+        deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
+        refresh_execution_id=hosted_context is None,
+        details=iteration_details,
     )
     emit_structured_log(
         LOGGER,
@@ -156,24 +186,34 @@ def run_scheduler_iteration(
             paper_execution_context(
                 iteration_context,
                 phase="paper-scheduler",
-                deployment="paper_scheduler",
+                deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
                 trade_date=market_date,
-                details={"component": "scheduler_iteration"},
+                details=iteration_details,
             )
         ):
             if local_now.time() >= decision_clock and state.get("last_decision_market_date") != market_date:
                 try:
+                    phase_hosted_context = _derive_hosted_phase_context(
+                        hosted_context,
+                        phase="decision",
+                        suffix=market_date,
+                    )
                     result = run_paper_decision(
                         config,
                         now=now,
                         notification_sink=notification_sink,
+                        hosted_context=phase_hosted_context,
                         execution_context=paper_execution_context(
                             iteration_context,
                             phase="paper-decision",
-                            deployment="paper_scheduler",
+                            deployment=(
+                                hosted_context.deployment_id
+                                if hosted_context is not None
+                                else "paper_scheduler"
+                            ),
                             trade_date=market_date,
                             provider=config.paper.data_provider,
-                            refresh_execution_id=True,
+                            refresh_execution_id=phase_hosted_context is None,
                         ),
                     )
                     decision_result = PaperDecisionResult.from_legacy(result)
@@ -189,17 +229,27 @@ def run_scheduler_iteration(
 
             if local_now.time() >= submission_clock and state.get("last_submission_market_date") != market_date:
                 try:
+                    phase_hosted_context = _derive_hosted_phase_context(
+                        hosted_context,
+                        phase="submit",
+                        suffix=market_date,
+                    )
                     result = run_paper_submit(
                         config,
                         now=now,
                         notification_sink=notification_sink,
+                        hosted_context=phase_hosted_context,
                         execution_context=paper_execution_context(
                             iteration_context,
                             phase="paper-submit",
-                            deployment="paper_scheduler",
+                            deployment=(
+                                hosted_context.deployment_id
+                                if hosted_context is not None
+                                else "paper_scheduler"
+                            ),
                             trade_date=market_date,
                             provider=config.paper.broker,
-                            refresh_execution_id=True,
+                            refresh_execution_id=phase_hosted_context is None,
                         ),
                     )
                     submission_result = PaperSubmissionResult.from_legacy(result)
@@ -217,16 +267,26 @@ def run_scheduler_iteration(
                 state["last_submission_at"] = _now_utc(now).isoformat()
 
             try:
+                phase_hosted_context = _derive_hosted_phase_context(
+                    hosted_context,
+                    phase="reconcile",
+                    suffix=market_date,
+                )
                 reconciliation = reconcile_latest_submission_status(
                     config,
                     now=now,
+                    hosted_context=phase_hosted_context,
                     execution_context=paper_execution_context(
                         iteration_context,
                         phase="paper-submit-reconcile",
-                        deployment="paper_scheduler",
+                        deployment=(
+                            hosted_context.deployment_id
+                            if hosted_context is not None
+                            else "paper_scheduler"
+                        ),
                         trade_date=market_date,
                         provider=config.paper.broker,
-                        refresh_execution_id=True,
+                        refresh_execution_id=phase_hosted_context is None,
                     ),
                 )
             except Exception as exc:
@@ -260,11 +320,11 @@ def run_scheduler_iteration(
             execution_context=paper_execution_context(
                 iteration_context,
                 phase="paper-scheduler",
-                deployment="paper_scheduler",
+                deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
                 trade_date=market_date,
                 outcome="error",
                 duration_ms=duration_ms_since(start_time),
-                details={"component": "scheduler_iteration"},
+                details=iteration_details,
             ),
             exc_info=exc,
         )
@@ -277,15 +337,18 @@ def run_scheduler_iteration(
         execution_context=paper_execution_context(
             iteration_context,
             phase="paper-scheduler",
-            deployment="paper_scheduler",
+            deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
             trade_date=market_date,
             outcome="events_recorded" if events else "idle",
             duration_ms=duration_ms_since(start_time),
-            details={
-                "component": "scheduler_iteration",
-                "event_count": len(events),
-                "scheduler_state_path": summary["scheduler_state_path"],
-            },
+            details=hosted_execution_details(
+                hosted_context,
+                {
+                    "component": "scheduler_iteration",
+                    "event_count": len(events),
+                    "scheduler_state_path": summary["scheduler_state_path"],
+                },
+            ),
         ),
     )
     return summary
@@ -296,13 +359,27 @@ def run_scheduler_loop(
     *,
     once: bool = False,
     notification_sink: PaperNotificationSink | None = None,
+    hosted_context: PaperHostedExecutionContext | None = None,
 ) -> None:
     while True:
+        loop_details = hosted_execution_details(
+            hosted_context,
+            {"component": "scheduler_loop", "once": once},
+        )
         loop_context = paper_execution_context(
+            (
+                hosted_root_execution_context(
+                    hosted_context,
+                    phase="paper-scheduler",
+                    details=loop_details,
+                )
+                if hosted_context is not None
+                else None
+            ),
             phase="paper-scheduler",
-            deployment="paper_scheduler",
-            refresh_execution_id=True,
-            details={"component": "scheduler_loop", "once": once},
+            deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
+            refresh_execution_id=hosted_context is None,
+            details=loop_details,
         )
         emit_structured_log(
             LOGGER,
@@ -319,6 +396,7 @@ def run_scheduler_loop(
                     config,
                     notification_sink=notification_sink,
                     execution_context=loop_context,
+                    hosted_context=hosted_context,
                 )
         except Exception as exc:
             loop_error = exc
@@ -348,14 +426,17 @@ def run_scheduler_loop(
                 execution_context=paper_execution_context(
                     loop_context,
                     phase="paper-scheduler",
-                    deployment="paper_scheduler",
+                    deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
                     outcome="error",
                     duration_ms=duration_ms_since(start_time),
-                    details={
-                        "component": "scheduler_loop",
-                        "scheduler_state_path": summary["scheduler_state_path"],
-                        "duplicate_suppressed": notification_path is None,
-                    },
+                    details=hosted_execution_details(
+                        hosted_context,
+                        {
+                            "component": "scheduler_loop",
+                            "scheduler_state_path": summary["scheduler_state_path"],
+                            "duplicate_suppressed": notification_path is None,
+                        },
+                    ),
                 ),
                 exc_info=exc,
             )
@@ -368,14 +449,17 @@ def run_scheduler_loop(
                 execution_context=paper_execution_context(
                     loop_context,
                     phase="paper-scheduler",
-                    deployment="paper_scheduler",
+                    deployment=hosted_context.deployment_id if hosted_context is not None else "paper_scheduler",
                     outcome="events_recorded" if summary["events"] else "idle",
                     duration_ms=duration_ms_since(start_time),
-                    details={
-                        "component": "scheduler_loop",
-                        "scheduler_state_path": summary["scheduler_state_path"],
-                        "event_count": len(summary["events"]),
-                    },
+                    details=hosted_execution_details(
+                        hosted_context,
+                        {
+                            "component": "scheduler_loop",
+                            "scheduler_state_path": summary["scheduler_state_path"],
+                            "event_count": len(summary["events"]),
+                        },
+                    ),
                 ),
             )
         print(json.dumps(summary, indent=2, sort_keys=True))

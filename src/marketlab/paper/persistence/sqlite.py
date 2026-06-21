@@ -8,6 +8,11 @@ from typing import Any
 
 from marketlab.config import ExperimentConfig
 from marketlab.paper.contracts import (
+    PaperDeploymentRecord,
+    PaperDeploymentRegistry,
+    PaperDeploymentRegistryConflictError,
+    PaperHostedExecutionContext,
+    PaperPhaseRunRecord,
     PaperStatusRepository,
     PaperTradeRepository,
     PaperUnitOfWork,
@@ -58,6 +63,24 @@ _SCHEMA_STATEMENTS = (
         payload_json TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS paper_deployment_records (
+        environment TEXT NOT NULL,
+        deployment_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        execution_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (environment, deployment_id, phase, execution_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS paper_phase_run_records (
+        idempotency_key TEXT PRIMARY KEY,
+        phase TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -74,6 +97,26 @@ def _row_payload(row: sqlite3.Row | None) -> dict[str, Any] | None:
 def _ensure_schema(connection: sqlite3.Connection) -> None:
     for statement in _SCHEMA_STATEMENTS:
         connection.execute(statement)
+
+
+def _metadata_json(payload: dict[str, str]) -> str:
+    return json.dumps(payload, sort_keys=True)
+
+
+def _ensure_identical_payload(
+    *,
+    row: sqlite3.Row | None,
+    payload: dict[str, str],
+    conflict_target: str,
+) -> bool:
+    if row is None:
+        return False
+    existing = json.loads(str(row["payload_json"]))
+    if existing != payload:
+        raise PaperDeploymentRegistryConflictError(
+            f"Hosted execution idempotency conflict for {conflict_target}."
+        )
+    return True
 
 
 def _snapshot_artifacts(paths: list[Path]) -> dict[Path, bytes | None]:
@@ -320,6 +363,162 @@ class SQLitePaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+class SQLitePaperDeploymentRegistry(PaperDeploymentRegistry):
+    def __init__(self, config: ExperimentConfig) -> None:
+        self._db_path = config.paper_sqlite_db_path
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        _ensure_schema(connection)
+        return connection
+
+    def record_deployment(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperDeploymentRecord:
+        payload = context.as_metadata()
+        payload_json = _metadata_json(payload)
+        connection = self._connect()
+        try:
+            with connection:
+                row = connection.execute(
+                    """
+                    SELECT payload_json
+                    FROM paper_deployment_records
+                    WHERE environment = ?
+                      AND deployment_id = ?
+                      AND phase = ?
+                      AND execution_id = ?
+                    """,
+                    (
+                        context.environment,
+                        context.deployment_id,
+                        context.phase,
+                        context.execution_id,
+                    ),
+                ).fetchone()
+                if not _ensure_identical_payload(
+                    row=row,
+                    payload=payload,
+                    conflict_target=(
+                        f"deployment {context.environment}/{context.deployment_id}/"
+                        f"{context.phase}/{context.execution_id}"
+                    ),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO paper_deployment_records (
+                            environment,
+                            deployment_id,
+                            phase,
+                            execution_id,
+                            idempotency_key,
+                            payload_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            context.environment,
+                            context.deployment_id,
+                            context.phase,
+                            context.execution_id,
+                            context.idempotency_key,
+                            payload_json,
+                        ),
+                    )
+        finally:
+            connection.close()
+        return PaperDeploymentRecord.from_context(context)
+
+    def record_phase_run(
+        self,
+        context: PaperHostedExecutionContext,
+    ) -> PaperPhaseRunRecord:
+        payload = context.as_metadata()
+        payload_json = _metadata_json(payload)
+        connection = self._connect()
+        try:
+            with connection:
+                row = connection.execute(
+                    """
+                    SELECT payload_json
+                    FROM paper_phase_run_records
+                    WHERE idempotency_key = ?
+                    """,
+                    (context.idempotency_key,),
+                ).fetchone()
+                if not _ensure_identical_payload(
+                    row=row,
+                    payload=payload,
+                    conflict_target=f"idempotency key {context.idempotency_key}",
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO paper_phase_run_records (
+                            idempotency_key,
+                            phase,
+                            payload_json
+                        )
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            context.idempotency_key,
+                            context.phase,
+                            payload_json,
+                        ),
+                    )
+                row = connection.execute(
+                    """
+                    SELECT payload_json
+                    FROM paper_deployment_records
+                    WHERE environment = ?
+                      AND deployment_id = ?
+                      AND phase = ?
+                      AND execution_id = ?
+                    """,
+                    (
+                        context.environment,
+                        context.deployment_id,
+                        context.phase,
+                        context.execution_id,
+                    ),
+                ).fetchone()
+                if not _ensure_identical_payload(
+                    row=row,
+                    payload=payload,
+                    conflict_target=(
+                        f"deployment {context.environment}/{context.deployment_id}/"
+                        f"{context.phase}/{context.execution_id}"
+                    ),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO paper_deployment_records (
+                            environment,
+                            deployment_id,
+                            phase,
+                            execution_id,
+                            idempotency_key,
+                            payload_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            context.environment,
+                            context.deployment_id,
+                            context.phase,
+                            context.execution_id,
+                            context.idempotency_key,
+                            payload_json,
+                        ),
+                    )
+        finally:
+            connection.close()
+        return PaperPhaseRunRecord.from_context(context)
+
+
 class SQLitePaperUnitOfWork(PaperUnitOfWork):
     def __init__(self, config: ExperimentConfig) -> None:
         self._store = PaperStateStore(config)
@@ -392,3 +591,7 @@ class SQLitePaperUnitOfWorkFactory(PaperUnitOfWorkFactory):
 
 def build_sqlite_paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
     return SQLitePaperUnitOfWorkFactory(config)
+
+
+def build_sqlite_paper_deployment_registry(config: ExperimentConfig) -> PaperDeploymentRegistry:
+    return SQLitePaperDeploymentRegistry(config)

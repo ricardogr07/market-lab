@@ -12,7 +12,12 @@ from tests._paper_fakes import (
     build_phase7_paper_config,
 )
 
+import marketlab.paper.service as service_module
 from marketlab.log import configure_logging
+from marketlab.paper.contracts import (
+    PaperDeploymentRegistryConflictError,
+    PaperHostedExecutionContext,
+)
 from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.persistence import build_sqlite_paper_uow_factory
 from marketlab.paper.service import (
@@ -59,6 +64,23 @@ def _stderr_records(stderr: str) -> list[dict[str, object]]:
         for line in stderr.splitlines()
         if line.strip().startswith("{")
     ]
+
+
+def _hosted_context(**overrides: str) -> PaperHostedExecutionContext:
+    payload = {
+        "deployment_id": "qqq-paper-dev",
+        "environment": "dev",
+        "phase": "submit",
+        "execution_id": "exec-1",
+        "correlation_id": "corr-1",
+        "idempotency_key": "idem-1",
+        "trigger_source": "cli",
+        "requested_at": "2026-06-19T12:00:00+00:00",
+        "config_version": "config-v1",
+        "image_digest": "sha256:abc123",
+    }
+    payload.update(overrides)
+    return PaperHostedExecutionContext.from_metadata(payload)
 
 
 def test_paper_service_logs_include_phase_ids_provider_and_duration(
@@ -131,6 +153,38 @@ def test_paper_service_logs_include_phase_ids_provider_and_duration(
     assert finish_records["paper.reconcile.finish"]["proposal_id"] == decision["proposal_id"]
     assert finish_records["paper.reconcile.finish"]["provider"] == "alpaca"
     assert finish_records["paper.reconcile.finish"]["outcome"] == "observed"
+
+
+def test_hosted_registry_conflict_stops_submit_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = build_phase7_paper_config(tmp_path, execution_mode="agent_approval", symbol="QQQ")
+    broker = FakeAlpacaBroker(symbol="QQQ")
+    sink = FakePaperNotificationSink()
+
+    class _ConflictingRegistry:
+        def record_phase_run(self, context: PaperHostedExecutionContext):
+            raise PaperDeploymentRegistryConflictError("conflicting idempotency")
+
+    monkeypatch.setattr(
+        service_module,
+        "_paper_deployment_registry",
+        lambda _config: _ConflictingRegistry(),
+    )
+
+    with pytest.raises(PaperDeploymentRegistryConflictError, match="conflicting idempotency"):
+        run_paper_submit(
+            config,
+            now=datetime(2026, 4, 10, 23, 5, tzinfo=UTC),
+            broker=broker,
+            notification_sink=sink,
+            hosted_context=_hosted_context(),
+        )
+
+    assert broker.submitted_orders == []
+    assert sink.submission_calls == []
+    assert not PaperStateStore(config).status_path.exists()
 
 
 def test_run_paper_decision_writes_latest_daily_proposal(monkeypatch, tmp_path: Path) -> None:

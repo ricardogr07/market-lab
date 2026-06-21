@@ -6,8 +6,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from tests._paper_fakes import write_phase7_paper_config
 
 from marketlab import cli
+from marketlab.paper.contracts import (
+    PaperDeploymentRegistryConflictError,
+    PaperHostedExecutionContext,
+)
 from marketlab.resources.templates import get_config_template_text
 
 
@@ -211,3 +216,105 @@ def test_paper_decision_keeps_path_stdout_and_structured_logs_on_stderr(
         "paper.command.finish",
     ]
     assert records[-1]["outcome"] == "proposal_created"
+
+
+def test_paper_decision_hosted_flags_override_environment_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_contexts: list[PaperHostedExecutionContext | None] = []
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    monkeypatch.setenv("MARKETLAB_DEPLOYMENT_ID", "env-deployment")
+    monkeypatch.setenv("MARKETLAB_ENVIRONMENT", "dev")
+    monkeypatch.setenv("MARKETLAB_EXECUTION_ID", "env-exec")
+    monkeypatch.setenv("MARKETLAB_CORRELATION_ID", "env-corr")
+    monkeypatch.setenv("MARKETLAB_IDEMPOTENCY_KEY", "env-idem")
+    monkeypatch.setenv("MARKETLAB_TRIGGER_SOURCE", "env")
+    monkeypatch.setenv("MARKETLAB_REQUESTED_AT", "2026-06-19T12:00:00+00:00")
+    monkeypatch.setenv("MARKETLAB_CONFIG_VERSION", "env-config")
+    monkeypatch.setenv("MARKETLAB_IMAGE_DIGEST", "sha256:env")
+
+    def _fake_decision(config, **kwargs):
+        captured_contexts.append(kwargs["hosted_context"])
+        return {
+            "proposal_path": "proposal.json",
+            "status_path": "status.json",
+            "status": {"status": "proposal_created"},
+        }
+
+    monkeypatch.setattr(cli, "run_paper_decision", _fake_decision)
+
+    exit_code = cli.main(
+        [
+            "paper-decision",
+            "--config",
+            "dummy.yaml",
+            "--deployment-id",
+            "flag-deployment",
+            "--execution-id",
+            "flag-exec",
+            "--idempotency-key",
+            "flag-idem",
+        ]
+    )
+
+    records = _stderr_records(capsys.readouterr().err)
+    assert exit_code == 0
+    assert len(captured_contexts) == 1
+    assert captured_contexts[0] is not None
+    assert captured_contexts[0].deployment_id == "flag-deployment"
+    assert captured_contexts[0].execution_id == "flag-exec"
+    assert captured_contexts[0].idempotency_key == "flag-idem"
+    assert captured_contexts[0].correlation_id == "env-corr"
+    assert captured_contexts[0].phase == "decision"
+    assert records[0]["deployment"] == "flag-deployment"
+    assert records[0]["execution_id"] == "flag-exec"
+    assert records[0]["correlation_id"] == "env-corr"
+
+
+def test_paper_decision_rejects_partial_hosted_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_calls: list[str] = []
+    monkeypatch.setenv("MARKETLAB_DEPLOYMENT_ID", "partial-deployment")
+    monkeypatch.setattr(cli, "load_config", lambda path: load_calls.append(path))
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["paper-decision", "--config", "dummy.yaml"])
+
+    assert excinfo.value.code == 2
+    assert load_calls == []
+
+
+def test_paper_submit_cli_surfaces_duplicate_hosted_idempotency_conflict(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with repo_scratch_dir("hosted_duplicate_idempotency") as root:
+        config_path = write_phase7_paper_config(root / "config.yaml")
+        base_args = [
+            "paper-submit",
+            "--config",
+            str(config_path),
+            "--deployment-id",
+            "qqq-paper-dev",
+            "--environment",
+            "dev",
+            "--execution-id",
+            "exec-1",
+            "--correlation-id",
+            "corr-1",
+            "--idempotency-key",
+            "idem-1",
+            "--trigger-source",
+            "cli",
+            "--requested-at",
+            "2026-06-19T12:00:00+00:00",
+            "--config-version",
+            "config-v1",
+        ]
+
+        assert cli.main([*base_args, "--image-digest", "sha256:first"]) == 0
+        capsys.readouterr()
+
+        with pytest.raises(PaperDeploymentRegistryConflictError):
+            cli.main([*base_args, "--image-digest", "sha256:second"])
