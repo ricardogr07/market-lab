@@ -73,4 +73,8 @@ def test_postgres_migrations_are_packaged_resources() -> None:
         if resource.name.endswith('.sql')
     )
 
-    assert migration_names == ['001_paper_control.sql', '002_proposal_listing_index.sql']
+    assert migration_names == [
+        '001_paper_control.sql',
+        '002_proposal_listing_index.sql',
+        '003_paper_outbox.sql',
+    ]

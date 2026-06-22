@@ -86,6 +86,16 @@ def test_load_config_preserves_backward_compatible_allocation_defaults(tmp_path:
     assert config.evaluation.focus_start == ""
     assert config.evaluation.focus_end == ""
     assert config.evaluation.visualize_signals is False
+    assert config.paper.azure.artifact_backend == "filesystem"
+    assert config.paper.azure.secret_backend == "environment"
+    assert config.paper.azure.service_bus_backend == "disabled"
+    assert config.paper.azure.blob_account_url == ""
+    assert config.paper.azure.blob_container_name == ""
+    assert config.paper.azure.artifact_environment == ""
+    assert config.paper.azure.artifact_deployment_id == ""
+    assert config.paper.azure.key_vault_url == ""
+    assert config.paper.azure.service_bus_namespace == ""
+    assert config.paper.azure.service_bus_queue_name == ""
     assert config.evaluation.ml_strategy_threshold_sweep.enabled is False
     assert config.evaluation.ml_strategy_threshold_sweep.thresholds == [
         0.50,
@@ -1625,6 +1635,9 @@ def test_load_config_accepts_phase7_paper_settings(tmp_path: Path) -> None:
     assert config.paper.agent_timeout_seconds == 45
     assert config.paper.consensus_min_long_votes == 4
     assert config.paper.persistence_backend == "sqlite"
+    assert config.paper.azure.artifact_backend == "filesystem"
+    assert config.paper.azure.secret_backend == "environment"
+    assert config.paper.azure.service_bus_backend == "disabled"
     assert config.paper.notifications.telegram.enabled is True
     assert config.paper_approval_inbox_dir == (tmp_path / "artifacts" / "paper" / "inbox").resolve()
     assert config.paper_state_dir == (tmp_path / "artifacts" / "paper" / "state").resolve()
@@ -1714,6 +1727,83 @@ def test_load_config_accepts_postgres_paper_persistence_backend(tmp_path: Path) 
     config = load_config(config_path)
 
     assert config.paper.persistence_backend == "postgres"
+
+
+def test_load_config_accepts_paper_azure_runtime_settings(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "azure": {
+            "artifact_backend": "azure_blob",
+            "secret_backend": "key_vault",
+            "service_bus_backend": "azure_service_bus",
+            "blob_account_url": "https://marketlabartifacts.blob.core.windows.net",
+            "blob_container_name": "qqq-paper-artifacts",
+            "artifact_environment": "uat",
+            "artifact_deployment_id": "qqq-paper-uat",
+            "key_vault_url": "https://marketlab-vault.vault.azure.net/",
+            "service_bus_namespace": "marketlab-uat.servicebus.windows.net",
+            "service_bus_queue_name": "qqq-paper-events",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.paper.azure.artifact_backend == "azure_blob"
+    assert config.paper.azure.secret_backend == "key_vault"
+    assert config.paper.azure.service_bus_backend == "azure_service_bus"
+    assert config.paper.azure.blob_account_url == "https://marketlabartifacts.blob.core.windows.net"
+    assert config.paper.azure.blob_container_name == "qqq-paper-artifacts"
+    assert config.paper.azure.artifact_environment == "uat"
+    assert config.paper.azure.artifact_deployment_id == "qqq-paper-uat"
+    assert config.paper.azure.key_vault_url == "https://marketlab-vault.vault.azure.net/"
+    assert config.paper.azure.service_bus_namespace == "marketlab-uat.servicebus.windows.net"
+    assert config.paper.azure.service_bus_queue_name == "qqq-paper-events"
+
+
+def test_load_config_rejects_azure_blob_backend_without_required_scope(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "azure": {
+            "artifact_backend": "azure_blob",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="paper.azure.blob_account_url"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_non_https_azure_blob_account_url(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        data={"symbols": ["QQQ"], "interval": "1d"},
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["paper"] = {
+        "enabled": True,
+        "azure": {
+            "artifact_backend": "azure_blob",
+            "blob_account_url": "http://localhost:10000/devstoreaccount1",
+            "blob_container_name": "qqq-paper-artifacts",
+            "artifact_environment": "dev",
+            "artifact_deployment_id": "qqq-paper-dev",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="blob_account_url must use https"):
+        load_config(config_path)
 
 
 def test_load_config_rejects_sqlite_backend_without_db_path(tmp_path: Path) -> None:

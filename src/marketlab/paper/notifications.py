@@ -16,6 +16,7 @@ from marketlab.env import load_env_file
 from marketlab.log import duration_ms_since, emit_structured_log
 from marketlab.paper.contracts import PaperNotificationSink
 from marketlab.paper.observability import paper_execution_context
+from marketlab.paper.secrets import PaperSecretProvider, resolve_paper_secret
 from marketlab.paper.state import PaperStateStore
 
 TELEGRAM_API_BASE_URL_ENV = "MARKETLAB_TELEGRAM_API_BASE_URL"
@@ -291,6 +292,7 @@ def deliver_telegram_notification(
     trade_date: str = "",
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> dict[str, Any]:
     start_time = perf_counter()
     timestamp = _now_utc(now).isoformat()
@@ -317,9 +319,20 @@ def deliver_telegram_notification(
         )
         return record
 
-    bot_token = os.environ.get(TELEGRAM_BOT_TOKEN_ENV, "").strip()
-    chat_id = os.environ.get(TELEGRAM_CHAT_ID_ENV, "").strip()
-    api_base_url = _telegram_api_base_url()
+    bot_token = resolve_paper_secret(
+        TELEGRAM_BOT_TOKEN_ENV,
+        secret_provider=secret_provider,
+    ) or ""
+    chat_id = resolve_paper_secret(
+        TELEGRAM_CHAT_ID_ENV,
+        secret_provider=secret_provider,
+    ) or ""
+    api_base_url = resolve_paper_secret(
+        TELEGRAM_API_BASE_URL_ENV,
+        secret_provider=secret_provider,
+    )
+    if api_base_url is None:
+        api_base_url = _telegram_api_base_url()
     record["api_base_url"] = api_base_url
     if bot_token == "" or chat_id == "":
         record["delivery_status"] = DELIVERY_SKIPPED_MISSING_CREDENTIALS
@@ -412,6 +425,7 @@ def write_notification_record(
     trade_date: str = "",
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> Path:
     record = deliver_telegram_notification(
         config,
@@ -423,6 +437,7 @@ def write_notification_record(
         trade_date=trade_date,
         now=now,
         transport=transport,
+        secret_provider=secret_provider,
     )
     return store.write_notification_record(
         stage=stage,
@@ -438,9 +453,11 @@ class TelegramPaperNotificationSink(PaperNotificationSink):
         config: ExperimentConfig,
         *,
         transport: TelegramTransport | None = None,
+        secret_provider: PaperSecretProvider | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
+        self._secret_provider = secret_provider
 
     def _store(self) -> PaperStateStore:
         return PaperStateStore(self._config)
@@ -461,6 +478,7 @@ class TelegramPaperNotificationSink(PaperNotificationSink):
             proposal=proposal,
             now=now,
             transport=self._transport,
+            secret_provider=self._secret_provider,
         )
 
     def notify_approval(
@@ -477,6 +495,7 @@ class TelegramPaperNotificationSink(PaperNotificationSink):
             approval_record=approval_record,
             now=now,
             transport=self._transport,
+            secret_provider=self._secret_provider,
         )
 
     def notify_submission(
@@ -497,6 +516,7 @@ class TelegramPaperNotificationSink(PaperNotificationSink):
             submission=submission,
             now=now,
             transport=self._transport,
+            secret_provider=self._secret_provider,
         )
 
     def notify_error(
@@ -542,8 +562,13 @@ def build_telegram_paper_notification_sink(
     config: ExperimentConfig,
     *,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> PaperNotificationSink:
-    return TelegramPaperNotificationSink(config, transport=transport)
+    return TelegramPaperNotificationSink(
+        config,
+        transport=transport,
+        secret_provider=secret_provider,
+    )
 
 
 def notify_paper_decision(
@@ -555,6 +580,7 @@ def notify_paper_decision(
     proposal: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> Path:
     details: dict[str, Any] = {
         "experiment_name": config.experiment_name,
@@ -592,6 +618,7 @@ def notify_paper_decision(
         trade_date=str((proposal or {}).get("effective_date", "")),
         now=now,
         transport=transport,
+        secret_provider=secret_provider,
     )
 
 
@@ -603,6 +630,7 @@ def notify_paper_approval(
     approval_record: Mapping[str, Any],
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> Path:
     outcome = str(approval_record["approval_status"])
     details = {
@@ -632,6 +660,7 @@ def notify_paper_approval(
         trade_date=str(proposal["effective_date"]),
         now=now,
         transport=transport,
+        secret_provider=secret_provider,
     )
 
 
@@ -645,6 +674,7 @@ def notify_paper_submission(
     submission: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     transport: TelegramTransport | None = None,
+    secret_provider: PaperSecretProvider | None = None,
 ) -> Path:
     details = {
         "experiment_name": config.experiment_name,
@@ -675,4 +705,5 @@ def notify_paper_submission(
         trade_date=str((submission or {}).get("trade_date") or (proposal or {}).get("effective_date") or ""),
         now=now,
         transport=transport,
+        secret_provider=secret_provider,
     )

@@ -12,6 +12,7 @@ import pandas as pd
 
 from marketlab.data.market import MarketDataProvider
 from marketlab.env import load_env_file
+from marketlab.paper.secrets import PaperSecretProvider, resolve_paper_secret
 
 DEFAULT_ALPACA_DATA_BASE_URL = "https://data.alpaca.markets"
 DEFAULT_ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
@@ -28,28 +29,50 @@ class AlpacaCredentials:
     timeout_seconds: int = 30
 
     @classmethod
-    def from_env(cls) -> "AlpacaCredentials":
+    def from_env(
+        cls,
+        *,
+        secret_provider: PaperSecretProvider | None = None,
+    ) -> "AlpacaCredentials":
         import os
 
         load_env_file()
-        api_key_id = os.environ.get("ALPACA_API_KEY_ID", "").strip()
-        api_secret_key = os.environ.get("ALPACA_API_SECRET_KEY", "").strip()
+        api_key_id = resolve_paper_secret(
+            "ALPACA_API_KEY_ID",
+            secret_provider=secret_provider,
+        ) or ""
+        api_secret_key = resolve_paper_secret(
+            "ALPACA_API_SECRET_KEY",
+            secret_provider=secret_provider,
+        ) or ""
         if not api_key_id or not api_secret_key:
             raise RuntimeError(
                 "Alpaca credentials are required. Set ALPACA_API_KEY_ID and "
                 "ALPACA_API_SECRET_KEY in the environment or add them to a local .env file."
             )
 
-        data_base_url = os.environ.get(
+        data_base_url = resolve_paper_secret(
+            "ALPACA_DATA_BASE_URL",
+            secret_provider=secret_provider,
+        ) or os.environ.get(
             "ALPACA_DATA_BASE_URL",
             DEFAULT_ALPACA_DATA_BASE_URL,
         ).strip() or DEFAULT_ALPACA_DATA_BASE_URL
-        trading_base_url = os.environ.get(
+        trading_base_url = resolve_paper_secret(
+            "ALPACA_TRADING_BASE_URL",
+            secret_provider=secret_provider,
+        ) or os.environ.get(
             "ALPACA_TRADING_BASE_URL",
             DEFAULT_ALPACA_TRADING_BASE_URL,
         ).strip() or DEFAULT_ALPACA_TRADING_BASE_URL
-        data_feed = os.environ.get("ALPACA_DATA_FEED", "iex").strip() or "iex"
-        timeout_seconds = int(os.environ.get("ALPACA_TIMEOUT_SECONDS", "30"))
+        data_feed = (
+            resolve_paper_secret("ALPACA_DATA_FEED", secret_provider=secret_provider)
+            or os.environ.get("ALPACA_DATA_FEED", "iex")
+        ).strip() or "iex"
+        timeout_seconds = int(
+            resolve_paper_secret("ALPACA_TIMEOUT_SECONDS", secret_provider=secret_provider)
+            or os.environ.get("ALPACA_TIMEOUT_SECONDS", "30")
+        )
         return cls(
             api_key_id=api_key_id,
             api_secret_key=api_secret_key,
@@ -131,8 +154,15 @@ def _alpaca_timeframe(interval: str) -> str:
 
 
 class AlpacaMarketDataProvider(MarketDataProvider):
-    def __init__(self, credentials: AlpacaCredentials | None = None) -> None:
-        self._credentials = credentials or AlpacaCredentials.from_env()
+    def __init__(
+        self,
+        credentials: AlpacaCredentials | None = None,
+        *,
+        secret_provider: PaperSecretProvider | None = None,
+    ) -> None:
+        self._credentials = credentials or AlpacaCredentials.from_env(
+            secret_provider=secret_provider,
+        )
 
     def download_symbol_history(
         self,
@@ -237,8 +267,15 @@ class AlpacaMarketDataProvider(MarketDataProvider):
 
 
 class AlpacaPaperBrokerClient:
-    def __init__(self, credentials: AlpacaCredentials | None = None) -> None:
-        self._credentials = credentials or AlpacaCredentials.from_env()
+    def __init__(
+        self,
+        credentials: AlpacaCredentials | None = None,
+        *,
+        secret_provider: PaperSecretProvider | None = None,
+    ) -> None:
+        self._credentials = credentials or AlpacaCredentials.from_env(
+            secret_provider=secret_provider,
+        )
         self._ensure_paper_endpoint()
 
     def _ensure_paper_endpoint(self) -> None:

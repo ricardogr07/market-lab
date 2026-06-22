@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from marketlab.config import ExperimentConfig
 from marketlab.paper.contracts import (
@@ -12,6 +12,10 @@ from marketlab.paper.contracts import (
     PaperDeploymentRegistry,
     PaperDeploymentRegistryConflictError,
     PaperHostedExecutionContext,
+    PaperOutboxConflictError,
+    PaperOutboxDeliveryStatus,
+    PaperOutboxRecord,
+    PaperOutboxRepository,
     PaperPhaseRunRecord,
     PaperStatusRepository,
     PaperTradeRepository,
@@ -80,6 +84,26 @@ _SCHEMA_STATEMENTS = (
         phase TEXT NOT NULL,
         payload_json TEXT NOT NULL
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS paper_outbox (
+        message_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        delivery_attempts INTEGER NOT NULL,
+        delivered_at TEXT,
+        last_error TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS paper_outbox_pending_idx
+        ON paper_outbox (delivery_status, created_at, message_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS paper_outbox_pending_event_idx
+        ON paper_outbox (delivery_status, event_type, created_at, message_id)
     """,
 )
 
@@ -363,6 +387,183 @@ class SQLitePaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+def _outbox_record(row: sqlite3.Row | None) -> PaperOutboxRecord | None:
+    if row is None:
+        return None
+    payload = json.loads(str(row["payload_json"]))
+    if not isinstance(payload, dict):
+        raise TypeError("SQLite paper outbox payload_json must decode to an object.")
+    return PaperOutboxRecord(
+        message_id=str(row["message_id"]),
+        event_type=str(row["event_type"]),
+        payload=payload,
+        created_at=str(row["created_at"]),
+        delivery_status=cast(PaperOutboxDeliveryStatus, str(row["delivery_status"])),
+        delivery_attempts=int(row["delivery_attempts"]),
+        delivered_at=None if row["delivered_at"] is None else str(row["delivered_at"]),
+        last_error=None if row["last_error"] is None else str(row["last_error"]),
+    )
+
+
+class SQLitePaperOutboxRepository(PaperOutboxRepository):
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def enqueue(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> PaperOutboxRecord:
+        record = PaperOutboxRecord(
+            message_id=message_id,
+            event_type=event_type,
+            payload=dict(payload),
+            created_at=created_at,
+        )
+        inserted = self._connection.execute(
+            """
+            INSERT OR IGNORE INTO paper_outbox (
+                message_id, event_type, payload_json, created_at,
+                delivery_status, delivery_attempts, delivered_at, last_error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.message_id,
+                record.event_type,
+                _payload_json(record.payload),
+                record.created_at,
+                record.delivery_status,
+                record.delivery_attempts,
+                record.delivered_at,
+                record.last_error,
+            ),
+        )
+        if inserted.rowcount == 1:
+            return record
+        existing = self.get(message_id)
+        if existing is None:  # pragma: no cover - the primary key conflict should be visible immediately.
+            raise RuntimeError("Paper outbox enqueue did not persist or return an existing record.")
+        if existing.event_type != event_type or existing.payload != payload:
+            raise PaperOutboxConflictError(
+                f"Paper outbox message ID {message_id!r} was reused with different event data."
+            )
+        return existing
+
+    def get(self, message_id: str) -> PaperOutboxRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT message_id, event_type, payload_json, created_at,
+                   delivery_status, delivery_attempts, delivered_at, last_error
+            FROM paper_outbox
+            WHERE message_id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        return _outbox_record(row)
+
+    def list_pending(
+        self,
+        *,
+        limit: int = 100,
+        event_types: frozenset[str] | None = None,
+    ) -> list[PaperOutboxRecord]:
+        if limit < 1:
+            raise ValueError("Paper outbox limit must be at least 1.")
+        if event_types == frozenset():
+            return []
+        event_type_clause = ""
+        parameters: list[str | int] = []
+        if event_types is not None:
+            placeholders = ", ".join("?" for _ in event_types)
+            event_type_clause = f" AND event_type IN ({placeholders})"
+            parameters.extend(sorted(event_types))
+        parameters.append(limit)
+        rows = self._connection.execute(
+            f"""
+            SELECT message_id, event_type, payload_json, created_at,
+                   delivery_status, delivery_attempts, delivered_at, last_error
+            FROM paper_outbox
+            WHERE delivery_status IN ('pending', 'failed')
+            {event_type_clause}
+            ORDER BY created_at, message_id
+            LIMIT ?
+            """,
+            parameters,
+        ).fetchall()
+        return [record for row in rows if (record := _outbox_record(row)) is not None]
+
+    def mark_delivered(
+        self,
+        *,
+        message_id: str,
+        delivered_at: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="delivered",
+            delivery_attempts=record.delivery_attempts + 1,
+            delivered_at=delivered_at,
+        )
+        self._save_delivery(updated)
+        return updated
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        error: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        normalized_error = error.strip()
+        if normalized_error == "":
+            raise ValueError("Paper outbox error must not be empty.")
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="failed",
+            delivery_attempts=record.delivery_attempts + 1,
+            last_error=normalized_error,
+        )
+        self._save_delivery(updated)
+        return updated
+
+    def _required_record(self, message_id: str) -> PaperOutboxRecord:
+        record = self.get(message_id)
+        if record is None:
+            raise KeyError(f"Unknown paper outbox message_id: {message_id}")
+        return record
+
+    def _save_delivery(self, record: PaperOutboxRecord) -> None:
+        self._connection.execute(
+            """
+            UPDATE paper_outbox
+            SET delivery_status = ?, delivery_attempts = ?, delivered_at = ?, last_error = ?
+            WHERE message_id = ?
+            """,
+            (
+                record.delivery_status,
+                record.delivery_attempts,
+                record.delivered_at,
+                record.last_error,
+                record.message_id,
+            ),
+        )
+
+
 class SQLitePaperDeploymentRegistry(PaperDeploymentRegistry):
     def __init__(self, config: ExperimentConfig) -> None:
         self._db_path = config.paper_sqlite_db_path
@@ -538,6 +739,7 @@ class SQLitePaperUnitOfWork(PaperUnitOfWork):
             self._connection,
             self._artifact_writes,
         )
+        self._outbox = SQLitePaperOutboxRepository(self._connection)
         self._committed = False
 
     @property
@@ -547,6 +749,10 @@ class SQLitePaperUnitOfWork(PaperUnitOfWork):
     @property
     def status(self) -> PaperStatusRepository:
         return self._status
+
+    @property
+    def outbox(self) -> PaperOutboxRepository:
+        return self._outbox
 
     def commit(self) -> None:
         snapshots = _snapshot_artifacts(list(self._artifact_writes))

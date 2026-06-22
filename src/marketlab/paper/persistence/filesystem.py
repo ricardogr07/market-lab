@@ -13,6 +13,9 @@ from marketlab.paper.contracts import (
     PaperDeploymentRegistry,
     PaperDeploymentRegistryConflictError,
     PaperHostedExecutionContext,
+    PaperOutboxConflictError,
+    PaperOutboxRecord,
+    PaperOutboxRepository,
     PaperPhaseRunRecord,
     PaperStatusRepository,
     PaperTradeRepository,
@@ -184,6 +187,133 @@ class FilesystemPaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+class FilesystemPaperOutboxRepository(PaperOutboxRepository):
+    def __init__(
+        self,
+        store: PaperStateStore,
+        pending_writes: dict[Path, dict[str, Any]],
+    ) -> None:
+        self._store = store
+        self._pending_writes = pending_writes
+
+    def _path(self, message_id: str) -> Path:
+        return self._store.outbox_record_path(message_id)
+
+    def _load(self, path: Path) -> PaperOutboxRecord | None:
+        payload = self._pending_writes.get(path)
+        if payload is None:
+            if not path.exists():
+                return None
+            payload = _json_load(path)
+        return PaperOutboxRecord.from_payload(payload)
+
+    def _stage(self, record: PaperOutboxRecord) -> PaperOutboxRecord:
+        self._pending_writes[self._path(record.message_id)] = record.as_payload()
+        return record
+
+    def enqueue(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> PaperOutboxRecord:
+        existing = self.get(message_id)
+        if existing is not None:
+            if existing.event_type != event_type or existing.payload != payload:
+                raise PaperOutboxConflictError(
+                    f"Paper outbox message ID {message_id!r} was reused with different event data."
+                )
+            return existing
+        return self._stage(
+            PaperOutboxRecord(
+                message_id=message_id,
+                event_type=event_type,
+                payload=dict(payload),
+                created_at=created_at,
+            )
+        )
+
+    def get(self, message_id: str) -> PaperOutboxRecord | None:
+        record = self._load(self._path(message_id))
+        if record is not None and record.message_id != message_id:
+            raise RuntimeError("Paper outbox record path does not match its message_id.")
+        return record
+
+    def list_pending(
+        self,
+        *,
+        limit: int = 100,
+        event_types: frozenset[str] | None = None,
+    ) -> list[PaperOutboxRecord]:
+        if limit < 1:
+            raise ValueError("Paper outbox limit must be at least 1.")
+        paths = {
+            *self._store.outbox_root.glob("*.json"),
+            *(path for path in self._pending_writes if path.parent == self._store.outbox_root),
+        }
+        pending = [
+            record
+            for path in paths
+            if (record := self._load(path)) is not None
+            and record.delivery_status in {"pending", "failed"}
+            and (event_types is None or record.event_type in event_types)
+        ]
+        return sorted(pending, key=lambda record: (record.created_at, record.message_id))[:limit]
+
+    def mark_delivered(
+        self,
+        *,
+        message_id: str,
+        delivered_at: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        return self._stage(
+            PaperOutboxRecord(
+                message_id=record.message_id,
+                event_type=record.event_type,
+                payload=record.payload,
+                created_at=record.created_at,
+                delivery_status="delivered",
+                delivery_attempts=record.delivery_attempts + 1,
+                delivered_at=delivered_at,
+            )
+        )
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        error: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        normalized_error = error.strip()
+        if normalized_error == "":
+            raise ValueError("Paper outbox error must not be empty.")
+        return self._stage(
+            PaperOutboxRecord(
+                message_id=record.message_id,
+                event_type=record.event_type,
+                payload=record.payload,
+                created_at=record.created_at,
+                delivery_status="failed",
+                delivery_attempts=record.delivery_attempts + 1,
+                last_error=normalized_error,
+            )
+        )
+
+    def _required_record(self, message_id: str) -> PaperOutboxRecord:
+        record = self.get(message_id)
+        if record is None:
+            raise KeyError(f"Unknown paper outbox message_id: {message_id}")
+        return record
+
+
 class FilesystemPaperDeploymentRegistry(PaperDeploymentRegistry):
     def __init__(self, config: ExperimentConfig) -> None:
         self._store = PaperStateStore(config)
@@ -233,6 +363,7 @@ class FilesystemPaperUnitOfWork(PaperUnitOfWork):
         self._pending_writes: dict[Path, dict[str, Any]] = {}
         self._trades = FilesystemPaperTradeRepository(self._store, self._pending_writes)
         self._status = FilesystemPaperStatusRepository(self._store, self._pending_writes)
+        self._outbox = FilesystemPaperOutboxRepository(self._store, self._pending_writes)
         self._committed = False
 
     @property
@@ -242,6 +373,10 @@ class FilesystemPaperUnitOfWork(PaperUnitOfWork):
     @property
     def status(self) -> PaperStatusRepository:
         return self._status
+
+    @property
+    def outbox(self) -> PaperOutboxRepository:
+        return self._outbox
 
     def commit(self) -> None:
         for path, payload in self._pending_writes.items():
