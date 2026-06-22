@@ -32,6 +32,7 @@ from marketlab.paper.core import (
     _safe_float,
     validate_paper_trading_config,
 )
+from marketlab.paper.outbox import enqueue_paper_notification
 
 from .reconciliation import _poll_order_status, _refresh_submission_order_status
 
@@ -120,6 +121,12 @@ class SubmissionService:
                     "updated_at": _now_utc(request.now).isoformat(),
                 }
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="submission",
+                    outcome=SUBMISSION_SKIPPED,
+                    status=status,
+                )
                 uow.commit()
                 return PaperSubmissionResult(
                     status_path=str(status_path),
@@ -168,6 +175,14 @@ class SubmissionService:
                         "updated_at": _now_utc(request.now).isoformat(),
                     }
                     status_path = uow.status.write_status(status)
+                    enqueue_paper_notification(
+                        uow,
+                        stage="submission",
+                        outcome="existing_submission",
+                        status=status,
+                        proposal=proposal,
+                        submission=submission,
+                    )
                     uow.commit()
                 return PaperSubmissionResult(
                     proposal_id=str(proposal["proposal_id"]),
@@ -222,6 +237,14 @@ class SubmissionService:
                     "updated_at": _now_utc(request.now).isoformat(),
                 }
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="submission",
+                    outcome=gate_status,
+                    status=status,
+                    proposal=proposal,
+                    submission=submission,
+                )
                 uow.commit()
             return PaperSubmissionResult(
                 proposal_id=str(proposal["proposal_id"]),
@@ -340,6 +363,14 @@ class SubmissionService:
                     "updated_at": _now_utc(request.now).isoformat(),
                 }
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="submission",
+                    outcome=SUBMISSION_NOOP,
+                    status=status,
+                    proposal=proposal,
+                    submission=submission,
+                )
                 uow.commit()
             return PaperSubmissionResult(
                 proposal_id=str(proposal["proposal_id"]),
@@ -426,6 +457,14 @@ class SubmissionService:
                 "updated_at": _now_utc(request.now).isoformat(),
             }
             status_path = uow.status.write_status(status)
+            enqueue_paper_notification(
+                uow,
+                stage="submission",
+                outcome=SUBMISSION_SUBMITTED,
+                status=status,
+                proposal=proposal,
+                submission=submission,
+            )
             uow.commit()
         return PaperSubmissionResult(
             proposal_id=str(proposal["proposal_id"]),

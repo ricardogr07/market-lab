@@ -11,12 +11,16 @@ from typing_extensions import Protocol
 
 PaperHostedEnvironment = Literal["dev", "uat", "paper-prod"]
 PaperHostedPhase = Literal["decision", "agent_approve", "submit", "reconcile"]
+PaperOutboxDeliveryStatus = Literal["pending", "failed", "delivered"]
 
 PAPER_HOSTED_ENVIRONMENTS: frozenset[PaperHostedEnvironment] = frozenset(
     ("dev", "uat", "paper-prod")
 )
 PAPER_HOSTED_PHASES: frozenset[PaperHostedPhase] = frozenset(
     ("decision", "agent_approve", "submit", "reconcile")
+)
+PAPER_OUTBOX_DELIVERY_STATUSES: frozenset[PaperOutboxDeliveryStatus] = frozenset(
+    ("pending", "failed", "delivered")
 )
 PAPER_HOSTED_METADATA_FIELDS = (
     "deployment_id",
@@ -34,6 +38,10 @@ PAPER_HOSTED_METADATA_FIELDS = (
 
 class PaperDeploymentRegistryConflictError(RuntimeError):
     """Raised when a hosted idempotency key is replayed with different metadata."""
+
+
+class PaperOutboxConflictError(RuntimeError):
+    """Raised when an outbox message ID is reused with different event data."""
 
 
 def _validated_hosted_metadata(payload: Mapping[str, Any]) -> dict[str, str]:
@@ -382,6 +390,103 @@ class PaperStatusRepository(Protocol):
     def write_status(self, payload: dict[str, Any]) -> Path: ...
 
 
+@dataclass(slots=True, frozen=True)
+class PaperOutboxRecord:
+    message_id: str
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+    delivery_status: PaperOutboxDeliveryStatus = "pending"
+    delivery_attempts: int = 0
+    delivered_at: str | None = None
+    last_error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.message_id.strip() == "":
+            raise ValueError("Paper outbox message_id must not be empty.")
+        if self.event_type.strip() == "":
+            raise ValueError("Paper outbox event_type must not be empty.")
+        if self.created_at.strip() == "":
+            raise ValueError("Paper outbox created_at must not be empty.")
+        if self.delivery_status not in PAPER_OUTBOX_DELIVERY_STATUSES:
+            allowed = ", ".join(sorted(PAPER_OUTBOX_DELIVERY_STATUSES))
+            raise ValueError(f"Unsupported paper outbox delivery_status: expected one of {allowed}.")
+        if self.delivery_attempts < 0:
+            raise ValueError("Paper outbox delivery_attempts must not be negative.")
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "message_id": self.message_id,
+            "event_type": self.event_type,
+            "payload": dict(self.payload),
+            "created_at": self.created_at,
+            "delivery_status": self.delivery_status,
+            "delivery_attempts": self.delivery_attempts,
+            "delivered_at": self.delivered_at,
+            "last_error": self.last_error,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> PaperOutboxRecord:
+        raw_payload = payload.get("payload", {})
+        if not isinstance(raw_payload, dict):
+            raise TypeError("Paper outbox payload must be an object.")
+        return cls(
+            message_id=str(payload.get("message_id", "")),
+            event_type=str(payload.get("event_type", "")),
+            payload=dict(raw_payload),
+            created_at=str(payload.get("created_at", "")),
+            delivery_status=cast(
+                PaperOutboxDeliveryStatus,
+                str(payload.get("delivery_status", "pending")),
+            ),
+            delivery_attempts=int(payload.get("delivery_attempts", 0)),
+            delivered_at=(
+                None
+                if payload.get("delivered_at") is None
+                else str(payload.get("delivered_at"))
+            ),
+            last_error=(
+                None if payload.get("last_error") is None else str(payload.get("last_error"))
+            ),
+        )
+
+
+@runtime_checkable
+class PaperOutboxRepository(Protocol):
+    def enqueue(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> PaperOutboxRecord: ...
+
+    def get(self, message_id: str) -> PaperOutboxRecord | None: ...
+
+    def list_pending(
+        self,
+        *,
+        limit: int = 100,
+        event_types: frozenset[str] | None = None,
+    ) -> list[PaperOutboxRecord]: ...
+
+    def mark_delivered(
+        self,
+        *,
+        message_id: str,
+        delivered_at: str,
+    ) -> PaperOutboxRecord: ...
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        error: str,
+    ) -> PaperOutboxRecord: ...
+
+
 @runtime_checkable
 class PaperUnitOfWork(Protocol):
     @property
@@ -389,6 +494,9 @@ class PaperUnitOfWork(Protocol):
 
     @property
     def status(self) -> PaperStatusRepository: ...
+
+    @property
+    def outbox(self) -> PaperOutboxRepository: ...
 
     def commit(self) -> None: ...
 
@@ -424,14 +532,14 @@ class PaperArtifactStore(Protocol):
         *,
         trade_date: str,
         payload: dict[str, Any],
-    ) -> Path: ...
+    ) -> Path | str: ...
 
     def write_trade_order_preview(
         self,
         *,
         trade_date: str,
         payload: dict[str, Any],
-    ) -> Path: ...
+    ) -> Path | str: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -439,6 +547,7 @@ class PaperDecisionRequest:
     now: datetime | None = None
     provider: PaperHistoryProvider | None = None
     broker: PaperBroker | None = None
+    hosted_context: PaperHostedExecutionContext | None = None
 
 
 @dataclass(slots=True, frozen=True)

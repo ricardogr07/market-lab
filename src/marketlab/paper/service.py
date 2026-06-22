@@ -62,14 +62,13 @@ from marketlab.paper.observability import (
     hosted_root_execution_context,
     paper_execution_context,
 )
+from marketlab.paper.outbox import deliver_pending_paper_notifications
 from marketlab.paper.persistence import (
-    build_filesystem_paper_artifact_store,
     build_filesystem_paper_deployment_registry,
-    build_filesystem_paper_uow_factory,
+    build_paper_artifact_store,
+    build_paper_uow_factory,
     build_postgres_paper_deployment_registry,
-    build_postgres_paper_uow_factory,
     build_sqlite_paper_deployment_registry,
-    build_sqlite_paper_uow_factory,
 )
 from marketlab.paper.state import PaperStateStore
 
@@ -83,13 +82,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _paper_uow_factory(config: ExperimentConfig) -> PaperUnitOfWorkFactory:
-    if config.paper.persistence_backend == "filesystem":
-        return build_filesystem_paper_uow_factory(config)
-    if config.paper.persistence_backend == "sqlite":
-        return build_sqlite_paper_uow_factory(config)
-    if config.paper.persistence_backend == "postgres":
-        return build_postgres_paper_uow_factory(config)
-    raise ValueError(f"Unsupported paper persistence backend: {config.paper.persistence_backend}")
+    return build_paper_uow_factory(config)
 
 
 def _paper_deployment_registry(config: ExperimentConfig) -> PaperDeploymentRegistry:
@@ -115,7 +108,7 @@ def _paper_broker_factory(config: ExperimentConfig) -> PaperBrokerFactory:
 
 
 def _paper_artifact_store(config: ExperimentConfig) -> PaperArtifactStore:
-    return build_filesystem_paper_artifact_store(config)
+    return build_paper_artifact_store(config)
 
 
 def _paper_notification_sink(config: ExperimentConfig) -> PaperNotificationSink:
@@ -203,6 +196,7 @@ def run_paper_decision(
         execution_context=decision_context,
     )
     start_time = perf_counter()
+    notification_delivery_ids: tuple[str, ...] = ()
     try:
         with bind_execution_context(decision_context):
             result = DecisionService(
@@ -215,15 +209,15 @@ def run_paper_decision(
                     now=now,
                     provider=provider,
                     broker=broker,
+                    hosted_context=hosted_context,
                 )
             )
-            sink = notification_sink or _paper_notification_sink(config)
-            notification_path = sink.notify_decision(
-                outcome=_decision_notification_outcome(result.status),
-                status=result.status,
-                proposal=result.proposal,
+            notification_result = deliver_pending_paper_notifications(
+                uow_factory=_paper_uow_factory(config),
+                sink=notification_sink or _paper_notification_sink(config),
                 now=now,
             )
+            notification_delivery_ids = notification_result.delivered_message_ids
     except Exception as exc:
         emit_structured_log(
             LOGGER,
@@ -261,7 +255,7 @@ def run_paper_decision(
                     "status_path": result.status_path,
                     "proposal_path": result.proposal_path,
                     "evidence_path": result.evidence_path,
-                    "notification_path": str(notification_path),
+                    "notification_delivery_ids": list(notification_delivery_ids),
                 },
             ),
         ),
@@ -348,7 +342,7 @@ def decide_paper_proposal(
         execution_context=approval_context,
     )
     start_time = perf_counter()
-    notification_path: str | None = None
+    notification_delivery_ids: tuple[str, ...] = ()
     try:
         with bind_execution_context(approval_context):
             result = ApprovalService(config, uow_factory=_paper_uow_factory(config)).run(
@@ -364,15 +358,12 @@ def decide_paper_proposal(
                     now=now,
                 )
             )
-            if result.proposal is not None and result.approval is not None:
-                sink = notification_sink or _paper_notification_sink(config)
-                notification_path = str(
-                    sink.notify_approval(
-                        proposal=result.proposal,
-                        approval_record=result.approval,
-                        now=now,
-                    )
-                )
+            notification_result = deliver_pending_paper_notifications(
+                uow_factory=_paper_uow_factory(config),
+                sink=notification_sink or _paper_notification_sink(config),
+                now=now,
+            )
+            notification_delivery_ids = notification_result.delivered_message_ids
     except Exception as exc:
         emit_structured_log(
             LOGGER,
@@ -411,7 +402,7 @@ def decide_paper_proposal(
                     "status_path": result.status_path,
                     "proposal_path": result.proposal_path,
                     "approval_path": result.approval_path,
-                    "notification_path": notification_path,
+                    "notification_delivery_ids": list(notification_delivery_ids),
                 },
             ),
         ),
@@ -558,6 +549,7 @@ def run_paper_submit(
         execution_context=submission_context,
     )
     start_time = perf_counter()
+    notification_delivery_ids: tuple[str, ...] = ()
     try:
         with bind_execution_context(submission_context):
             result = SubmissionService(
@@ -572,14 +564,12 @@ def run_paper_submit(
                     retry_failed_submission=retry_failed_submission,
                 )
             )
-            sink = notification_sink or _paper_notification_sink(config)
-            notification_path = sink.notify_submission(
-                outcome=str(result.status.get("status", "")),
-                status=result.status,
-                proposal=result.proposal,
-                submission=result.submission,
+            notification_result = deliver_pending_paper_notifications(
+                uow_factory=_paper_uow_factory(config),
+                sink=notification_sink or _paper_notification_sink(config),
                 now=now,
             )
+            notification_delivery_ids = notification_result.delivered_message_ids
     except Exception as exc:
         emit_structured_log(
             LOGGER,
@@ -616,7 +606,7 @@ def run_paper_submit(
                     "component": "paper_service",
                     "status_path": result.status_path,
                     "submission_path": result.submission_path,
-                    "notification_path": str(notification_path),
+                    "notification_delivery_ids": list(notification_delivery_ids),
                 },
             ),
         ),

@@ -40,6 +40,7 @@ from marketlab.paper.core import (
     _paper_symbol_token,
     validate_paper_trading_config,
 )
+from marketlab.paper.outbox import enqueue_paper_notification
 from marketlab.strategies.tiered_allocation import nearest_tier, target_weight_for_score
 from marketlab.targets import add_forward_targets, build_rebalance_snapshots
 
@@ -284,6 +285,12 @@ class DecisionService:
             }
             with self._uow_factory() as uow:
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="decision",
+                    outcome=str(status["reason"]),
+                    status=status,
+                )
                 uow.commit()
             return PaperDecisionResult(
                 status_path=str(status_path),
@@ -311,6 +318,12 @@ class DecisionService:
             }
             with self._uow_factory() as uow:
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="decision",
+                    outcome=str(status["reason"]),
+                    status=status,
+                )
                 uow.commit()
             return PaperDecisionResult(
                 status_path=str(status_path),
@@ -360,6 +373,13 @@ class DecisionService:
                     "updated_at": _now_utc(request.now).isoformat(),
                 }
                 status_path = uow.status.write_status(status)
+                enqueue_paper_notification(
+                    uow,
+                    stage="decision",
+                    outcome="existing_proposal",
+                    status=status,
+                    proposal=existing,
+                )
                 uow.commit()
                 return PaperDecisionResult(
                     proposal_id=proposal_id,
@@ -453,6 +473,28 @@ class DecisionService:
                 "updated_at": _now_utc(request.now).isoformat(),
             }
             status_path = uow.status.write_status(status)
+            enqueue_paper_notification(
+                uow,
+                stage="decision",
+                outcome="proposal_created",
+                status=status,
+                proposal=proposal,
+            )
+            if request.hosted_context is not None and config.paper.execution_mode == "agent_approval":
+                approval_context = request.hosted_context.derive(
+                    phase="agent_approve",
+                    suffix=proposal_id,
+                )
+                uow.outbox.enqueue(
+                    message_id=approval_context.idempotency_key,
+                    event_type="paper.approval.requested",
+                    payload={
+                        "proposal_id": proposal_id,
+                        "trade_date": effective_date,
+                        "hosted_context": approval_context.as_metadata(),
+                    },
+                    created_at=status["updated_at"],
+                )
             uow.commit()
         return PaperDecisionResult(
             proposal_id=proposal_id,

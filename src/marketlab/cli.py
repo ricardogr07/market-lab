@@ -28,12 +28,27 @@ from marketlab.paper import (
     run_scheduler_loop,
 )
 from marketlab.paper.contracts import PaperHostedExecutionContext, PaperHostedPhase
+from marketlab.paper.notifications import build_telegram_paper_notification_sink
 from marketlab.paper.observability import (
     hosted_execution_details,
     paper_execution_context,
     root_execution_context,
 )
-from marketlab.paper.persistence import migrate_paper_postgres_database
+from marketlab.paper.outbox import (
+    PAPER_NOTIFICATION_EVENT_TYPE,
+    build_paper_outbox_publisher,
+    deliver_pending_paper_notifications,
+    deliver_pending_paper_outbox,
+)
+from marketlab.paper.persistence import (
+    build_paper_uow_factory,
+    migrate_paper_postgres_database,
+    sync_paper_review_artifacts,
+)
+from marketlab.paper.service_bus import (
+    PAPER_APPROVAL_REQUEST_EVENT_TYPE,
+    receive_paper_approval_requests,
+)
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
 from marketlab.reports.phase8_bull_counterfactual import (
     write_phase8_bull_counterfactual,
@@ -181,6 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     paper_db_migrate = subparsers.add_parser("paper-db-migrate")
     paper_db_migrate.add_argument("--config", required=True)
+
+    paper_outbox_deliver = subparsers.add_parser("paper-outbox-deliver")
+    paper_outbox_deliver.add_argument("--config", required=True)
+    paper_outbox_deliver.add_argument("--limit", type=int, default=100)
+
+    paper_notifications_deliver = subparsers.add_parser("paper-notifications-deliver")
+    paper_notifications_deliver.add_argument("--config", required=True)
+    paper_notifications_deliver.add_argument("--limit", type=int, default=100)
+
+    paper_blob_sync = subparsers.add_parser("paper-blob-sync")
+    paper_blob_sync.add_argument("--config", required=True)
+
+    paper_service_bus_receive = subparsers.add_parser("paper-service-bus-receive")
+    paper_service_bus_receive.add_argument("--config", required=True)
+    paper_service_bus_receive.add_argument("--max-messages", type=int, default=10)
+    paper_service_bus_receive.add_argument("--max-wait-seconds", type=float, default=5.0)
 
     phase9_shadow_decision = subparsers.add_parser("phase9-shadow-decision")
     phase9_shadow_decision.add_argument("--config", required=True)
@@ -413,6 +444,116 @@ def _run_paper_report_command(
     return 0, "success"
 
 
+def _run_paper_outbox_delivery_command(
+    config,
+    *,
+    limit: int,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    publisher = build_paper_outbox_publisher(config)
+    if publisher is None:
+        raise ValueError(
+            "paper-outbox-deliver requires a configured paper.azure.service_bus_backend."
+        )
+    result = deliver_pending_paper_outbox(
+        uow_factory=build_paper_uow_factory(config),
+        publisher=publisher,
+        limit=limit,
+        event_types=frozenset((PAPER_APPROVAL_REQUEST_EVENT_TYPE,)),
+    )
+    print(
+        json.dumps(
+            {
+                "delivered_message_ids": result.delivered_message_ids,
+                "failed_message_ids": result.failed_message_ids,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return (1 if result.failed_message_ids else 0), (
+        "failed" if result.failed_message_ids else "success"
+    )
+
+
+def _run_paper_notification_delivery_command(
+    config,
+    *,
+    limit: int,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    result = deliver_pending_paper_notifications(
+        uow_factory=build_paper_uow_factory(config),
+        sink=build_telegram_paper_notification_sink(config),
+        limit=limit,
+    )
+    print(
+        json.dumps(
+            {
+                "event_type": PAPER_NOTIFICATION_EVENT_TYPE,
+                "delivered_message_ids": result.delivered_message_ids,
+                "failed_message_ids": result.failed_message_ids,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return (1 if result.failed_message_ids else 0), (
+        "failed" if result.failed_message_ids else "success"
+    )
+
+
+def _run_paper_blob_sync_command(
+    config,
+    *,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    writes = sync_paper_review_artifacts(config)
+    print(
+        json.dumps(
+            {
+                "artifact_count": len(writes),
+                "blob_uris": [write.blob_uri for write in writes],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0, "success"
+
+
+def _run_paper_service_bus_receive_command(
+    config,
+    *,
+    max_messages: int,
+    max_wait_seconds: float,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    result = receive_paper_approval_requests(
+        config,
+        max_messages=max_messages,
+        max_wait_seconds=max_wait_seconds,
+    )
+    print(
+        json.dumps(
+            {
+                "completed_message_ids": result.completed_message_ids,
+                "abandoned_message_ids": result.abandoned_message_ids,
+                "failure_messages": result.failure_messages,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return (1 if result.failure_messages else 0), (
+        "failed" if result.failure_messages else "success"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     raw_args = list(sys.argv[1:] if argv is None else argv)
@@ -551,6 +692,46 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(f"Applied paper database schema version: {schema_version}")
         return 0
+
+    if args.command == "paper-outbox-deliver":
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_outbox_delivery_command(
+                config,
+                limit=args.limit,
+                execution_context=execution_context,
+            ),
+        )
+
+    if args.command == "paper-notifications-deliver":
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_notification_delivery_command(
+                config,
+                limit=args.limit,
+                execution_context=execution_context,
+            ),
+        )
+
+    if args.command == "paper-blob-sync":
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_blob_sync_command(
+                config,
+                execution_context=execution_context,
+            ),
+        )
+
+    if args.command == "paper-service-bus-receive":
+        return _run_logged_paper_command(
+            args.command,
+            action=lambda execution_context: _run_paper_service_bus_receive_command(
+                config,
+                max_messages=args.max_messages,
+                max_wait_seconds=args.max_wait_seconds,
+                execution_context=execution_context,
+            ),
+        )
 
     if args.command == "paper-decision":
         return _run_logged_paper_command(

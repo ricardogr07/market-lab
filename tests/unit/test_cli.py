@@ -4,6 +4,7 @@ import json
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from tests._paper_fakes import write_phase7_paper_config
@@ -218,6 +219,121 @@ def test_paper_db_migrate_rejects_a_non_postgres_config(
             cli.main(["paper-db-migrate", "--config", str(config_path)])
 
     assert excinfo.value.code == 2
+
+
+def test_paper_outbox_deliver_runs_only_approval_request_records(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    publisher = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+    monkeypatch.setattr(cli, "build_paper_outbox_publisher", lambda received_config: publisher)
+    monkeypatch.setattr(cli, "build_paper_uow_factory", lambda received_config: "uow-factory")
+
+    def _deliver(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace(delivered_message_ids=("approval-1",), failed_message_ids=())
+
+    monkeypatch.setattr(cli, "deliver_pending_paper_outbox", _deliver)
+
+    exit_code = cli.main(["paper-outbox-deliver", "--config", "dummy.yaml", "--limit", "7"])
+
+    assert exit_code == 0
+    assert received == {
+        "uow_factory": "uow-factory",
+        "publisher": publisher,
+        "limit": 7,
+        "event_types": frozenset(("paper.approval.requested",)),
+    }
+    assert json.loads(capsys.readouterr().out) == {
+        "delivered_message_ids": ["approval-1"],
+        "failed_message_ids": [],
+    }
+
+
+def test_paper_notifications_deliver_reports_failed_messages_with_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    sink = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+    monkeypatch.setattr(cli, "build_paper_uow_factory", lambda received_config: "uow-factory")
+    monkeypatch.setattr(
+        cli,
+        "build_telegram_paper_notification_sink",
+        lambda received_config: sink,
+    )
+
+    def _deliver(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace(delivered_message_ids=(), failed_message_ids=("notification-1",))
+
+    monkeypatch.setattr(cli, "deliver_pending_paper_notifications", _deliver)
+
+    exit_code = cli.main(["paper-notifications-deliver", "--config", "dummy.yaml"])
+
+    assert exit_code == 1
+    assert received == {"uow_factory": "uow-factory", "sink": sink, "limit": 100}
+    assert json.loads(capsys.readouterr().out) == {
+        "delivered_message_ids": [],
+        "event_type": "paper.notification.requested",
+        "failed_message_ids": ["notification-1"],
+    }
+
+
+def test_paper_blob_sync_and_service_bus_receive_are_bounded_worker_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+    monkeypatch.setattr(
+        cli,
+        "sync_paper_review_artifacts",
+        lambda received_config: (SimpleNamespace(blob_uri="https://blob/review.json"),),
+    )
+    monkeypatch.setattr(
+        cli,
+        "receive_paper_approval_requests",
+        lambda received_config, **kwargs: received.update(kwargs)
+        or SimpleNamespace(
+            completed_message_ids=("approval-1",),
+            abandoned_message_ids=(),
+            failure_messages=(),
+        ),
+    )
+
+    assert cli.main(["paper-blob-sync", "--config", "dummy.yaml"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "artifact_count": 1,
+        "blob_uris": ["https://blob/review.json"],
+    }
+
+    assert (
+        cli.main(
+            [
+                "paper-service-bus-receive",
+                "--config",
+                "dummy.yaml",
+                "--max-messages",
+                "4",
+                "--max-wait-seconds",
+                "2.5",
+            ]
+        )
+        == 0
+    )
+    assert received == {"max_messages": 4, "max_wait_seconds": 2.5}
+    assert json.loads(capsys.readouterr().out) == {
+        "abandoned_message_ids": [],
+        "completed_message_ids": ["approval-1"],
+        "failure_messages": [],
+    }
 
 
 def test_paper_decision_keeps_path_stdout_and_structured_logs_on_stderr(

@@ -12,6 +12,7 @@ from marketlab.paper.core import (
     _now_utc,
     validate_paper_trading_config,
 )
+from marketlab.paper.outbox import enqueue_paper_notification
 
 
 class ApprovalService:
@@ -98,6 +99,14 @@ class ApprovalService:
                 "updated_at": approval_timestamp,
             }
             status_path = uow.status.write_status(status)
+            enqueue_paper_notification(
+                uow,
+                stage="approval",
+                outcome=approval_status,
+                status=status,
+                proposal=proposal,
+                approval_record=approval_record,
+            )
             uow.commit()
             return PaperApprovalResult(
                 proposal_id=request.proposal_id,

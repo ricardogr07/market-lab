@@ -19,6 +19,9 @@ PAPER_EXECUTION_MODES = {"autonomous", "agent_approval", "manual_approval"}
 PAPER_ORDER_TYPES = {"crypto_market_gtc", "crypto_market_ioc", "day_market"}
 PAPER_POSITION_SIZING = {"full_equity_fractional", "target_weight_fractional"}
 PAPER_AGENT_BACKENDS = {"claude", "deterministic_consensus", "openai"}
+PAPER_AZURE_ARTIFACT_BACKENDS = {"filesystem", "azure_blob"}
+PAPER_AZURE_SECRET_BACKENDS = {"environment", "key_vault"}
+PAPER_AZURE_SERVICE_BUS_BACKENDS = {"disabled", "in_memory", "azure_service_bus"}
 TARGET_TYPES = {"allocation_utility", "direction", "regime_state", "return"}
 ML_STRATEGY_ALLOCATION_MODES = {"binary", "direct_tiered", "tiered"}
 ML_STRATEGY_TUNING_OBJECTIVES = {
@@ -435,6 +438,20 @@ class PaperNotificationsConfig:
 
 
 @dataclass(slots=True)
+class PaperAzureConfig:
+    artifact_backend: str = "filesystem"
+    secret_backend: str = "environment"
+    service_bus_backend: str = "disabled"
+    blob_account_url: str = ""
+    blob_container_name: str = ""
+    artifact_environment: str = ""
+    artifact_deployment_id: str = ""
+    key_vault_url: str = ""
+    service_bus_namespace: str = ""
+    service_bus_queue_name: str = ""
+
+
+@dataclass(slots=True)
 class PaperConfig:
     enabled: bool = False
     data_provider: str = "alpaca"
@@ -455,6 +472,7 @@ class PaperConfig:
     approval_inbox_dir: str = "artifacts/paper/inbox"
     state_dir: str = "artifacts/paper/state"
     poll_interval_seconds: int = 30
+    azure: PaperAzureConfig = field(default_factory=PaperAzureConfig)
     notifications: PaperNotificationsConfig = field(default_factory=PaperNotificationsConfig)
 
 
@@ -1353,6 +1371,50 @@ def _validate_config(config: ExperimentConfig) -> None:
     if paper.poll_interval_seconds < 1:
         raise ValueError("paper.poll_interval_seconds must be at least 1.")
 
+    paper_azure = paper.azure
+    if paper_azure.artifact_backend not in PAPER_AZURE_ARTIFACT_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_AZURE_ARTIFACT_BACKENDS))
+        raise ValueError(f"paper.azure.artifact_backend must be one of: {allowed}")
+    if paper_azure.secret_backend not in PAPER_AZURE_SECRET_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_AZURE_SECRET_BACKENDS))
+        raise ValueError(f"paper.azure.secret_backend must be one of: {allowed}")
+    if paper_azure.service_bus_backend not in PAPER_AZURE_SERVICE_BUS_BACKENDS:
+        allowed = ", ".join(sorted(PAPER_AZURE_SERVICE_BUS_BACKENDS))
+        raise ValueError(f"paper.azure.service_bus_backend must be one of: {allowed}")
+    if paper_azure.artifact_backend == "azure_blob":
+        required_blob_fields = (
+            "blob_account_url",
+            "blob_container_name",
+            "artifact_environment",
+            "artifact_deployment_id",
+        )
+        for field_name in required_blob_fields:
+            if str(getattr(paper_azure, field_name)).strip() == "":
+                raise ValueError(
+                    "paper.azure."
+                    f"{field_name} must be set when paper.azure.artifact_backend='azure_blob'."
+                )
+        if not paper_azure.blob_account_url.startswith("https://"):
+            raise ValueError(
+                "paper.azure.blob_account_url must use https when "
+                "paper.azure.artifact_backend='azure_blob'."
+            )
+    if paper_azure.secret_backend == "key_vault" and paper_azure.key_vault_url.strip() == "":
+        raise ValueError(
+            "paper.azure.key_vault_url must be set when paper.azure.secret_backend='key_vault'."
+        )
+    if (
+        paper_azure.service_bus_backend == "azure_service_bus"
+        and (
+            paper_azure.service_bus_namespace.strip() == ""
+            or paper_azure.service_bus_queue_name.strip() == ""
+        )
+    ):
+        raise ValueError(
+            "paper.azure.service_bus_namespace and paper.azure.service_bus_queue_name must be set "
+            "when paper.azure.service_bus_backend='azure_service_bus'."
+        )
+
     optimized = config.baselines.optimized
     if optimized.method not in OPTIMIZED_METHODS:
         allowed = ", ".join(sorted(OPTIMIZED_METHODS))
@@ -1770,6 +1832,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     evaluation_payload = payload.get("evaluation") or {}
     paper_payload = payload.get("paper") or {}
     paper_notifications_payload = paper_payload.get("notifications") or {}
+    paper_azure_payload = paper_payload.get("azure") or {}
     paper_defaults = PaperConfig()
 
     config = ExperimentConfig(
@@ -1913,6 +1976,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
                 "poll_interval_seconds",
                 paper_defaults.poll_interval_seconds,
             ),
+            azure=_section(PaperAzureConfig, paper_azure_payload),
             notifications=PaperNotificationsConfig(
                 telegram=_section(
                     TelegramNotificationsConfig,

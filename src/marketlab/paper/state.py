@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ class PaperStateStore:
         self.inbox_root = config.paper_approval_inbox_dir
         self.state_root = config.paper_state_dir
         self.notifications_root = self.state_root / "notifications"
+        self.outbox_root = self.state_root / "outbox"
         self.trades_root = self.state_root / "trades"
         self.reports_root = self.state_root.parent / "reports"
         self.status_path = self.state_root / "status.json"
@@ -32,6 +34,7 @@ class PaperStateStore:
             self.inbox_root,
             self.state_root,
             self.notifications_root,
+            self.outbox_root,
             self.trades_root,
             self.reports_root,
         ):
@@ -65,6 +68,10 @@ class PaperStateStore:
 
     def inbox_proposal_path(self, proposal_id: str) -> Path:
         return self.inbox_root / f"{proposal_id}.json"
+
+    def outbox_record_path(self, message_id: str) -> Path:
+        digest = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
+        return self.outbox_root / f"{digest}.json"
 
     def report_dir(self, start_date: str, end_date: str) -> Path:
         path = self.reports_root / f"{start_date}_{end_date}"

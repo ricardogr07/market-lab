@@ -12,6 +12,7 @@ P9_05_PLAN = ROOT / "docs" / "phase9" / "P9-05-WORKER-PLAN.md"
 P9_06_PLAN = ROOT / "docs" / "phase9" / "P9-06-WORKER-PLAN.md"
 P9_07_PLAN = ROOT / "docs" / "phase9" / "P9-07-WORKER-PLAN.md"
 P9_08_PLAN = ROOT / "docs" / "phase9" / "P9-08-WORKER-PLAN.md"
+P9_09_PLAN = ROOT / "docs" / "phase9" / "P9-09-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -332,3 +333,40 @@ def test_p9_08_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-08-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-08 Worker Plan: phase9/P9-08-WORKER-PLAN.md" in nav
     assert "phase9/P9-08-WORKER-PLAN.md" in index
+
+
+def test_p9_09_plan_defines_runtime_seams_blob_parity_and_outbox_delivery() -> None:
+    content = P9_09_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-paper-azure-seams",
+        "feat(phase9): add paper Azure config and secret seams",
+        "paper.azure config section",
+        "EnvironmentPaperSecretProvider",
+        "let Alpaca and Telegram resolve secrets through the new port",
+        "route paper artifact-store construction through a backend selector",
+        "AzureBlobPaperArtifactStore",
+        "preserve the filesystem JSON serialization exactly in Blob payloads",
+        "scope Blob addresses by environment, deployment, and ISO trade date",
+        "idempotent outbox records to filesystem, SQLite, and PostgreSQL adapters",
+        "forward-only PostgreSQL `003_paper_outbox.sql` migration",
+        "Azure Service Bus publisher that preserves the outbox message ID",
+        "failed delivery retries and delivered records are not republished",
+        "persist Telegram notification intent atomically with decision, approval, and submission state",
+        "validate and consume one `paper.approval.requested` envelope at a time",
+        "Azure Service Bus receiver loop and message settlement",
+        "Terraform or GitHub Actions changes",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_09_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-09-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-09 Worker Plan: phase9/P9-09-WORKER-PLAN.md" in nav
+    assert "phase9/P9-09-WORKER-PLAN.md" in index

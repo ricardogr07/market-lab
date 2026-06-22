@@ -23,6 +23,9 @@ from marketlab.paper.contracts import (
     PaperDeploymentRegistry,
     PaperDeploymentRegistryConflictError,
     PaperHostedExecutionContext,
+    PaperOutboxConflictError,
+    PaperOutboxRecord,
+    PaperOutboxRepository,
     PaperReconciliationRequest,
     PaperStatusRepository,
     PaperTradeRepository,
@@ -89,6 +92,7 @@ class _InMemoryStoreState:
     approvals_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
     submissions_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
     order_status_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
+    outbox_by_id: dict[str, PaperOutboxRecord] = field(default_factory=dict)
     backup_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -100,6 +104,7 @@ class _PendingState:
     approvals_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
     submissions_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
     order_status_by_trade_date: dict[str, dict[str, Any]] = field(default_factory=dict)
+    outbox_by_id: dict[str, PaperOutboxRecord] = field(default_factory=dict)
 
 
 class InMemoryPaperTradeRepository(PaperTradeRepository):
@@ -249,12 +254,118 @@ class InMemoryPaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+class InMemoryPaperOutboxRepository(PaperOutboxRepository):
+    def __init__(self, state: _InMemoryStoreState, pending: _PendingState) -> None:
+        self._state = state
+        self._pending = pending
+
+    def enqueue(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> PaperOutboxRecord:
+        existing = self.get(message_id)
+        if existing is not None:
+            if existing.event_type != event_type or existing.payload != payload:
+                raise PaperOutboxConflictError(
+                    f"Paper outbox message ID {message_id!r} was reused with different event data."
+                )
+            return existing
+        record = PaperOutboxRecord(
+            message_id=message_id,
+            event_type=event_type,
+            payload=copy.deepcopy(payload),
+            created_at=created_at,
+        )
+        self._pending.outbox_by_id[message_id] = record
+        return record
+
+    def get(self, message_id: str) -> PaperOutboxRecord | None:
+        record = self._pending.outbox_by_id.get(message_id) or self._state.outbox_by_id.get(message_id)
+        return copy.deepcopy(record) if record is not None else None
+
+    def list_pending(
+        self,
+        *,
+        limit: int = 100,
+        event_types: frozenset[str] | None = None,
+    ) -> list[PaperOutboxRecord]:
+        if limit < 1:
+            raise ValueError("Paper outbox limit must be at least 1.")
+        records = {
+            **self._state.outbox_by_id,
+            **self._pending.outbox_by_id,
+        }
+        pending = [
+            copy.deepcopy(record)
+            for record in records.values()
+            if record.delivery_status in {"pending", "failed"}
+            and (event_types is None or record.event_type in event_types)
+        ]
+        return sorted(pending, key=lambda record: (record.created_at, record.message_id))[:limit]
+
+    def mark_delivered(
+        self,
+        *,
+        message_id: str,
+        delivered_at: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="delivered",
+            delivery_attempts=record.delivery_attempts + 1,
+            delivered_at=delivered_at,
+        )
+        self._pending.outbox_by_id[message_id] = updated
+        return updated
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        error: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        normalized_error = error.strip()
+        if normalized_error == "":
+            raise ValueError("Paper outbox error must not be empty.")
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="failed",
+            delivery_attempts=record.delivery_attempts + 1,
+            last_error=normalized_error,
+        )
+        self._pending.outbox_by_id[message_id] = updated
+        return updated
+
+    def _required_record(self, message_id: str) -> PaperOutboxRecord:
+        record = self.get(message_id)
+        if record is None:
+            raise KeyError(f"Unknown paper outbox message_id: {message_id}")
+        return record
+
+
 class InMemoryPaperUnitOfWork(PaperUnitOfWork):
     def __init__(self, factory: InMemoryPaperUnitOfWorkFactory) -> None:
         self._factory = factory
         self._pending = _PendingState()
         self._trades = InMemoryPaperTradeRepository(factory.root, factory.state, self._pending)
         self._status = InMemoryPaperStatusRepository(factory.root, factory.state, self._pending)
+        self._outbox = InMemoryPaperOutboxRepository(factory.state, self._pending)
         self._committed = False
 
     @property
@@ -265,12 +376,17 @@ class InMemoryPaperUnitOfWork(PaperUnitOfWork):
     def status(self) -> PaperStatusRepository:
         return self._status
 
+    @property
+    def outbox(self) -> PaperOutboxRepository:
+        return self._outbox
+
     def commit(self) -> None:
         self._factory.state.proposals_by_id.update(copy.deepcopy(self._pending.proposals_by_id))
         self._factory.state.evidence_by_trade_date.update(copy.deepcopy(self._pending.evidence_by_trade_date))
         self._factory.state.approvals_by_trade_date.update(copy.deepcopy(self._pending.approvals_by_trade_date))
         self._factory.state.submissions_by_trade_date.update(copy.deepcopy(self._pending.submissions_by_trade_date))
         self._factory.state.order_status_by_trade_date.update(copy.deepcopy(self._pending.order_status_by_trade_date))
+        self._factory.state.outbox_by_id.update(copy.deepcopy(self._pending.outbox_by_id))
         if self._pending.status is not None:
             self._factory.state.status = copy.deepcopy(self._pending.status)
         self._pending = _PendingState()

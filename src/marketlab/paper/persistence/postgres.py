@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -20,6 +20,10 @@ from marketlab.paper.contracts import (
     PaperDeploymentRegistry,
     PaperDeploymentRegistryConflictError,
     PaperHostedExecutionContext,
+    PaperOutboxConflictError,
+    PaperOutboxDeliveryStatus,
+    PaperOutboxRecord,
+    PaperOutboxRepository,
     PaperPhaseRunRecord,
     PaperStatusRepository,
     PaperTradeRepository,
@@ -436,6 +440,185 @@ class PostgreSQLPaperStatusRepository(PaperStatusRepository):
         return self.status_path
 
 
+def _outbox_record(row: dict[str, Any] | None) -> PaperOutboxRecord | None:
+    if row is None:
+        return None
+    payload = row["payload_json"]
+    if not isinstance(payload, dict):
+        raise TypeError("PostgreSQL paper outbox payload_json must decode to an object.")
+    return PaperOutboxRecord(
+        message_id=str(row["message_id"]),
+        event_type=str(row["event_type"]),
+        payload=dict(payload),
+        created_at=str(row["created_at"]),
+        delivery_status=cast(PaperOutboxDeliveryStatus, str(row["delivery_status"])),
+        delivery_attempts=int(row["delivery_attempts"]),
+        delivered_at=None if row["delivered_at"] is None else str(row["delivered_at"]),
+        last_error=None if row["last_error"] is None else str(row["last_error"]),
+    )
+
+
+class PostgreSQLPaperOutboxRepository(PaperOutboxRepository):
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def enqueue(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> PaperOutboxRecord:
+        record = PaperOutboxRecord(
+            message_id=message_id,
+            event_type=event_type,
+            payload=dict(payload),
+            created_at=created_at,
+        )
+        inserted = self._connection.execute(
+            """
+            INSERT INTO paper_outbox (
+                message_id, event_type, payload_json, created_at,
+                delivery_status, delivery_attempts, delivered_at, last_error
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (message_id) DO NOTHING
+            RETURNING message_id
+            """,
+            (
+                record.message_id,
+                record.event_type,
+                Jsonb(record.payload),
+                record.created_at,
+                record.delivery_status,
+                record.delivery_attempts,
+                record.delivered_at,
+                record.last_error,
+            ),
+        ).fetchone()
+        if inserted is not None:
+            return record
+        existing = self.get(message_id)
+        if existing is None:  # pragma: no cover - the unique conflict row must be queryable.
+            raise RuntimeError("Paper outbox enqueue did not persist or return an existing record.")
+        if existing.event_type != event_type or existing.payload != payload:
+            raise PaperOutboxConflictError(
+                f"Paper outbox message ID {message_id!r} was reused with different event data."
+            )
+        return existing
+
+    def get(self, message_id: str) -> PaperOutboxRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT message_id, event_type, payload_json, created_at,
+                   delivery_status, delivery_attempts, delivered_at, last_error
+            FROM paper_outbox
+            WHERE message_id = %s
+            """,
+            (message_id,),
+        ).fetchone()
+        return _outbox_record(row)
+
+    def list_pending(
+        self,
+        *,
+        limit: int = 100,
+        event_types: frozenset[str] | None = None,
+    ) -> list[PaperOutboxRecord]:
+        if limit < 1:
+            raise ValueError("Paper outbox limit must be at least 1.")
+        if event_types == frozenset():
+            return []
+        event_type_clause = ""
+        parameters: list[str | int] = []
+        if event_types is not None:
+            placeholders = ", ".join("%s" for _ in event_types)
+            event_type_clause = f" AND event_type IN ({placeholders})"
+            parameters.extend(sorted(event_types))
+        parameters.append(limit)
+        rows = self._connection.execute(
+            f"""
+            SELECT message_id, event_type, payload_json, created_at,
+                   delivery_status, delivery_attempts, delivered_at, last_error
+            FROM paper_outbox
+            WHERE delivery_status IN ('pending', 'failed')
+            {event_type_clause}
+            ORDER BY created_at, message_id
+            LIMIT %s
+            """,
+            parameters,
+        ).fetchall()
+        return [record for row in rows if (record := _outbox_record(row)) is not None]
+
+    def mark_delivered(
+        self,
+        *,
+        message_id: str,
+        delivered_at: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="delivered",
+            delivery_attempts=record.delivery_attempts + 1,
+            delivered_at=delivered_at,
+        )
+        self._save_delivery(updated)
+        return updated
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        error: str,
+    ) -> PaperOutboxRecord:
+        record = self._required_record(message_id)
+        if record.delivery_status == "delivered":
+            return record
+        normalized_error = error.strip()
+        if normalized_error == "":
+            raise ValueError("Paper outbox error must not be empty.")
+        updated = PaperOutboxRecord(
+            message_id=record.message_id,
+            event_type=record.event_type,
+            payload=record.payload,
+            created_at=record.created_at,
+            delivery_status="failed",
+            delivery_attempts=record.delivery_attempts + 1,
+            last_error=normalized_error,
+        )
+        self._save_delivery(updated)
+        return updated
+
+    def _required_record(self, message_id: str) -> PaperOutboxRecord:
+        record = self.get(message_id)
+        if record is None:
+            raise KeyError(f"Unknown paper outbox message_id: {message_id}")
+        return record
+
+    def _save_delivery(self, record: PaperOutboxRecord) -> None:
+        self._connection.execute(
+            """
+            UPDATE paper_outbox
+            SET delivery_status = %s, delivery_attempts = %s, delivered_at = %s, last_error = %s
+            WHERE message_id = %s
+            """,
+            (
+                record.delivery_status,
+                record.delivery_attempts,
+                record.delivered_at,
+                record.last_error,
+                record.message_id,
+            ),
+        )
+
+
 class PostgreSQLPaperDeploymentRegistry(PaperDeploymentRegistry):
     def __init__(self, config: ExperimentConfig) -> None:
         self._dsn = postgres_dsn_from_environment()
@@ -550,6 +733,7 @@ class PostgreSQLPaperUnitOfWork(PaperUnitOfWork):
             self._connection,
             self._artifact_writes,
         )
+        self._outbox = PostgreSQLPaperOutboxRepository(self._connection)
         self._committed = False
 
     @property
@@ -559,6 +743,10 @@ class PostgreSQLPaperUnitOfWork(PaperUnitOfWork):
     @property
     def status(self) -> PaperStatusRepository:
         return self._status
+
+    @property
+    def outbox(self) -> PaperOutboxRepository:
+        return self._outbox
 
     def commit(self) -> None:
         snapshots = _snapshot_artifacts(list(self._artifact_writes))
