@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,7 @@ INTERVAL_PERIODS_PER_YEAR = {
     "1m": 525600.0,
 }
 _ConfigSectionT = TypeVar("_ConfigSectionT")
+PAPER_RUNTIME_ENV_OVERRIDES = "MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES"
 
 
 @dataclass(slots=True)
@@ -577,6 +579,47 @@ def _config_base_dir(path: Path) -> Path:
     if path.parent.name == "configs":
         return path.parent.parent.resolve()
     return path.parent.resolve()
+
+
+def _env_override_enabled() -> bool:
+    value = os.environ.get(PAPER_RUNTIME_ENV_OVERRIDES, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _env_text(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped if stripped != "" else None
+
+
+def _apply_paper_runtime_env_overrides(config: ExperimentConfig) -> None:
+    if not _env_override_enabled():
+        return
+
+    paper_overrides = {
+        "MARKETLAB_PAPER_PERSISTENCE_BACKEND": ("paper", "persistence_backend"),
+    }
+    azure_overrides = {
+        "MARKETLAB_PAPER_AZURE_ARTIFACT_BACKEND": "artifact_backend",
+        "MARKETLAB_PAPER_AZURE_BLOB_ACCOUNT_URL": "blob_account_url",
+        "MARKETLAB_PAPER_AZURE_BLOB_CONTAINER_NAME": "blob_container_name",
+        "MARKETLAB_PAPER_AZURE_ARTIFACT_ENVIRONMENT": "artifact_environment",
+        "MARKETLAB_PAPER_AZURE_ARTIFACT_DEPLOYMENT_ID": "artifact_deployment_id",
+        "MARKETLAB_PAPER_AZURE_SECRET_BACKEND": "secret_backend",
+        "MARKETLAB_PAPER_AZURE_KEY_VAULT_URL": "key_vault_url",
+        "MARKETLAB_PAPER_AZURE_SERVICE_BUS_BACKEND": "service_bus_backend",
+        "MARKETLAB_PAPER_AZURE_SERVICE_BUS_NAMESPACE": "service_bus_namespace",
+        "MARKETLAB_PAPER_AZURE_SERVICE_BUS_QUEUE_NAME": "service_bus_queue_name",
+    }
+
+    for env_name, (_, field_name) in paper_overrides.items():
+        if (value := _env_text(env_name)) is not None:
+            setattr(config.paper, field_name, value)
+    for env_name, field_name in azure_overrides.items():
+        if (value := _env_text(env_name)) is not None:
+            setattr(config.paper.azure, field_name, value)
 
 
 def _normalize_mapping_sections(config: ExperimentConfig) -> None:
@@ -1987,6 +2030,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         base_dir=_config_base_dir(config_path),
     )
     _normalize_mapping_sections(config)
+    _apply_paper_runtime_env_overrides(config)
     config.baselines.optimized.views = [
         _section(BlackLittermanViewConfig, view)
         for view in optimized_payload.get("views") or []
