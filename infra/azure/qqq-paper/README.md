@@ -28,8 +28,8 @@ registration, `terraform plan`, `terraform apply`, `terraform destroy`,
 ## Supervised Dev Deployment Gate
 
 A separate supervised deployment session must review exact costs, names, image
-digest, secret IDs, backend settings, and Terraform plan output before any
-apply. Keep these defaults for the first reviewed apply:
+digest, secret IDs, PostgreSQL firewall rules, backend settings, and Terraform
+plan output before any apply. Keep these defaults for the first reviewed apply:
 
 ```hcl
 create_jobs                         = false
@@ -41,6 +41,11 @@ enable_broker_secret_refs           = false
 After the ACR exists and an immutable MarketLab image digest is published, a
 second reviewed apply may set `create_jobs = true` while still keeping the
 scheduler and Service Bus triggers disabled.
+
+When `create_jobs = true`, `postgres_firewall_rules` must contain the
+operator-approved egress IPs that are allowed to reach the PostgreSQL Flexible
+Server. Do not use a broad public range. Capture the source of each IP in the
+supervised deployment notes before applying.
 
 ## Runtime Configuration
 
@@ -63,6 +68,17 @@ MARKETLAB_PAPER_AZURE_SERVICE_BUS_BACKEND=azure_service_bus
 `MARKETLAB_PAPER_POSTGRES_DSN` is injected from a Key Vault secret reference.
 P9-10 does not implement passwordless PostgreSQL managed-identity
 authentication.
+
+Jobs run with the user-assigned managed identity and receive `AZURE_CLIENT_ID`
+so Azure SDK clients select that identity for Blob, Key Vault, and Service Bus
+RBAC operations.
+
+The checked-in config keeps `paper.state_dir` at `artifacts/paper/state`.
+Container Apps Jobs mount the `qqq-paper-state` Azure Files share at
+`/app/artifacts/paper/state` so separately invoked producer, delivery, and
+`paper-blob-sync` jobs operate on the same local review surface. Blob remains
+the review/archive destination; PostgreSQL remains the transactional state
+backend.
 
 ## Job Activation Order
 

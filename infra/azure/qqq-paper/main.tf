@@ -20,6 +20,7 @@ locals {
 
   common_env = {
     APPLICATIONINSIGHTS_CONNECTION_STRING        = azurerm_application_insights.qqq.connection_string
+    AZURE_CLIENT_ID                              = azurerm_user_assigned_identity.qqq.client_id
     MARKETLAB_CONFIG_VERSION                     = local.deployment_id
     MARKETLAB_DEPLOYMENT_ID                      = local.deployment_id
     MARKETLAB_ENVIRONMENT                        = var.environment
@@ -220,7 +221,7 @@ resource "azurerm_storage_account" "qqq" {
   min_tls_version                 = "TLS1_2"
   https_traffic_only_enabled      = true
   allow_nested_items_to_be_public = false
-  shared_access_key_enabled       = false
+  shared_access_key_enabled       = true
   default_to_oauth_authentication = true
   public_network_access_enabled   = true
   local_user_enabled              = false
@@ -238,7 +239,27 @@ resource "azurerm_storage_account" "qqq" {
     }
   }
 
+  share_properties {
+    retention_policy {
+      days = 30
+    }
+
+    smb {
+      versions                        = ["SMB3.1.1"]
+      authentication_types            = ["NTLMv2"]
+      kerberos_ticket_encryption_type = ["AES-256"]
+      channel_encryption_type         = ["AES-256-GCM"]
+    }
+  }
+
   tags = local.tags
+}
+
+resource "azurerm_storage_share" "paper_state" {
+  name               = "qqq-paper-state"
+  storage_account_id = azurerm_storage_account.qqq.id
+  quota              = var.paper_state_share_quota_gb
+  access_tier        = "Hot"
 }
 
 resource "azurerm_storage_container" "artifacts" {
@@ -275,6 +296,15 @@ resource "azurerm_storage_management_policy" "artifact_retention" {
   }
 
   depends_on = [azurerm_storage_container.artifacts]
+}
+
+resource "azurerm_container_app_environment_storage" "paper_state" {
+  name                         = "qqq-paper-state"
+  container_app_environment_id = azurerm_container_app_environment.qqq.id
+  account_name                 = azurerm_storage_account.qqq.name
+  share_name                   = azurerm_storage_share.paper_state.name
+  access_key                   = azurerm_storage_account.qqq.primary_access_key
+  access_mode                  = "ReadWrite"
 }
 
 resource "azurerm_servicebus_namespace" "qqq" {
@@ -329,6 +359,15 @@ resource "azurerm_postgresql_flexible_server_database" "qqq" {
   server_id = azurerm_postgresql_flexible_server.qqq.id
   charset   = "UTF8"
   collation = "en_US.utf8"
+}
+
+resource "azurerm_postgresql_flexible_server_firewall_rule" "job_access" {
+  for_each = var.postgres_firewall_rules
+
+  name             = "allow-${each.key}"
+  server_id        = azurerm_postgresql_flexible_server.qqq.id
+  start_ip_address = each.value.start_ip_address
+  end_ip_address   = each.value.end_ip_address
 }
 
 resource "azurerm_role_assignment" "qqq_acr_pull" {
@@ -466,10 +505,22 @@ resource "azurerm_container_app_job" "qqq" {
           secret_name = env.value.secret_name
         }
       }
+
+      volume_mounts {
+        name = "paper-state"
+        path = "/app/artifacts/paper/state"
+      }
+    }
+
+    volume {
+      name         = "paper-state"
+      storage_name = azurerm_container_app_environment_storage.paper_state.name
+      storage_type = "AzureFile"
     }
   }
 
   depends_on = [
+    azurerm_container_app_environment_storage.paper_state,
     azurerm_role_assignment.qqq_acr_pull,
     azurerm_role_assignment.qqq_blob_artifacts,
     azurerm_role_assignment.qqq_key_vault_secrets,

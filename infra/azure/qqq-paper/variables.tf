@@ -141,6 +141,20 @@ variable "enable_broker_secret_refs" {
   default     = false
 }
 
+variable "postgres_firewall_rules" {
+  description = "Operator-approved PostgreSQL Flexible Server firewall rules for Container Apps Job egress or supervised operator access."
+  type = map(object({
+    start_ip_address = string
+    end_ip_address   = string
+  }))
+  default = {}
+
+  validation {
+    condition     = !var.create_jobs || length(var.postgres_firewall_rules) > 0
+    error_message = "create_jobs requires at least one operator-approved PostgreSQL firewall rule for Container Apps Job database access."
+  }
+}
+
 variable "postgres_dsn_secret_id" {
   description = "Key Vault secret ID containing MARKETLAB_PAPER_POSTGRES_DSN for job execution."
   type        = string
@@ -224,6 +238,17 @@ variable "postgres_storage_mb" {
   validation {
     condition     = var.postgres_storage_mb >= 32768
     error_message = "postgres_storage_mb must be at least 32768."
+  }
+}
+
+variable "paper_state_share_quota_gb" {
+  description = "Azure Files quota for the shared local paper review-state surface mounted into Container Apps Jobs."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.paper_state_share_quota_gb >= 1 && var.paper_state_share_quota_gb <= 100
+    error_message = "paper_state_share_quota_gb must be between 1 and 100 for the dev review-state share."
   }
 }
 
