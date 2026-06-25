@@ -1,0 +1,14 @@
+resource_suffix = "qqqdev01"
+owner           = "marketlab-operator"
+cost_center     = "marketlab-phase9"
+alert_email     = "operator@example.com"
+
+# Keep all executable jobs and triggers disabled until a supervised deployment session.
+create_jobs                         = false
+enable_scheduler_schedule           = false
+enable_service_bus_approval_trigger = false
+enable_broker_secret_refs           = false
+
+# Required only when create_jobs=true.
+marketlab_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+postgres_dsn_secret_id = ""

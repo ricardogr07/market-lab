@@ -3,6 +3,7 @@ __pycache__/
 .pytest_tmp/
 .tox_tmp/
 .virtualenv_appdata/
+.virtualenv-app-data/
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -25,6 +26,7 @@ __pycache__/
 **/credentials.tfrc.json
 infra/azure/bootstrap/backend.tf
 infra/azure/phase9-shadow/backend.tf
+infra/azure/qqq-paper/backend.tf
 .terraform.tfstate.lock.info
 crash.log
 crash.*.log
