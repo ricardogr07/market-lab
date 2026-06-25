@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = ROOT / "infra" / "azure" / "bootstrap"
 PHASE9_SHADOW = ROOT / "infra" / "azure" / "phase9-shadow"
+QQQ_PAPER = ROOT / "infra" / "azure" / "qqq-paper"
 MAIN = BOOTSTRAP / "main.tf"
 VERSIONS = BOOTSTRAP / "versions.tf"
 LOCK = BOOTSTRAP / ".terraform.lock.hcl"
@@ -148,12 +149,16 @@ def test_operator_values_and_terraform_state_are_ignored() -> None:
     assert "**/credentials.tfrc.json" in ignored
     assert "infra/azure/bootstrap/backend.tf" in ignored
     assert "infra/azure/phase9-shadow/backend.tf" in ignored
+    assert "infra/azure/qqq-paper/backend.tf" in ignored
     assert (BOOTSTRAP / "backend.tf.example").exists()
     assert (BOOTSTRAP / "backend.hcl.example").exists()
     assert (BOOTSTRAP / "terraform.tfvars.example").exists()
     assert (PHASE9_SHADOW / "backend.tf.example").exists()
     assert (PHASE9_SHADOW / "backend.hcl.example").exists()
     assert (PHASE9_SHADOW / "terraform.tfvars.example").exists()
+    assert (QQQ_PAPER / "backend.tf.example").exists()
+    assert (QQQ_PAPER / "backend.hcl.example").exists()
+    assert (QQQ_PAPER / "terraform.tfvars.example").exists()
 
 
 def test_bootstrap_runbook_preserves_supervision_gates() -> None:
@@ -310,3 +315,120 @@ def test_phase9_shadow_backend_provider_and_tox_validation_are_locked() -> None:
     assert "phase9-shadow init -backend=false -lockfile=readonly -input=false" in tox
     assert "phase9-shadow validate -no-color" in tox
     assert "infra/azure/phase9-shadow/.terraform.lock.hcl" in workflow
+
+
+def test_qqq_paper_azure_resource_scope_is_locked() -> None:
+    content = (QQQ_PAPER / "main.tf").read_text(encoding="utf-8")
+    resource_types = re.findall(r'^resource\s+"([^"]+)"\s+"[^"]+"\s+\{', content, re.MULTILINE)
+    data_types = re.findall(r'^data\s+"([^"]+)"\s+"[^"]+"\s+\{', content, re.MULTILINE)
+
+    assert data_types == ["azurerm_client_config"]
+    assert resource_types == [
+        "azurerm_resource_group",
+        "azurerm_user_assigned_identity",
+        "azurerm_container_registry",
+        "azurerm_log_analytics_workspace",
+        "azurerm_application_insights",
+        "azurerm_container_app_environment",
+        "azurerm_storage_account",
+        "azurerm_storage_container",
+        "azurerm_storage_management_policy",
+        "azurerm_servicebus_namespace",
+        "azurerm_servicebus_queue",
+        "azurerm_key_vault",
+        "azurerm_postgresql_flexible_server",
+        "azurerm_postgresql_flexible_server_database",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_role_assignment",
+        "azurerm_container_app_job",
+        "azurerm_monitor_action_group",
+    ]
+
+
+def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
+    main = _normalized(QQQ_PAPER / "main.tf")
+    variables = _normalized(QQQ_PAPER / "variables.tf")
+    tfvars = _normalized(QQQ_PAPER / "terraform.tfvars.example")
+
+    required = [
+        "for_each = var.create_jobs ? local.jobs : {}",
+        "paper-db-migrate",
+        "paper-scheduler",
+        "paper-agent-approve",
+        "paper-outbox-deliver",
+        "paper-notifications-deliver",
+        "paper-blob-sync",
+        "paper-service-bus-receive",
+        "MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES",
+        "MARKETLAB_PAPER_POSTGRES_DSN",
+        "enable_scheduler_schedule requires create_jobs",
+        "enable_service_bus_approval_trigger remains false in P9-10",
+        "enable_broker_secret_refs",
+        "MARKETLAB_PAPER_TELEGRAM_ENABLED",
+        "false",
+        "terraform-disabled-template",
+    ]
+
+    assert all(clause in main or clause in variables or clause in tfvars for clause in required)
+    assert "create_jobs = false" in tfvars
+    assert "enable_scheduler_schedule = false" in tfvars
+    assert "enable_service_bus_approval_trigger = false" in tfvars
+    assert "enable_broker_secret_refs = false" in tfvars
+
+
+def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
+    main_content = (QQQ_PAPER / "main.tf").read_text(encoding="utf-8")
+    main = " ".join(main_content.split())
+    variables = _normalized(QQQ_PAPER / "variables.tf")
+    runbook = _normalized(QQQ_PAPER / "README.md")
+
+    required = [
+        'role_definition_name = "AcrPull"',
+        'role_definition_name = "Storage Blob Data Contributor"',
+        'role_definition_name = "Azure Service Bus Data Sender"',
+        'role_definition_name = "Azure Service Bus Data Receiver"',
+        'role_definition_name = "Key Vault Secrets User"',
+        "shared_access_key_enabled = false",
+        "default_to_oauth_authentication = true",
+        "local_auth_enabled = false",
+        "rbac_authorization_enabled = true",
+        "requires_duplicate_detection = true",
+        "dead_lettering_on_message_expiration = true",
+        "configs/experiment.qqq_paper_daily.yaml",
+        "passwordless PostgreSQL managed-identity authentication",
+    ]
+    forbidden = [
+        'resource "azurerm_container_app"',
+        "ingress {",
+        "voo",
+        "btc",
+        "live-money",
+        "terraform apply",
+        "terraform destroy",
+        "terraform import",
+    ]
+
+    assert all(clause in main or clause in variables or clause in runbook for clause in required)
+    assert all(clause.lower() not in main_content.lower() for clause in forbidden)
+
+
+def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:
+    backend = _normalized(QQQ_PAPER / "backend.tf.example")
+    backend_hcl = _normalized(QQQ_PAPER / "backend.hcl.example")
+    versions = _normalized(QQQ_PAPER / "versions.tf")
+    lock = _normalized(QQQ_PAPER / ".terraform.lock.hcl")
+    tox = _normalized(ROOT / "tox.ini")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'backend "azurerm" { use_azuread_auth = true use_cli = true }' in backend
+    assert "key = \"qqq-paper-dev.tfstate\"" in backend_hcl
+    assert 'required_version = "= 1.15.5"' in versions
+    assert 'version = "~> 4.74.0"' in versions
+    assert 'resource_provider_registrations = "none"' in versions
+    assert 'version = "4.74.0"' in lock
+    assert "qqq-paper init -backend=false -lockfile=readonly -input=false" in tox
+    assert "qqq-paper validate -no-color" in tox
+    assert "infra/azure/qqq-paper/.terraform.lock.hcl" in workflow
