@@ -437,7 +437,10 @@ resource "azurerm_container_app_job" "qqq" {
   }
 
   dynamic "manual_trigger_config" {
-    for_each = each.key == "paper-scheduler" && var.enable_scheduler_schedule ? [] : [1]
+    for_each = (
+      (each.key == "paper-scheduler" && var.enable_scheduler_schedule)
+      || (each.key == "paper-service-bus-receive" && var.enable_service_bus_approval_trigger)
+    ) ? [] : [1]
 
     content {
       parallelism              = 1
@@ -452,6 +455,32 @@ resource "azurerm_container_app_job" "qqq" {
       cron_expression          = var.scheduler_cron_expression
       parallelism              = 1
       replica_completion_count = 1
+    }
+  }
+
+  dynamic "event_trigger_config" {
+    for_each = each.key == "paper-service-bus-receive" && var.enable_service_bus_approval_trigger ? [1] : []
+
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+
+      scale {
+        min_executions              = 0
+        max_executions              = 1
+        polling_interval_in_seconds = 30
+
+        rules {
+          name             = "qqq-paper-approval-queue"
+          custom_rule_type = "azure-servicebus"
+          identity_id      = azurerm_user_assigned_identity.qqq.id
+          metadata = {
+            messageCount = "1"
+            namespace    = azurerm_servicebus_namespace.qqq.name
+            queueName    = azurerm_servicebus_queue.paper_events.name
+          }
+        }
+      }
     }
   }
 

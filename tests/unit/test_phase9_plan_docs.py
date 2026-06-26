@@ -16,6 +16,7 @@ P9_09_PLAN = ROOT / "docs" / "phase9" / "P9-09-WORKER-PLAN.md"
 P9_10_PLAN = ROOT / "docs" / "phase9" / "P9-10-WORKER-PLAN.md"
 P9_11_PLAN = ROOT / "docs" / "phase9" / "P9-11-WORKER-PLAN.md"
 P9_12_PLAN = ROOT / "docs" / "phase9" / "P9-12-WORKER-PLAN.md"
+P9_13_PLAN = ROOT / "docs" / "phase9" / "P9-13-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -508,3 +509,48 @@ def test_p9_12_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-12-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-12 Worker Plan: phase9/P9-12-WORKER-PLAN.md" in nav
     assert "phase9/P9-12-WORKER-PLAN.md" in index
+
+
+def test_p9_13_plan_locks_paper_prod_cutover_scope() -> None:
+    content = P9_13_PLAN.read_text(encoding="utf-8")
+    paper_trading = (ROOT / "docs" / "paper-trading.md").read_text(encoding="utf-8")
+    normalized = " ".join(f"{content}\n{paper_trading}".split())
+
+    required = [
+        "feature/phase-9-qqq-paper-prod-cutover",
+        "feat(phase9): add QQQ paper-prod cutover gates",
+        "accepted P9-12 QQQ UAT parity and failure-drill evidence",
+        "does not stop the local scheduler",
+        "apply Terraform",
+        "enable Azure jobs",
+        "environment = \"paper-prod\"",
+        "create_jobs = true",
+        "enable_broker_secret_refs = true",
+        "enable_scheduler_schedule = true",
+        "enable_service_bus_approval_trigger = true",
+        "non-placeholder immutable image digest",
+        "P9-12 parity",
+        "final import",
+        "backup/restore",
+        "rollback",
+        "alert evidence",
+        "qqq-paper-prod.tfstate",
+        "paper-state-import --dry-run",
+        "paper-blob-sync",
+        "Service Bus approval trigger",
+        "no unresolved proposal or non-terminal order",
+        "P9-14 owns the ten-trading-day post-cutover observation window",
+        "QQQ strategy, approval semantics, Alpaca paper-only endpoint checks, VOO, BTC",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_13_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-13-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-13 Worker Plan: phase9/P9-13-WORKER-PLAN.md" in nav
+    assert "phase9/P9-13-WORKER-PLAN.md" in index

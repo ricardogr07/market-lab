@@ -1,4 +1,5 @@
 resource_suffix = "qqqdev01"
+environment     = "dev"
 owner           = "marketlab-operator"
 cost_center     = "marketlab-phase9"
 alert_email     = "operator@example.com"
@@ -23,3 +24,10 @@ postgres_firewall_rules = {
 }
 
 paper_state_share_quota_gb = 10
+
+# Required before enabling paper-prod scheduler or Service Bus approval triggers.
+p9_12_parity_evidence_uri   = ""
+final_import_evidence_uri   = ""
+backup_restore_evidence_uri = ""
+rollback_evidence_uri       = ""
+alert_evidence_uri          = ""

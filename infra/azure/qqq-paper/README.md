@@ -1,10 +1,10 @@
 # Phase 9 QQQ Paper Azure Root
 
-This Terraform root defines the source contract for P9-10: a QQQ paper dev
-control plane with disabled-by-default Container Apps Jobs. It validates the
-shape of the Azure resources and deployment wiring, but it does not authorize
+This Terraform root defines the source contract for the Phase 9 QQQ paper
+control plane. P9-10 introduced the disabled-by-default dev shape. P9-13 adds
+explicit `paper-prod` launch gates, but this root still does not authorize
 Azure apply, job activation, state import, UAT shadow validation, or broker
-submission.
+submission by itself.
 
 ## Local Validation
 
@@ -25,13 +25,14 @@ CI must remain validation-only. It must not run `az login`, provider
 registration, `terraform plan`, `terraform apply`, `terraform destroy`,
 `terraform import`, or refresh-only planning.
 
-## Supervised Dev Deployment Gate
+## Supervised Deployment Gates
 
 A separate supervised deployment session must review exact costs, names, image
 digest, secret IDs, PostgreSQL firewall rules, backend settings, and Terraform
 plan output before any apply. Keep these defaults for the first reviewed apply:
 
 ```hcl
+environment                         = "dev"
 create_jobs                         = false
 enable_scheduler_schedule           = false
 enable_service_bus_approval_trigger = false
@@ -46,6 +47,32 @@ When `create_jobs = true`, `postgres_firewall_rules` must contain the
 operator-approved egress IPs that are allowed to reach the PostgreSQL Flexible
 Server. Do not use a broad public range. Capture the source of each IP in the
 supervised deployment notes before applying.
+
+Paper-prod uses the separate backend key documented in
+`backend.paper-prod.hcl.example`:
+
+```hcl
+key = "qqq-paper-prod.tfstate"
+```
+
+Do not commit the real backend file, tfvars, Terraform plan, Terraform state,
+DSN, Key Vault secret IDs, or live Azure identifiers.
+
+Before enabling `enable_scheduler_schedule` or
+`enable_service_bus_approval_trigger`, the reviewed apply must set:
+
+```hcl
+environment                         = "paper-prod"
+create_jobs                         = true
+enable_broker_secret_refs           = true
+enable_scheduler_schedule           = true
+enable_service_bus_approval_trigger = true
+```
+
+The launch gate rejects trigger enablement unless the image digest is a
+non-placeholder immutable SHA-256 digest, broker/provider/notification Key
+Vault secret references are populated, and reviewed HTTPS evidence URIs are
+provided for P9-12 parity, final import, backup/restore, rollback, and alerts.
 
 ## Runtime Configuration
 
@@ -94,8 +121,10 @@ Do not enable broker-facing secret references until a reviewed change sets
 `enable_broker_secret_refs = true`. Do not enable the scheduler trigger until
 P9-11 import and P9-12 dev/UAT parity gates are accepted.
 
-## P9-10 Boundary
+## Phase 9 Boundary
 
 This root must not import QQQ state, define VOO or BTC resources, enable live
 money, or change the QQQ strategy. P9-11 owns import, backup, restore, and
-rollback runbooks. P9-12 owns parity and failure drills.
+rollback runbooks. P9-12 owns parity and failure drills. P9-13 owns
+paper-prod cutover gates and the operator runbook; the actual cutover remains a
+separately supervised operation.
