@@ -263,7 +263,15 @@ def _difference_status(comparison: _ArtifactComparison) -> str:
 
 
 def _difference_id(comparison: _ArtifactComparison) -> str:
-    payload = "|".join((comparison.surface, comparison.key, _difference_status(comparison)))
+    payload = "|".join(
+        (
+            comparison.surface,
+            comparison.key,
+            _difference_status(comparison),
+            str(_payload_checksum(comparison.local_payload)),
+            str(_payload_checksum(comparison.shadow_payload)),
+        )
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
