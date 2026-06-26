@@ -138,6 +138,7 @@ def test_operator_values_and_terraform_state_are_ignored() -> None:
     assert "*.tfstate" in ignored
     assert "*.tfstate.*" in ignored
     assert "**/backend.hcl" in ignored
+    assert "**/backend.paper-prod.hcl" in ignored
     assert "**/*.backend.hcl" in ignored
     assert "**/backend-*.hcl" in ignored
     assert "**/*.tfbackend" in ignored
@@ -158,6 +159,7 @@ def test_operator_values_and_terraform_state_are_ignored() -> None:
     assert (PHASE9_SHADOW / "terraform.tfvars.example").exists()
     assert (QQQ_PAPER / "backend.tf.example").exists()
     assert (QQQ_PAPER / "backend.hcl.example").exists()
+    assert (QQQ_PAPER / "backend.paper-prod.hcl.example").exists()
     assert (QQQ_PAPER / "terraform.tfvars.example").exists()
 
 
@@ -368,7 +370,10 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
         "MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES",
         "MARKETLAB_PAPER_POSTGRES_DSN",
         "enable_scheduler_schedule requires create_jobs",
-        "enable_service_bus_approval_trigger remains false in P9-10",
+        "enable_service_bus_approval_trigger requires create_jobs",
+        "event_trigger_config",
+        'custom_rule_type = "azure-servicebus"',
+        "paper-service-bus-receive",
         "enable_broker_secret_refs",
         "postgres_firewall_rules",
         "create_jobs requires at least one operator-approved PostgreSQL firewall rule",
@@ -409,6 +414,9 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         "dead_lettering_on_message_expiration = true",
         "configs/experiment.qqq_paper_daily.yaml",
         "passwordless PostgreSQL managed-identity authentication",
+        'key_vault_name = "kv-ml-qqq-${local.resource_name_env}-${var.resource_suffix}"',
+        "resource_name_env = var.environment == \"paper-prod\" ? \"prod\" : var.environment",
+        "QQQ paper Key Vault name must be 24 characters or fewer.",
     ]
     forbidden = [
         'resource "azurerm_container_app"',
@@ -428,6 +436,7 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
 def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:
     backend = _normalized(QQQ_PAPER / "backend.tf.example")
     backend_hcl = _normalized(QQQ_PAPER / "backend.hcl.example")
+    backend_prod_hcl = _normalized(QQQ_PAPER / "backend.paper-prod.hcl.example")
     versions = _normalized(QQQ_PAPER / "versions.tf")
     lock = _normalized(QQQ_PAPER / ".terraform.lock.hcl")
     tox = _normalized(ROOT / "tox.ini")
@@ -435,6 +444,7 @@ def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:
 
     assert 'backend "azurerm" { use_azuread_auth = true use_cli = true }' in backend
     assert "key = \"qqq-paper-dev.tfstate\"" in backend_hcl
+    assert "key = \"qqq-paper-prod.tfstate\"" in backend_prod_hcl
     assert 'required_version = "= 1.15.5"' in versions
     assert 'version = "~> 4.74.0"' in versions
     assert 'resource_provider_registrations = "none"' in versions
@@ -442,3 +452,32 @@ def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:
     assert "qqq-paper init -backend=false -lockfile=readonly -input=false" in tox
     assert "qqq-paper validate -no-color" in tox
     assert "infra/azure/qqq-paper/.terraform.lock.hcl" in workflow
+
+
+def test_qqq_paper_prod_cutover_gates_are_locked() -> None:
+    variables = _normalized(QQQ_PAPER / "variables.tf")
+    tfvars = _normalized(QQQ_PAPER / "terraform.tfvars.example")
+    runbook = _normalized(QQQ_PAPER / "README.md")
+    ignored = _normalized(ROOT / ".gitignore")
+
+    required = [
+        'contains(["dev", "paper-prod"], var.environment)',
+        "environment must be either dev or paper-prod",
+        "marketlab_image_digest must not be the placeholder digest when create_jobs is true",
+        "enable_scheduler_schedule is allowed only for paper-prod after broker secret refs and all P9-13 evidence URIs are configured",
+        "enable_service_bus_approval_trigger is allowed only for paper-prod after broker secret refs and all P9-13 evidence URIs are configured",
+        "p9_12_parity_evidence_uri",
+        "final_import_evidence_uri",
+        "backup_restore_evidence_uri",
+        "rollback_evidence_uri",
+        "alert_evidence_uri",
+        "alpaca_key_id_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true",
+        "anthropic_api_key_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true",
+        "telegram_bot_token_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true",
+        "environment = \"paper-prod\"",
+        "qqq-paper-prod.tfstate",
+        "Do not commit the real backend file, tfvars, Terraform plan, Terraform state, DSN, Key Vault secret IDs, or live Azure identifiers.",
+    ]
+
+    assert all(clause in variables or clause in tfvars or clause in runbook for clause in required)
+    assert "**/backend.paper-prod.hcl" in ignored

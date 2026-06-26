@@ -419,6 +419,143 @@ acceptance requires reviewed evidence for:
 Do not use live Azure resource names, DSNs, tfvars, backend files, Terraform
 state, Terraform plans, or secret values in tracked documentation.
 
+## P9-13 QQQ Paper-Prod Cutover Runbooks
+
+P9-13 prepares the paper-prod cutover after P9-12 parity and failure-drill
+evidence has been accepted. It does not authorize a live cutover by itself.
+Stopping the local scheduler, importing the final state delta, applying
+Terraform, changing secrets, enabling Azure triggers, and running the first
+paper-prod cycle require a separate supervised operator session.
+
+### Pre-Cutover Checklist
+
+- confirm the accepted P9-12 parity report and failure-drill evidence are
+  recorded outside tracked files
+- confirm `configs/experiment.qqq_paper_daily.yaml` has not changed strategy,
+  model, schedule, approval, or broker semantics
+- confirm paper-prod Terraform uses `qqq-paper-prod.tfstate` from an untracked
+  backend file
+- confirm the immutable image digest, Key Vault secret IDs, PostgreSQL DSN,
+  operator-approved firewall rules, and paper-prod tfvars are retained outside
+  the repository
+- confirm Alpaca endpoints are paper-only before any broker-facing Azure job is
+  smoke-tested
+- record operator, commit SHA, P9-12 evidence URI, final import evidence URI,
+  backup/restore evidence URI, rollback evidence URI, and alert evidence URI
+  outside tracked files
+
+### Stop Local Authority
+
+Stop the local QQQ scheduler and agent before enabling any paper-prod Azure
+trigger:
+
+```bash
+docker compose --env-file .env -f docker/compose.paper.yml stop marketlab-paper-scheduler marketlab-paper-agent
+```
+
+Verify local containers did not leave an unresolved proposal, missing approval,
+duplicate submission, or non-terminal order. Use the normal status and artifact
+review surfaces:
+
+```bash
+python scripts/run_marketlab.py paper-status --config configs/experiment.qqq_paper_daily.yaml
+```
+
+Do not continue if an order is still open, pending, partially filled without an
+accepted operator note, or otherwise non-terminal.
+
+### Final State Delta Import
+
+Run a final dry-run import from the local QQQ artifact root:
+
+```bash
+python scripts/run_marketlab.py paper-state-import \
+  --config configs/local.qqq-postgres.yaml \
+  --source-state-dir artifacts/paper/state \
+  --source-inbox-dir artifacts/paper/inbox \
+  --dry-run \
+  --report-path artifacts/paper/state/imports/qqq-paper-prod-final-dry-run.json
+```
+
+Apply only after the dry-run, backup, restore, and rollback evidence are
+accepted:
+
+```bash
+python scripts/run_marketlab.py paper-state-import \
+  --config configs/local.qqq-postgres.yaml \
+  --source-state-dir artifacts/paper/state \
+  --source-inbox-dir artifacts/paper/inbox \
+  --apply \
+  --report-path artifacts/paper/state/imports/qqq-paper-prod-final-apply.json
+```
+
+Synchronize review artifacts after the accepted import:
+
+```bash
+python scripts/run_marketlab.py paper-blob-sync \
+  --config configs/local.qqq-postgres-azure-blob.yaml
+```
+
+### Paper-Prod Azure Smoke Test
+
+Create paper-prod jobs with schedules and Service Bus approval triggering still
+disabled first. Manually invoke the reviewed jobs in this order:
+
+1. `paper-db-migrate`
+2. `paper-blob-sync`
+3. `paper-outbox-deliver`
+4. `paper-service-bus-receive`
+5. `paper-notifications-deliver`
+6. `paper-scheduler --once`
+7. `paper-agent-approve --once`
+
+Review PostgreSQL, Blob, Service Bus, notification audit, alert, and paper
+broker evidence after each job. Do not enable triggers until the smoke test is
+accepted.
+
+### Enable Paper-Prod Triggers
+
+Only after the smoke test passes, a supervised apply may set:
+
+```hcl
+environment                         = "paper-prod"
+create_jobs                         = true
+enable_broker_secret_refs           = true
+enable_scheduler_schedule           = true
+enable_service_bus_approval_trigger = true
+```
+
+The paper-prod Terraform gate also requires a non-placeholder immutable image
+digest and reviewed HTTPS evidence URIs for P9-12 parity, final import,
+backup/restore, rollback, and alerts.
+
+### First Production-Paper Cycle
+
+For the first scheduled paper-prod cycle, verify:
+
+- scheduler due-time enforcement still follows `America/New_York`
+- one proposal is written for the expected QQQ trade date
+- approval remains approve/reject only
+- no duplicate broker submission is created
+- Blob artifacts mirror PostgreSQL state
+- Service Bus messages are settled or dead-lettered according to the reviewed
+  failure-drill contract
+- alert evidence shows both job failure and missing-evidence checks are active
+
+### Rollback
+
+If any cutover gate fails, disable Azure scheduler and Service Bus triggers,
+restore PostgreSQL from the accepted backup, restore Blob artifacts from the
+reviewed snapshot or versioned prefix, and keep the local QQQ scheduler disabled
+until the operator explicitly chooses the recovery authority. Restart the local
+runner only after the restored state is reviewed:
+
+```bash
+docker compose --env-file .env -f docker/compose.paper.yml up -d --build marketlab-paper-scheduler marketlab-paper-agent
+```
+
+P9-14 owns the ten-trading-day post-cutover observation window and closeout.
+
 ## Alpaca Environment
 
 Keep credentials in environment variables, not YAML. For local runs, copy `.env.example` to `.env` in the repo root and fill in the paper credentials:

@@ -1,7 +1,10 @@
 data "azurerm_client_config" "current" {}
 
 locals {
-  deployment_id = "qqq-paper-${var.environment}"
+  deployment_id       = "qqq-paper-${var.environment}"
+  resource_name_env   = var.environment == "paper-prod" ? "prod" : var.environment
+  key_vault_name      = "kv-ml-qqq-${local.resource_name_env}-${var.resource_suffix}"
+  key_vault_name_safe = length(local.key_vault_name) <= 24
 
   required_tags = {
     "cost-center" = var.cost_center
@@ -327,7 +330,7 @@ resource "azurerm_servicebus_queue" "paper_events" {
 }
 
 resource "azurerm_key_vault" "qqq" {
-  name                          = "kv-ml-qqq-${var.environment}-${var.resource_suffix}"
+  name                          = local.key_vault_name
   resource_group_name           = azurerm_resource_group.qqq.name
   location                      = azurerm_resource_group.qqq.location
   tenant_id                     = data.azurerm_client_config.current.tenant_id
@@ -337,6 +340,13 @@ resource "azurerm_key_vault" "qqq" {
   soft_delete_retention_days    = 30
   public_network_access_enabled = true
   tags                          = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = local.key_vault_name_safe
+      error_message = "QQQ paper Key Vault name must be 24 characters or fewer."
+    }
+  }
 }
 
 resource "azurerm_postgresql_flexible_server" "qqq" {
@@ -437,7 +447,10 @@ resource "azurerm_container_app_job" "qqq" {
   }
 
   dynamic "manual_trigger_config" {
-    for_each = each.key == "paper-scheduler" && var.enable_scheduler_schedule ? [] : [1]
+    for_each = (
+      (each.key == "paper-scheduler" && var.enable_scheduler_schedule)
+      || (each.key == "paper-service-bus-receive" && var.enable_service_bus_approval_trigger)
+    ) ? [] : [1]
 
     content {
       parallelism              = 1
@@ -452,6 +465,32 @@ resource "azurerm_container_app_job" "qqq" {
       cron_expression          = var.scheduler_cron_expression
       parallelism              = 1
       replica_completion_count = 1
+    }
+  }
+
+  dynamic "event_trigger_config" {
+    for_each = each.key == "paper-service-bus-receive" && var.enable_service_bus_approval_trigger ? [1] : []
+
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+
+      scale {
+        min_executions              = 0
+        max_executions              = 1
+        polling_interval_in_seconds = 30
+
+        rules {
+          name             = "qqq-paper-approval-queue"
+          custom_rule_type = "azure-servicebus"
+          identity_id      = azurerm_user_assigned_identity.qqq.id
+          metadata = {
+            messageCount = "1"
+            namespace    = azurerm_servicebus_namespace.qqq.name
+            queueName    = azurerm_servicebus_queue.paper_events.name
+          }
+        }
+      }
     }
   }
 

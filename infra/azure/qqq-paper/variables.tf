@@ -9,13 +9,13 @@ variable "resource_suffix" {
 }
 
 variable "environment" {
-  description = "Phase 9 QQQ paper environment. P9-10 creates only the dev source contract."
+  description = "Phase 9 QQQ paper environment. P9-13 supports dev and paper-prod only."
   type        = string
   default     = "dev"
 
   validation {
-    condition     = var.environment == "dev"
-    error_message = "P9-10 only supports the dev QQQ paper environment."
+    condition     = contains(["dev", "paper-prod"], var.environment)
+    error_message = "environment must be either dev or paper-prod for Phase 9 QQQ paper."
   }
 }
 
@@ -72,6 +72,14 @@ variable "marketlab_image_digest" {
     )
     error_message = "marketlab_image_digest must be an immutable sha256 digest when create_jobs is true."
   }
+
+  validation {
+    condition = (
+      !var.create_jobs
+      || var.marketlab_image_digest != "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    )
+    error_message = "marketlab_image_digest must not be the placeholder digest when create_jobs is true."
+  }
 }
 
 variable "container_repository" {
@@ -122,16 +130,48 @@ variable "enable_scheduler_schedule" {
     condition     = !var.enable_scheduler_schedule || var.create_jobs
     error_message = "enable_scheduler_schedule requires create_jobs because the scheduled trigger belongs to the Container Apps Job."
   }
+
+  validation {
+    condition = (
+      !var.enable_scheduler_schedule
+      || (
+        var.environment == "paper-prod"
+        && var.enable_broker_secret_refs
+        && can(regex("^https://", var.p9_12_parity_evidence_uri))
+        && can(regex("^https://", var.final_import_evidence_uri))
+        && can(regex("^https://", var.backup_restore_evidence_uri))
+        && can(regex("^https://", var.rollback_evidence_uri))
+        && can(regex("^https://", var.alert_evidence_uri))
+      )
+    )
+    error_message = "enable_scheduler_schedule is allowed only for paper-prod after broker secret refs and all P9-13 evidence URIs are configured."
+  }
 }
 
 variable "enable_service_bus_approval_trigger" {
-  description = "Reserved approval-trigger switch. P9-10 keeps Service Bus-triggered jobs disabled."
+  description = "Explicit paper-prod launch-gate switch for Service Bus approval triggering."
   type        = bool
   default     = false
 
   validation {
-    condition     = !var.enable_service_bus_approval_trigger
-    error_message = "enable_service_bus_approval_trigger remains false in P9-10; P9-12 owns trigger activation evidence."
+    condition     = !var.enable_service_bus_approval_trigger || var.create_jobs
+    error_message = "enable_service_bus_approval_trigger requires create_jobs because the approval receiver belongs to the Container Apps Job set."
+  }
+
+  validation {
+    condition = (
+      !var.enable_service_bus_approval_trigger
+      || (
+        var.environment == "paper-prod"
+        && var.enable_broker_secret_refs
+        && can(regex("^https://", var.p9_12_parity_evidence_uri))
+        && can(regex("^https://", var.final_import_evidence_uri))
+        && can(regex("^https://", var.backup_restore_evidence_uri))
+        && can(regex("^https://", var.rollback_evidence_uri))
+        && can(regex("^https://", var.alert_evidence_uri))
+      )
+    )
+    error_message = "enable_service_bus_approval_trigger is allowed only for paper-prod after broker secret refs and all P9-13 evidence URIs are configured."
   }
 }
 
@@ -172,6 +212,11 @@ variable "alpaca_key_id_secret_id" {
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !var.enable_broker_secret_refs || can(regex("^https://", var.alpaca_key_id_secret_id))
+    error_message = "alpaca_key_id_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true."
+  }
 }
 
 variable "alpaca_secret_key_secret_id" {
@@ -179,6 +224,11 @@ variable "alpaca_secret_key_secret_id" {
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !var.enable_broker_secret_refs || can(regex("^https://", var.alpaca_secret_key_secret_id))
+    error_message = "alpaca_secret_key_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true."
+  }
 }
 
 variable "anthropic_api_key_secret_id" {
@@ -186,6 +236,11 @@ variable "anthropic_api_key_secret_id" {
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !var.enable_broker_secret_refs || can(regex("^https://", var.anthropic_api_key_secret_id))
+    error_message = "anthropic_api_key_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true."
+  }
 }
 
 variable "telegram_bot_token_secret_id" {
@@ -193,6 +248,11 @@ variable "telegram_bot_token_secret_id" {
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !var.enable_broker_secret_refs || can(regex("^https://", var.telegram_bot_token_secret_id))
+    error_message = "telegram_bot_token_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true."
+  }
 }
 
 variable "telegram_chat_id_secret_id" {
@@ -200,6 +260,81 @@ variable "telegram_chat_id_secret_id" {
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !var.enable_broker_secret_refs || can(regex("^https://", var.telegram_chat_id_secret_id))
+    error_message = "telegram_chat_id_secret_id must be an https Key Vault secret ID when enable_broker_secret_refs is true."
+  }
+}
+
+variable "p9_12_parity_evidence_uri" {
+  description = "Reviewed HTTPS URI for the accepted P9-12 parity and failure-drill evidence."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.p9_12_parity_evidence_uri == ""
+      || can(regex("^https://", var.p9_12_parity_evidence_uri))
+    )
+    error_message = "p9_12_parity_evidence_uri must be empty or an https URI."
+  }
+}
+
+variable "final_import_evidence_uri" {
+  description = "Reviewed HTTPS URI for the P9-13 final dry-run and apply import evidence."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.final_import_evidence_uri == ""
+      || can(regex("^https://", var.final_import_evidence_uri))
+    )
+    error_message = "final_import_evidence_uri must be empty or an https URI."
+  }
+}
+
+variable "backup_restore_evidence_uri" {
+  description = "Reviewed HTTPS URI for the accepted PostgreSQL and Blob backup/restore evidence."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.backup_restore_evidence_uri == ""
+      || can(regex("^https://", var.backup_restore_evidence_uri))
+    )
+    error_message = "backup_restore_evidence_uri must be empty or an https URI."
+  }
+}
+
+variable "rollback_evidence_uri" {
+  description = "Reviewed HTTPS URI for the accepted paper-prod rollback rehearsal evidence."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.rollback_evidence_uri == ""
+      || can(regex("^https://", var.rollback_evidence_uri))
+    )
+    error_message = "rollback_evidence_uri must be empty or an https URI."
+  }
+}
+
+variable "alert_evidence_uri" {
+  description = "Reviewed HTTPS URI for paper-prod alert evidence before trigger enablement."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.alert_evidence_uri == ""
+      || can(regex("^https://", var.alert_evidence_uri))
+    )
+    error_message = "alert_evidence_uri must be empty or an https URI."
+  }
 }
 
 variable "postgres_admin_login" {

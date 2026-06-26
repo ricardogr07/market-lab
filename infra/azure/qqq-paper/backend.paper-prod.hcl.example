@@ -1,0 +1,4 @@
+resource_group_name  = "<bootstrap-resource-group>"
+storage_account_name = "<bootstrap-storage-account>"
+container_name       = "tfstate"
+key                  = "qqq-paper-prod.tfstate"
