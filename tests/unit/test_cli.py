@@ -321,6 +321,99 @@ def test_paper_state_import_rejects_a_non_postgres_config() -> None:
     assert excinfo.value.code == 2
 
 
+def test_paper_parity_report_defaults_to_ten_day_window_and_forwards_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+
+    def _build_report(received_config, **kwargs):
+        received["config"] = received_config
+        received.update(kwargs)
+        return {
+            "accepted": True,
+            "window": {"min_trading_days": kwargs["min_trading_days"]},
+            "differences": [],
+        }
+
+    monkeypatch.setattr(cli, "build_paper_parity_report", _build_report)
+
+    exit_code = cli.main(
+        [
+            "paper-parity-report",
+            "--config",
+            "configs/experiment.qqq_paper_daily.yaml",
+            "--local-state-dir",
+            "artifacts/paper/state",
+            "--shadow-state-dir",
+            "artifacts/uat-export/state",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-12",
+            "--explanations",
+            "artifacts/paper/uat/explanations.json",
+            "--report-path",
+            "artifacts/paper/uat/parity.json",
+            "--markdown-path",
+            "artifacts/paper/uat/parity.md",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received == {
+        "config": config,
+        "local_state_dir": "artifacts/paper/state",
+        "shadow_state_dir": "artifacts/uat-export/state",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-12",
+        "min_trading_days": 10,
+        "explanations_path": "artifacts/paper/uat/explanations.json",
+        "report_path": "artifacts/paper/uat/parity.json",
+        "markdown_path": "artifacts/paper/uat/parity.md",
+    }
+    assert json.loads(capsys.readouterr().out)["accepted"] is True
+
+
+def test_paper_parity_report_allows_custom_min_trading_days(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    received: dict[str, object] = {}
+
+    def _build_report(received_config, **kwargs):
+        del received_config
+        received.update(kwargs)
+        return {"accepted": False, "window": {}, "differences": []}
+
+    monkeypatch.setattr(cli, "build_paper_parity_report", _build_report)
+
+    exit_code = cli.main(
+        [
+            "paper-parity-report",
+            "--config",
+            "dummy.yaml",
+            "--local-state-dir",
+            "local",
+            "--shadow-state-dir",
+            "shadow",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-02",
+            "--min-trading-days",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["min_trading_days"] == 2
+    assert json.loads(capsys.readouterr().out)["accepted"] is False
+
+
 def test_paper_outbox_deliver_runs_only_approval_request_records(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
