@@ -375,6 +375,7 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
         'custom_rule_type = "azure-servicebus"',
         "paper-service-bus-receive",
         "enable_broker_secret_refs",
+        "enable_telegram_notifications",
         "postgres_firewall_rules",
         "create_jobs requires at least one operator-approved PostgreSQL firewall rule",
         "MARKETLAB_PAPER_TELEGRAM_ENABLED",
@@ -390,6 +391,27 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
     assert "enable_scheduler_schedule = false" in tfvars
     assert "enable_service_bus_approval_trigger = false" in tfvars
     assert "enable_broker_secret_refs = false" in tfvars
+    assert "enable_telegram_notifications = false" in tfvars
+
+
+def test_qqq_paper_azure_telegram_delivery_is_operator_gated() -> None:
+    main = _normalized(QQQ_PAPER / "main.tf")
+    variables = _normalized(QQQ_PAPER / "variables.tf")
+    tfvars = _normalized(QQQ_PAPER / "terraform.tfvars.example")
+    runbook = _normalized(QQQ_PAPER / "README.md")
+
+    required = [
+        "MARKETLAB_PAPER_TELEGRAM_ENABLED = tostring(var.enable_telegram_notifications)",
+        "enable_telegram_notifications requires create_jobs",
+        "enable_telegram_notifications is allowed only for paper-prod",
+        "enable_telegram_notifications requires enable_broker_secret_refs",
+        "enable_telegram_notifications requires Telegram bot token and chat ID Key Vault secret IDs",
+        "enable_telegram_notifications = false",
+        "separate Azure QQQ Telegram bot and chat",
+        "Telegram delivery is a separate paper-prod operator gate",
+    ]
+
+    assert all(clause in main or clause in variables or clause in tfvars or clause in runbook for clause in required)
 
 
 def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:

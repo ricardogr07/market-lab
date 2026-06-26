@@ -24,5 +24,7 @@ This site is the canonical home for MarketLab's public documentation.
 - [Phase 9 P9-11 Worker Plan](phase9/P9-11-WORKER-PLAN.md)
 - [Phase 9 P9-12 Worker Plan](phase9/P9-12-WORKER-PLAN.md)
 - [Phase 9 P9-13 Worker Plan](phase9/P9-13-WORKER-PLAN.md)
+- [Phase 9 P9-14 Worker Plan](phase9/P9-14-WORKER-PLAN.md)
+- [QQQ Azure Cutover Operator Plan](phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md)
 
 The root `README.md` remains the repository-facing entrypoint, while the deeper public docs live here.

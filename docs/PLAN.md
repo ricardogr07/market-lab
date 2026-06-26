@@ -329,7 +329,7 @@ working alerts, and a rehearsed rollback.
 | [P9-11](phase9/P9-11-WORKER-PLAN.md) | QQQ state importer and operational runbooks | P9-08, P9-09 | Repeatable import, checksum report, backup, restore, and rollback documented |
 | [P9-12](phase9/P9-12-WORKER-PLAN.md) | QQQ dev and UAT shadow validation | P9-10, P9-11 | Ten-trading-day parity report and failure drills accepted |
 | [P9-13](phase9/P9-13-WORKER-PLAN.md) | QQQ paper-prod cutover | P9-12 | Local scheduler stopped; final delta imported; Azure jobs enabled safely |
-| P9-14 | QQQ post-cutover closeout | P9-13 | Ten-trading-day observation passes; rollback remains rehearsed |
+| [P9-14](phase9/P9-14-WORKER-PLAN.md) | QQQ post-cutover closeout | P9-13 | Ten-trading-day observation passes; rollback remains rehearsed |
 | P9-15 | BTC final evidence decision | P9-06 and maturity window | Final report records continue, restart, or stop |
 
 Each packet should be a small reviewable pull request. Infrastructure and
@@ -376,7 +376,12 @@ import and operations runbook details are frozen in
 parity evidence details are frozen in
 [the QQQ UAT worker plan](phase9/P9-12-WORKER-PLAN.md). P9-13 QQQ
 paper-prod cutover gates and operator runbook details are frozen in
-[the QQQ paper-prod worker plan](phase9/P9-13-WORKER-PLAN.md).
+[the QQQ paper-prod worker plan](phase9/P9-13-WORKER-PLAN.md). P9-14 QQQ
+post-cutover closeout gates and operator runbook details are frozen in
+[the QQQ closeout worker plan](phase9/P9-14-WORKER-PLAN.md).
+The sequential operator path for moving QQQ authority from local Docker to
+Azure is frozen in
+[the QQQ Azure cutover operator plan](phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md).
 - QQQ paper decision, approval, submission, reconciliation, notifications, and
   reporting run from Azure
 - PostgreSQL is canonical QQQ workflow state and Blob Storage contains the

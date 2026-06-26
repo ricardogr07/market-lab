@@ -181,6 +181,38 @@ variable "enable_broker_secret_refs" {
   default     = false
 }
 
+variable "enable_telegram_notifications" {
+  description = "Explicit paper-prod switch for Telegram delivery. Keep false until the separate Azure QQQ Telegram bot and chat are reviewed."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_telegram_notifications || var.create_jobs
+    error_message = "enable_telegram_notifications requires create_jobs because delivery runs from Container Apps Jobs."
+  }
+
+  validation {
+    condition     = !var.enable_telegram_notifications || var.environment == "paper-prod"
+    error_message = "enable_telegram_notifications is allowed only for paper-prod."
+  }
+
+  validation {
+    condition     = !var.enable_telegram_notifications || var.enable_broker_secret_refs
+    error_message = "enable_telegram_notifications requires enable_broker_secret_refs so Telegram secret references are attached."
+  }
+
+  validation {
+    condition = (
+      !var.enable_telegram_notifications
+      || (
+        can(regex("^https://", var.telegram_bot_token_secret_id))
+        && can(regex("^https://", var.telegram_chat_id_secret_id))
+      )
+    )
+    error_message = "enable_telegram_notifications requires Telegram bot token and chat ID Key Vault secret IDs."
+  }
+}
+
 variable "postgres_firewall_rules" {
   description = "Operator-approved PostgreSQL Flexible Server firewall rules for Container Apps Job egress or supervised operator access."
   type = map(object({

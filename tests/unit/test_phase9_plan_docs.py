@@ -17,6 +17,8 @@ P9_10_PLAN = ROOT / "docs" / "phase9" / "P9-10-WORKER-PLAN.md"
 P9_11_PLAN = ROOT / "docs" / "phase9" / "P9-11-WORKER-PLAN.md"
 P9_12_PLAN = ROOT / "docs" / "phase9" / "P9-12-WORKER-PLAN.md"
 P9_13_PLAN = ROOT / "docs" / "phase9" / "P9-13-WORKER-PLAN.md"
+P9_14_PLAN = ROOT / "docs" / "phase9" / "P9-14-WORKER-PLAN.md"
+QQQ_AZURE_CUTOVER_PLAN = ROOT / "docs" / "phase9" / "QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -554,3 +556,79 @@ def test_p9_13_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-13-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-13 Worker Plan: phase9/P9-13-WORKER-PLAN.md" in nav
     assert "phase9/P9-13-WORKER-PLAN.md" in index
+
+
+def test_p9_14_plan_locks_post_cutover_closeout_scope() -> None:
+    content = P9_14_PLAN.read_text(encoding="utf-8")
+    paper_trading = (ROOT / "docs" / "paper-trading.md").read_text(encoding="utf-8")
+    normalized = " ".join(f"{content}\n{paper_trading}".split())
+
+    required = [
+        "feature/phase-9-qqq-post-cutover-closeout",
+        "feat(phase9): add QQQ post-cutover closeout gates",
+        "P9-13 paper-prod cutover completed and first paper-prod cycle accepted",
+        "does not run the live observation",
+        "apply Terraform",
+        "enable Azure jobs",
+        "submit broker orders",
+        "P9-15 BTC final evidence decision",
+        "paper-closeout-report",
+        "--paper-prod-state-dir <export>/state",
+        "--paper-prod-artifact-dir <export>/artifacts",
+        "--min-trading-days`, default `10`",
+        "--rollback-evidence <json>",
+        "duplicate broker-submission identifiers",
+        "unresolved alerts, dead letters, failed jobs, and non-terminal orders",
+        "accepted`, `expected`, or `resolved",
+        "Observe QQQ Azure paper-prod for `10` additional NYSE trading days",
+        "PostgreSQL, Blob, Service Bus, notifications, alerts, and Alpaca",
+        "local production scheduling disabled",
+        "Archive the old local QQQ state only after the closeout report is accepted",
+        "QQQ strategy, approval semantics, broker endpoint behavior, Terraform gates, VOO, BTC",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_14_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-14-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-14 Worker Plan: phase9/P9-14-WORKER-PLAN.md" in nav
+    assert "phase9/P9-14-WORKER-PLAN.md" in index
+
+
+def test_qqq_azure_cutover_operator_plan_is_linked_and_gated() -> None:
+    content = QQQ_AZURE_CUTOVER_PLAN.read_text(encoding="utf-8")
+    paper_trading = (ROOT / "docs" / "paper-trading.md").read_text(encoding="utf-8")
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+    normalized = " ".join(f"{content}\n{paper_trading}".split())
+
+    required = [
+        "move QQQ paper trading authority from the local",
+        "does not apply Terraform, create secrets, stop containers, enable triggers, or submit broker orders",
+        "P9-14 closeout work should be merged",
+        "separate Alpaca paper account",
+        "separate Telegram bot/chat",
+        "enable_telegram_notifications = false",
+        "environment = \"dev\"",
+        "create_jobs = false",
+        "qqq-paper-prod.tfstate",
+        "enable_broker_secret_refs = true",
+        "paper-status --config configs/experiment.qqq_paper_daily.yaml",
+        "stop marketlab-paper-scheduler marketlab-paper-agent",
+        "Do not stop all `marketlab-*` containers",
+        "paper-scheduler --once",
+        "paper-agent-approve --once",
+        "never run local and Azure QQQ scheduler/agent as simultaneous authorities",
+        "P9-15 BTC evidence work remains separate",
+    ]
+
+    assert all(term in normalized for term in required)
+    assert "phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md" in roadmap
+    assert "QQQ Azure Cutover Operator Plan: phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md" in nav
+    assert "phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md" in index

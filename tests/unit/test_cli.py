@@ -414,6 +414,127 @@ def test_paper_parity_report_allows_custom_min_trading_days(
     assert json.loads(capsys.readouterr().out)["accepted"] is False
 
 
+def test_paper_closeout_report_defaults_to_ten_day_window_and_forwards_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+
+    def _build_report(received_config, **kwargs):
+        received["config"] = received_config
+        received.update(kwargs)
+        return {
+            "accepted": True,
+            "window": {"min_trading_days": kwargs["min_trading_days"]},
+            "missing_evidence": [],
+        }
+
+    monkeypatch.setattr(cli, "build_paper_closeout_report", _build_report)
+
+    exit_code = cli.main(
+        [
+            "paper-closeout-report",
+            "--config",
+            "configs/experiment.qqq_paper_daily.yaml",
+            "--paper-prod-state-dir",
+            "artifacts/paper-prod-export/state",
+            "--paper-prod-artifact-dir",
+            "artifacts/paper-prod-export/artifacts",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-12",
+            "--rollback-evidence",
+            "artifacts/paper-prod-export/rollback.json",
+            "--report-path",
+            "artifacts/paper-prod-closeout/closeout.json",
+            "--markdown-path",
+            "artifacts/paper-prod-closeout/closeout.md",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received == {
+        "config": config,
+        "paper_prod_state_dir": "artifacts/paper-prod-export/state",
+        "paper_prod_artifact_dir": "artifacts/paper-prod-export/artifacts",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-12",
+        "min_trading_days": 10,
+        "rollback_evidence_path": "artifacts/paper-prod-export/rollback.json",
+        "report_path": "artifacts/paper-prod-closeout/closeout.json",
+        "markdown_path": "artifacts/paper-prod-closeout/closeout.md",
+    }
+    assert json.loads(capsys.readouterr().out)["accepted"] is True
+
+
+def test_paper_closeout_report_allows_custom_min_trading_days(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    received: dict[str, object] = {}
+
+    def _build_report(received_config, **kwargs):
+        del received_config
+        received.update(kwargs)
+        return {"accepted": False, "window": {}, "missing_evidence": []}
+
+    monkeypatch.setattr(cli, "build_paper_closeout_report", _build_report)
+
+    exit_code = cli.main(
+        [
+            "paper-closeout-report",
+            "--config",
+            "dummy.yaml",
+            "--paper-prod-state-dir",
+            "state",
+            "--paper-prod-artifact-dir",
+            "artifacts",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-02",
+            "--min-trading-days",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["min_trading_days"] == 2
+    assert json.loads(capsys.readouterr().out)["accepted"] is False
+
+
+def test_paper_closeout_report_rejects_invalid_qqq_config() -> None:
+    with repo_scratch_dir("closeout_voo_config") as root:
+        config_path = write_phase7_paper_config(root / "config.yaml", symbol="VOO")
+        state_dir = root / "state"
+        artifact_dir = root / "artifacts"
+        state_dir.mkdir()
+        artifact_dir.mkdir()
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main(
+                [
+                    "paper-closeout-report",
+                    "--config",
+                    str(config_path),
+                    "--paper-prod-state-dir",
+                    str(state_dir),
+                    "--paper-prod-artifact-dir",
+                    str(artifact_dir),
+                    "--start",
+                    "2026-06-01",
+                    "--end",
+                    "2026-06-12",
+                ]
+            )
+
+    assert excinfo.value.code == 2
+
+
 def test_paper_outbox_deliver_runs_only_approval_request_records(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

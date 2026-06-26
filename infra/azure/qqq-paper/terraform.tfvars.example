@@ -9,6 +9,7 @@ create_jobs                         = false
 enable_scheduler_schedule           = false
 enable_service_bus_approval_trigger = false
 enable_broker_secret_refs           = false
+enable_telegram_notifications       = false
 
 # Required only when create_jobs=true.
 marketlab_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"

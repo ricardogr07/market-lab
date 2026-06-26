@@ -438,11 +438,43 @@ paper-prod cycle require a separate supervised operator session.
 - confirm the immutable image digest, Key Vault secret IDs, PostgreSQL DSN,
   operator-approved firewall rules, and paper-prod tfvars are retained outside
   the repository
+- confirm Azure QQQ uses a separate Alpaca paper account and a separate
+  Telegram bot/chat from the local QQQ runner
+- confirm `enable_telegram_notifications = false` for dev and early paper-prod
+  smoke tests, then set it to `true` only after the separate Azure QQQ
+  Telegram bot/chat and Key Vault secret IDs are accepted
 - confirm Alpaca endpoints are paper-only before any broker-facing Azure job is
   smoke-tested
 - record operator, commit SHA, P9-12 evidence URI, final import evidence URI,
   backup/restore evidence URI, rollback evidence URI, and alert evidence URI
   outside tracked files
+
+### Sequential Azure Cutover Gates
+
+Use the full
+[QQQ Azure cutover operator plan](phase9/QQQ-AZURE-CUTOVER-OPERATOR-PLAN.md)
+when moving authority from local Docker to Azure. The required sequence is:
+
+1. merge the selected source commit, including P9-14 and any Terraform
+   notification-gate change
+2. create separate Azure QQQ Alpaca paper and Telegram credentials outside
+   tracked files
+3. apply dev infrastructure with jobs, triggers, broker secret refs, and
+   Telegram delivery disabled
+4. publish an immutable image digest from the accepted commit
+5. smoke-test dev jobs with no broker authority
+6. accept QQQ parity, failure-drill, backup/restore, rollback, alert, and
+   dead-letter evidence while local remains authoritative
+7. create paper-prod infrastructure and jobs with triggers and broker secret
+   refs disabled
+8. attach broker/provider/notification secret refs with triggers disabled
+9. stop only `marketlab-paper-scheduler` and `marketlab-paper-agent`, then run
+   final import and manual paper-prod smoke
+10. enable scheduler and Service Bus triggers only after smoke acceptance
+11. accept the first Azure-owned cycle before starting P9-14 closeout
+
+Never run local and Azure QQQ scheduler/agent paths as simultaneous
+authorities.
 
 ### Stop Local Authority
 
@@ -555,6 +587,103 @@ docker compose --env-file .env -f docker/compose.paper.yml up -d --build marketl
 ```
 
 P9-14 owns the ten-trading-day post-cutover observation window and closeout.
+
+## P9-14 QQQ Post-Cutover Closeout Runbooks
+
+P9-14 documents the post-cutover observation and closeout gates after P9-13
+paper-prod cutover has completed and the first production-paper cycle has been
+accepted. It does not run the live observation, apply Terraform, change
+secrets, enable Azure jobs, submit broker orders, archive state by itself, or
+make the P9-15 BTC final evidence decision.
+
+### Observation Checklist
+
+Observe QQQ Azure paper-prod for `10` additional NYSE trading days. Keep
+`configs/experiment.qqq_paper_daily.yaml` unchanged and record the operator,
+commit SHA, paper-prod cutover evidence URI, first-cycle evidence URI,
+observation date range, rollback rehearsal URI, and final closeout report URI
+outside tracked files.
+
+For each observed trading day, review exported evidence for:
+
+- PostgreSQL proposal, approval, submission, order-status, and latest-status
+  state
+- Blob proposal, evidence, approval, submission, order-status, notification,
+  and report artifacts
+- Service Bus delivery, settlement, retry, and dead-letter state
+- notification audit records and Telegram delivery state
+- Azure job failure alerts and missing-evidence alerts
+- Alpaca paper broker order state and account state
+
+Do not continue closeout if any proposal is unresolved, any order is
+non-terminal without an accepted operator note, any broker submission appears
+duplicated, or any alert, dead letter, failed job, or reconciliation issue is
+unresolved.
+
+### Rollback Runner Rehearsal
+
+Keep local production scheduling disabled during the observation window. The
+rollback runner may be preserved only as a reviewed manual recovery path that
+uses the same PostgreSQL and Blob adapters. It must not resume local authority
+or schedule production paper phases unless a separate supervised incident
+decision chooses local recovery.
+
+Record rollback rehearsal evidence outside tracked files. The evidence must
+show that the local runner can be started against reviewed PostgreSQL and Blob
+state, can read QQQ status, and can remain disabled again after the rehearsal.
+
+### Generate Closeout Report
+
+Export paper-prod evidence to local review roots, then run:
+
+```bash
+python scripts/run_marketlab.py paper-closeout-report \
+  --config configs/experiment.qqq_paper_daily.yaml \
+  --paper-prod-state-dir "<paper-prod-export-root>/state" \
+  --paper-prod-artifact-dir "<paper-prod-export-root>/artifacts" \
+  --start "<yyyy-mm-dd>" \
+  --end "<yyyy-mm-dd>" \
+  --rollback-evidence "<paper-prod-export-root>/rollback-evidence.json" \
+  --report-path artifacts/paper/closeout/qqq-paper-prod-closeout.json \
+  --markdown-path artifacts/paper/closeout/qqq-paper-prod-closeout.md
+```
+
+The default minimum evidence window is `10` observed trading days. The command
+checks decision, approval, submission, reconciliation, notification inventory,
+report inventory, duplicate broker-submission identifiers, alert evidence,
+dead-letter evidence, failed-job evidence, non-terminal order evidence, and
+rollback rehearsal acceptance. It reads exported files only.
+
+Use these optional exported evidence files under
+`<paper-prod-export-root>/artifacts` when issues exist:
+
+```text
+alerts.json
+dead_letters.json
+failed_jobs.json
+non_terminal_orders.json
+```
+
+Each issue item must have `status` set to `accepted`, `expected`, or
+`resolved` before the closeout report can pass. A missing rollback evidence
+file, `blocking` status, or unresolved item must stop closeout.
+
+### Archive Local State
+
+Archive the old local QQQ state only after the closeout report is accepted.
+Move or snapshot local production artifacts into a dated archive outside the
+active scheduler path. Preserve local Docker for development and manual
+recovery drills, not for scheduled production QQQ paper phases.
+
+Record the archive location, checksum manifest, operator, commit SHA, closeout
+report URI, rollback rehearsal URI, and final acceptance decision outside
+tracked files.
+
+### Tracked Documentation Boundary
+
+Do not use live Azure resource names, DSNs, tfvars, backend files, Terraform
+state, Terraform plans, Key Vault secret IDs, broker account identifiers, or
+secret values in tracked documentation.
 
 ## Alpaca Environment
 
