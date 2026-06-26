@@ -326,7 +326,7 @@ working alerts, and a rehearsed rollback.
 | [P9-08](phase9/P9-08-WORKER-PLAN.md) | PostgreSQL repositories and migrations | P9-07 | Filesystem, SQLite, and PostgreSQL contract suites pass |
 | [P9-09](phase9/P9-09-WORKER-PLAN.md) | Blob artifact store, outbox, and Service Bus adapters | P9-08 | Artifact parity and duplicate-delivery tests pass |
 | [P9-10](phase9/P9-10-WORKER-PLAN.md) | QQQ Azure Terraform and deployment pipeline | P9-02, P9-09 | Dev environment deploys disabled-by-default jobs using managed identity |
-| P9-11 | QQQ state importer and operational runbooks | P9-08, P9-09 | Repeatable import, checksum report, backup, restore, and rollback documented |
+| [P9-11](phase9/P9-11-WORKER-PLAN.md) | QQQ state importer and operational runbooks | P9-08, P9-09 | Repeatable import, checksum report, backup, restore, and rollback documented |
 | P9-12 | QQQ dev and UAT shadow validation | P9-10, P9-11 | Ten-trading-day parity report and failure drills accepted |
 | P9-13 | QQQ paper-prod cutover | P9-12 | Local scheduler stopped; final delta imported; Azure jobs enabled safely |
 | P9-14 | QQQ post-cutover closeout | P9-13 | Ten-trading-day observation passes; rollback remains rehearsed |
@@ -370,7 +370,9 @@ PostgreSQL persistence details are frozen in
 runtime seam details are frozen in
 [the paper Azure worker plan](phase9/P9-09-WORKER-PLAN.md). P9-10 QQQ Azure
 Terraform and deployment-pipeline details are frozen in
-[the QQQ Azure worker plan](phase9/P9-10-WORKER-PLAN.md).
+[the QQQ Azure worker plan](phase9/P9-10-WORKER-PLAN.md). P9-11 QQQ state
+import and operations runbook details are frozen in
+[the QQQ import worker plan](phase9/P9-11-WORKER-PLAN.md).
 - QQQ paper decision, approval, submission, reconciliation, notifications, and
   reporting run from Azure
 - PostgreSQL is canonical QQQ workflow state and Blob Storage contains the

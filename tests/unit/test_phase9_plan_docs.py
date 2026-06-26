@@ -14,6 +14,7 @@ P9_07_PLAN = ROOT / "docs" / "phase9" / "P9-07-WORKER-PLAN.md"
 P9_08_PLAN = ROOT / "docs" / "phase9" / "P9-08-WORKER-PLAN.md"
 P9_09_PLAN = ROOT / "docs" / "phase9" / "P9-09-WORKER-PLAN.md"
 P9_10_PLAN = ROOT / "docs" / "phase9" / "P9-10-WORKER-PLAN.md"
+P9_11_PLAN = ROOT / "docs" / "phase9" / "P9-11-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -417,3 +418,43 @@ def test_p9_10_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-10-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-10 Worker Plan: phase9/P9-10-WORKER-PLAN.md" in nav
     assert "phase9/P9-10-WORKER-PLAN.md" in index
+
+
+def test_p9_11_plan_locks_import_and_runbook_scope() -> None:
+    content = P9_11_PLAN.read_text(encoding="utf-8")
+    paper_trading = (ROOT / "docs" / "paper-trading.md").read_text(encoding="utf-8")
+    normalized = " ".join(f"{content}\n{paper_trading}".split())
+
+    required = [
+        "feature/phase-9-qqq-state-import-runbooks",
+        "feat(phase9): add QQQ state import and operations runbooks",
+        "paper-state-import",
+        "--source-state-dir",
+        "--source-inbox-dir",
+        "--dry-run",
+        "--apply",
+        "--report-path",
+        "MARKETLAB_PAPER_POSTGRES_DSN",
+        "proposal, evidence, approval, submission, order-status",
+        "notification audits and local paper reports as checksum-only review artifacts",
+        "Blob synchronization is a separate operator step",
+        "PostgreSQL restore",
+        "Blob restore",
+        "Rollback To Local Scheduler",
+        "P9-12 owns the ten-trading-day UAT parity report and failure drills",
+        "P9-13 owns paper-prod cutover and the final state delta import",
+        "Terraform plan, apply, destroy, import",
+        "submit broker orders",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_11_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-11-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-11 Worker Plan: phase9/P9-11-WORKER-PLAN.md" in nav
+    assert "phase9/P9-11-WORKER-PLAN.md" in index
