@@ -221,6 +221,106 @@ def test_paper_db_migrate_rejects_a_non_postgres_config(
     assert excinfo.value.code == 2
 
 
+def test_paper_state_import_defaults_to_dry_run_and_forwards_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = object()
+    received: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+
+    def _import(received_config, **kwargs):
+        received["config"] = received_config
+        received.update(kwargs)
+        return {
+            "mode": "dry-run",
+            "counts": {"proposals": {"imported": 1}},
+            "aggregate_checksum": "a" * 64,
+        }
+
+    monkeypatch.setattr(cli, "import_paper_state", _import)
+
+    exit_code = cli.main(
+        [
+            "paper-state-import",
+            "--config",
+            "postgres.yaml",
+            "--source-state-dir",
+            "artifacts/paper/state",
+            "--source-inbox-dir",
+            "artifacts/paper/inbox",
+            "--report-path",
+            "artifacts/paper/state/imports/dry-run.json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received == {
+        "config": config,
+        "source_state_dir": "artifacts/paper/state",
+        "source_inbox_dir": "artifacts/paper/inbox",
+        "apply": False,
+        "report_path": "artifacts/paper/state/imports/dry-run.json",
+    }
+    assert json.loads(capsys.readouterr().out)["mode"] == "dry-run"
+
+
+def test_paper_state_import_apply_flag_enables_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda path: object())
+    received: dict[str, object] = {}
+
+    def _import(received_config, **kwargs):
+        del received_config
+        received.update(kwargs)
+        return {"mode": "apply", "counts": {}, "aggregate_checksum": "b" * 64}
+
+    monkeypatch.setattr(cli, "import_paper_state", _import)
+
+    exit_code = cli.main(
+        [
+            "paper-state-import",
+            "--config",
+            "postgres.yaml",
+            "--source-state-dir",
+            "state",
+            "--source-inbox-dir",
+            "inbox",
+            "--apply",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["apply"] is True
+    assert json.loads(capsys.readouterr().out)["mode"] == "apply"
+
+
+def test_paper_state_import_rejects_a_non_postgres_config() -> None:
+    with repo_scratch_dir("state_import_filesystem_config") as root:
+        config_path = write_phase7_paper_config(root / "config.yaml")
+        state_dir = root / "artifacts" / "paper" / "state"
+        inbox_dir = root / "artifacts" / "paper" / "inbox"
+        state_dir.mkdir(parents=True)
+        inbox_dir.mkdir(parents=True)
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main(
+                [
+                    "paper-state-import",
+                    "--config",
+                    str(config_path),
+                    "--source-state-dir",
+                    str(state_dir),
+                    "--source-inbox-dir",
+                    str(inbox_dir),
+                ]
+            )
+
+    assert excinfo.value.code == 2
+
+
 def test_paper_outbox_deliver_runs_only_approval_request_records(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

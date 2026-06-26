@@ -49,6 +49,7 @@ from marketlab.paper.service_bus import (
     PAPER_APPROVAL_REQUEST_EVENT_TYPE,
     receive_paper_approval_requests,
 )
+from marketlab.paper.state_import import import_paper_state
 from marketlab.pipeline import backtest, prepare_data, run_experiment, train_models
 from marketlab.reports.phase8_bull_counterfactual import (
     write_phase8_bull_counterfactual,
@@ -207,6 +208,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     paper_blob_sync = subparsers.add_parser("paper-blob-sync")
     paper_blob_sync.add_argument("--config", required=True)
+
+    paper_state_import = subparsers.add_parser("paper-state-import")
+    paper_state_import.add_argument("--config", required=True)
+    paper_state_import.add_argument("--source-state-dir", required=True)
+    paper_state_import.add_argument("--source-inbox-dir", required=True)
+    mode = paper_state_import.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    paper_state_import.add_argument("--report-path")
 
     paper_service_bus_receive = subparsers.add_parser("paper-service-bus-receive")
     paper_service_bus_receive.add_argument("--config", required=True)
@@ -525,6 +535,27 @@ def _run_paper_blob_sync_command(
     return 0, "success"
 
 
+def _run_paper_state_import_command(
+    config,
+    *,
+    source_state_dir: str,
+    source_inbox_dir: str,
+    apply: bool,
+    report_path: str | None,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    report = import_paper_state(
+        config,
+        source_state_dir=source_state_dir,
+        source_inbox_dir=source_inbox_dir,
+        apply=apply,
+        report_path=report_path,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0, "applied" if apply else "dry_run"
+
+
 def _run_paper_service_bus_receive_command(
     config,
     *,
@@ -721,6 +752,22 @@ def main(argv: list[str] | None = None) -> int:
                 execution_context=execution_context,
             ),
         )
+
+    if args.command == "paper-state-import":
+        try:
+            return _run_logged_paper_command(
+                args.command,
+                action=lambda execution_context: _run_paper_state_import_command(
+                    config,
+                    source_state_dir=args.source_state_dir,
+                    source_inbox_dir=args.source_inbox_dir,
+                    apply=args.apply,
+                    report_path=args.report_path,
+                    execution_context=execution_context,
+                ),
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.command == "paper-service-bus-receive":
         return _run_logged_paper_command(
