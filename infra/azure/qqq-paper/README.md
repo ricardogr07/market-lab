@@ -37,6 +37,7 @@ create_jobs                         = false
 enable_scheduler_schedule           = false
 enable_service_bus_approval_trigger = false
 enable_broker_secret_refs           = false
+enable_telegram_notifications       = false
 ```
 
 After the ACR exists and an immutable MarketLab image digest is published, a
@@ -73,6 +74,14 @@ The launch gate rejects trigger enablement unless the image digest is a
 non-placeholder immutable SHA-256 digest, broker/provider/notification Key
 Vault secret references are populated, and reviewed HTTPS evidence URIs are
 provided for P9-12 parity, final import, backup/restore, rollback, and alerts.
+
+Telegram delivery is a separate paper-prod operator gate. The checked-in QQQ
+config enables Telegram, but Terraform defaults
+`enable_telegram_notifications = false` so dev and early paper-prod smoke tests
+can preserve notification audit records without sending to the live Azure QQQ
+chat. Set it to `true` only after the separate Azure QQQ Telegram bot and chat
+have been verified, `enable_broker_secret_refs = true`, and both Telegram Key
+Vault secret IDs are populated.
 
 ## Runtime Configuration
 

@@ -41,7 +41,7 @@ locals {
     MARKETLAB_PAPER_PERSISTENCE_BACKEND          = "postgres"
     MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES        = "1"
     MARKETLAB_PAPER_TELEGRAM_ALLOWED_EXPERIMENTS = "qqq_paper_daily"
-    MARKETLAB_PAPER_TELEGRAM_ENABLED             = "false"
+    MARKETLAB_PAPER_TELEGRAM_ENABLED             = tostring(var.enable_telegram_notifications)
     MARKETLAB_TRIGGER_SOURCE                     = "azure-container-apps-job"
   }
 

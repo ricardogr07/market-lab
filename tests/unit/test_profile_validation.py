@@ -117,6 +117,7 @@ def test_tox_preflight_tiers_match_expected_commands() -> None:
         "src/marketlab/paper/approval_clients.py src/marketlab/paper/notifications.py "
         "src/marketlab/paper/observability.py src/marketlab/paper/contracts.py "
         "src/marketlab/paper/outbox.py src/marketlab/paper/parity.py "
+        "src/marketlab/paper/closeout.py "
         "src/marketlab/paper/secrets.py src/marketlab/paper/service_bus.py "
         "src/marketlab/paper/state_import.py "
         "src/marketlab/paper/persistence/blob.py src/marketlab/paper/persistence/filesystem.py "
