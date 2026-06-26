@@ -175,6 +175,153 @@ database backup and then add a forward corrective migration; do not manually
 drop tables or attempt a down migration. P9-11 owns the production import and
 restore rehearsal.
 
+## P9-11 QQQ Import Runbooks
+
+P9-11 prepares QQQ state import and restore operations; it does not run a live
+import by itself, enable Azure schedules, consume Service Bus messages, call
+providers, send Telegram notifications, or submit broker orders. P9-12 owns
+the ten-trading-day UAT parity report and failure drills. P9-13 owns
+paper-prod cutover and the final state delta import.
+
+Use an untracked PostgreSQL config for import review:
+
+```yaml
+paper:
+  persistence_backend: "postgres"
+```
+
+Set the DSN only in the operator environment:
+
+```bash
+export MARKETLAB_PAPER_POSTGRES_DSN="<postgres-dsn-from-approved-secret-store>"
+```
+
+### Pre-Import Checklist
+
+- confirm the local QQQ scheduler is the authoritative runtime
+- confirm `configs/experiment.qqq_paper_daily.yaml` has not changed strategy,
+  model, schedule, approval, or broker semantics
+- confirm `MARKETLAB_PAPER_POSTGRES_DSN` points at the approved dev database
+- confirm `paper-db-migrate` has converged successfully
+- confirm no Terraform plan, apply, import, destroy, Azure login, schedule
+  enablement, or broker secret change is part of the import session
+- record the operator, source artifact root, image or commit SHA, and reviewed
+  config path outside tracked files
+
+### Backup Before Import
+
+Take a PostgreSQL backup with approved operator tooling before any apply. Use
+placeholder names in runbooks and tickets:
+
+```bash
+pg_dump "<postgres-dsn-from-approved-secret-store>" \
+  --format=custom \
+  --file "<secure-backup-path>/qqq-paper-dev-before-import.dump"
+```
+
+Verify the backup into a scratch database before continuing:
+
+```bash
+pg_restore \
+  --dbname "<scratch-restore-dsn>" \
+  --clean \
+  --if-exists \
+  "<secure-backup-path>/qqq-paper-dev-before-import.dump"
+```
+
+### Dry-Run Import
+
+Dry-run is the default and is safe to repeat:
+
+```bash
+python scripts/run_marketlab.py paper-state-import \
+  --config configs/local.qqq-postgres.yaml \
+  --source-state-dir artifacts/paper/state \
+  --source-inbox-dir artifacts/paper/inbox \
+  --dry-run \
+  --report-path artifacts/paper/state/imports/qqq-dev-dry-run.json
+```
+
+Review `counts`, every `conflicting` entry, and the aggregate checksum. Do not
+continue if any conflict is present or any source file is malformed.
+
+### Apply Import
+
+Apply only after the backup and dry-run report are accepted:
+
+```bash
+python scripts/run_marketlab.py paper-state-import \
+  --config configs/local.qqq-postgres.yaml \
+  --source-state-dir artifacts/paper/state \
+  --source-inbox-dir artifacts/paper/inbox \
+  --apply \
+  --report-path artifacts/paper/state/imports/qqq-dev-apply.json
+```
+
+Repeat the same command once after apply. The repeat should report identical
+records as skipped and preserve the same source checksums.
+
+### Checksum Report Review
+
+The import report records source paths, logical targets, SHA-256 checksums,
+per-surface counts, mode, timestamps, and an aggregate manifest checksum.
+Notification audits and local reports are checksum-only review artifacts in
+P9-11 because PostgreSQL remains canonical control state and Blob remains the
+review surface.
+
+### Blob Sync After Accepted Import
+
+Blob synchronization is a separate operator step:
+
+```bash
+python scripts/run_marketlab.py paper-blob-sync \
+  --config configs/local.qqq-postgres-azure-blob.yaml
+```
+
+Do not hide Blob sync inside `paper-state-import`. Review the import report
+first, then run Blob sync with the approved environment and deployment ID.
+
+### PostgreSQL Restore Rehearsal
+
+Restore the pre-import backup into a scratch database and run read-only status
+checks against the scratch DSN:
+
+```bash
+export MARKETLAB_PAPER_POSTGRES_DSN="<scratch-restore-dsn>"
+python scripts/run_marketlab.py paper-status \
+  --config configs/local.qqq-postgres.yaml
+```
+
+The restore rehearsal must prove that proposals, status, submissions, and
+order-status payloads can be read through the existing repository APIs.
+
+### Blob Restore Rehearsal
+
+Use approved Azure Blob tooling to copy versioned artifacts into a scratch
+prefix such as:
+
+```text
+paper/<environment>/<deployment-id>/restore-check/<yyyy-mm-dd>/
+```
+
+Compare restored proposal, evidence, approval, submission, order-status,
+notification, status, and report artifacts against the checksum report before
+P9-12 parity work begins.
+
+### Rollback To Local Scheduler
+
+If import validation fails before cutover, keep the local QQQ scheduler as the
+authoritative runtime and restore PostgreSQL from the verified backup. Do not
+enable Azure jobs. Do not run broker-facing jobs from Azure. Keep the local
+Docker stack available:
+
+```bash
+docker compose --env-file .env -f docker/compose.paper.yml up -d --build
+```
+
+Production cutover requires P9-13 approval, local scheduler stop, in-flight
+state checks, final delta import, and explicit Azure job enablement.
+
 ## Alpaca Environment
 
 Keep credentials in environment variables, not YAML. For local runs, copy `.env.example` to `.env` in the repo root and fill in the paper credentials:

@@ -22,6 +22,7 @@ nav:
   - Phase 9 P9-08 Worker Plan: phase9/P9-08-WORKER-PLAN.md
   - Phase 9 P9-09 Worker Plan: phase9/P9-09-WORKER-PLAN.md
   - Phase 9 P9-10 Worker Plan: phase9/P9-10-WORKER-PLAN.md
+  - Phase 9 P9-11 Worker Plan: phase9/P9-11-WORKER-PLAN.md
 plugins:
   - search
 extra_javascript:
