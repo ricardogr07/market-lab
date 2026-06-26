@@ -13,6 +13,7 @@ P9_06_PLAN = ROOT / "docs" / "phase9" / "P9-06-WORKER-PLAN.md"
 P9_07_PLAN = ROOT / "docs" / "phase9" / "P9-07-WORKER-PLAN.md"
 P9_08_PLAN = ROOT / "docs" / "phase9" / "P9-08-WORKER-PLAN.md"
 P9_09_PLAN = ROOT / "docs" / "phase9" / "P9-09-WORKER-PLAN.md"
+P9_10_PLAN = ROOT / "docs" / "phase9" / "P9-10-WORKER-PLAN.md"
 
 
 def test_phase9_plan_replaces_obsolete_cloud_plan() -> None:
@@ -370,3 +371,49 @@ def test_p9_09_plan_is_linked_from_docs() -> None:
     assert "phase9/P9-09-WORKER-PLAN.md" in roadmap
     assert "Phase 9 P9-09 Worker Plan: phase9/P9-09-WORKER-PLAN.md" in nav
     assert "phase9/P9-09-WORKER-PLAN.md" in index
+
+
+def test_p9_10_plan_locks_qqq_azure_deployment_scope() -> None:
+    content = P9_10_PLAN.read_text(encoding="utf-8")
+    normalized = " ".join(content.split())
+
+    required = [
+        "feature/phase-9-qqq-paper-azure",
+        "feat(phase9): add QQQ paper Azure dev deployment",
+        "P9-02 Terraform bootstrap and P9-09 paper Azure runtime seams",
+        "infra/azure/qqq-paper/",
+        "qqq-paper-dev.tfstate",
+        "PostgreSQL Flexible Server",
+        "StorageV2 Blob artifact container",
+        "Service Bus namespace and queue",
+        "Key Vault",
+        "paper-db-migrate",
+        "paper-scheduler --once",
+        "paper-agent-approve --once",
+        "paper-outbox-deliver",
+        "paper-notifications-deliver",
+        "paper-blob-sync",
+        "paper-service-bus-receive",
+        "create_jobs = false",
+        "enable_scheduler_schedule = false",
+        "enable_service_bus_approval_trigger = false",
+        "enable_broker_secret_refs = false",
+        "MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES=1",
+        "MARKETLAB_PAPER_POSTGRES_DSN",
+        "Terraform plan, apply, destroy, import",
+        "passwordless PostgreSQL managed-identity authentication",
+        "VOO migration, BTC broker migration, state import",
+        "Terraform validation is format, backend-disabled init, and validate only",
+    ]
+
+    assert all(term in normalized for term in required)
+
+
+def test_p9_10_plan_is_linked_from_docs() -> None:
+    roadmap = PLAN.read_text(encoding="utf-8")
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+
+    assert "phase9/P9-10-WORKER-PLAN.md" in roadmap
+    assert "Phase 9 P9-10 Worker Plan: phase9/P9-10-WORKER-PLAN.md" in nav
+    assert "phase9/P9-10-WORKER-PLAN.md" in index

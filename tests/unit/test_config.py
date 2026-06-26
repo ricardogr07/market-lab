@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -1764,6 +1765,92 @@ def test_load_config_accepts_paper_azure_runtime_settings(tmp_path: Path) -> Non
     assert config.paper.azure.key_vault_url == "https://marketlab-vault.vault.azure.net/"
     assert config.paper.azure.service_bus_namespace == "marketlab-uat.servicebus.windows.net"
     assert config.paper.azure.service_bus_queue_name == "qqq-paper-events"
+
+
+def test_paper_azure_runtime_env_overrides_are_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    config_path = root / "configs" / "experiment.qqq_paper_daily.yaml"
+    monkeypatch.setenv("MARKETLAB_PAPER_PERSISTENCE_BACKEND", "postgres")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_BACKEND", "azure_blob")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_BLOB_ACCOUNT_URL",
+        "https://marketlabqqqdev.blob.core.windows.net",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_BLOB_CONTAINER_NAME", "qqq-paper-artifacts")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_ENVIRONMENT", "dev")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_DEPLOYMENT_ID", "qqq-paper-dev")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SECRET_BACKEND", "key_vault")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_KEY_VAULT_URL",
+        "https://marketlab-qqq-dev.vault.azure.net/",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SERVICE_BUS_BACKEND", "azure_service_bus")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_SERVICE_BUS_NAMESPACE",
+        "marketlab-qqq-dev.servicebus.windows.net",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SERVICE_BUS_QUEUE_NAME", "qqq-paper-events")
+
+    config = load_config(config_path)
+
+    assert config.paper.persistence_backend == "filesystem"
+    assert config.paper.azure.artifact_backend == "filesystem"
+    assert config.paper.azure.secret_backend == "environment"
+    assert config.paper.azure.service_bus_backend == "disabled"
+
+
+def test_paper_azure_runtime_env_overrides_preserve_qqq_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    config_path = root / "configs" / "experiment.qqq_paper_daily.yaml"
+    canonical = load_config(config_path)
+    monkeypatch.setenv("MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES", "1")
+    monkeypatch.setenv("MARKETLAB_PAPER_PERSISTENCE_BACKEND", "postgres")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_BACKEND", "azure_blob")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_BLOB_ACCOUNT_URL",
+        "https://marketlabqqqdev.blob.core.windows.net",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_BLOB_CONTAINER_NAME", "qqq-paper-artifacts")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_ENVIRONMENT", "dev")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_ARTIFACT_DEPLOYMENT_ID", "qqq-paper-dev")
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SECRET_BACKEND", "key_vault")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_KEY_VAULT_URL",
+        "https://marketlab-qqq-dev.vault.azure.net/",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SERVICE_BUS_BACKEND", "azure_service_bus")
+    monkeypatch.setenv(
+        "MARKETLAB_PAPER_AZURE_SERVICE_BUS_NAMESPACE",
+        "marketlab-qqq-dev.servicebus.windows.net",
+    )
+    monkeypatch.setenv("MARKETLAB_PAPER_AZURE_SERVICE_BUS_QUEUE_NAME", "qqq-paper-events")
+
+    hosted = load_config(config_path)
+
+    assert asdict(hosted.data) == asdict(canonical.data)
+    assert asdict(hosted.features) == asdict(canonical.features)
+    assert asdict(hosted.target) == asdict(canonical.target)
+    assert asdict(hosted.portfolio) == asdict(canonical.portfolio)
+    assert asdict(hosted.baselines) == asdict(canonical.baselines)
+    assert asdict(hosted.evaluation) == asdict(canonical.evaluation)
+    assert [asdict(model) for model in hosted.models] == [
+        asdict(model) for model in canonical.models
+    ]
+    assert hosted.paper.persistence_backend == "postgres"
+    assert hosted.paper.azure.artifact_backend == "azure_blob"
+    assert hosted.paper.azure.secret_backend == "key_vault"
+    assert hosted.paper.azure.service_bus_backend == "azure_service_bus"
+    assert hosted.paper.azure.blob_account_url == "https://marketlabqqqdev.blob.core.windows.net"
+    assert hosted.paper.azure.blob_container_name == "qqq-paper-artifacts"
+    assert hosted.paper.azure.artifact_environment == "dev"
+    assert hosted.paper.azure.artifact_deployment_id == "qqq-paper-dev"
+    assert hosted.paper.azure.key_vault_url == "https://marketlab-qqq-dev.vault.azure.net/"
+    assert hosted.paper.azure.service_bus_namespace == "marketlab-qqq-dev.servicebus.windows.net"
+    assert hosted.paper.azure.service_bus_queue_name == "qqq-paper-events"
 
 
 def test_load_config_rejects_azure_blob_backend_without_required_scope(tmp_path: Path) -> None:
