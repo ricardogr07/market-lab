@@ -138,6 +138,7 @@ def test_operator_values_and_terraform_state_are_ignored() -> None:
     assert "*.tfstate" in ignored
     assert "*.tfstate.*" in ignored
     assert "**/backend.hcl" in ignored
+    assert "**/backend.paper-prod.hcl" in ignored
     assert "**/*.backend.hcl" in ignored
     assert "**/backend-*.hcl" in ignored
     assert "**/*.tfbackend" in ignored
@@ -413,6 +414,9 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         "dead_lettering_on_message_expiration = true",
         "configs/experiment.qqq_paper_daily.yaml",
         "passwordless PostgreSQL managed-identity authentication",
+        'key_vault_name = "kv-ml-qqq-${local.resource_name_env}-${var.resource_suffix}"',
+        "resource_name_env = var.environment == \"paper-prod\" ? \"prod\" : var.environment",
+        "QQQ paper Key Vault name must be 24 characters or fewer.",
     ]
     forbidden = [
         'resource "azurerm_container_app"',
@@ -454,6 +458,7 @@ def test_qqq_paper_prod_cutover_gates_are_locked() -> None:
     variables = _normalized(QQQ_PAPER / "variables.tf")
     tfvars = _normalized(QQQ_PAPER / "terraform.tfvars.example")
     runbook = _normalized(QQQ_PAPER / "README.md")
+    ignored = _normalized(ROOT / ".gitignore")
 
     required = [
         'contains(["dev", "paper-prod"], var.environment)',
@@ -475,3 +480,4 @@ def test_qqq_paper_prod_cutover_gates_are_locked() -> None:
     ]
 
     assert all(clause in variables or clause in tfvars or clause in runbook for clause in required)
+    assert "**/backend.paper-prod.hcl" in ignored
