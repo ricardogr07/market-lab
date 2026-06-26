@@ -40,6 +40,7 @@ from marketlab.paper.outbox import (
     deliver_pending_paper_notifications,
     deliver_pending_paper_outbox,
 )
+from marketlab.paper.parity import PaperParityReportError, build_paper_parity_report
 from marketlab.paper.persistence import (
     build_paper_uow_factory,
     migrate_paper_postgres_database,
@@ -217,6 +218,17 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
     paper_state_import.add_argument("--report-path")
+
+    paper_parity_report = subparsers.add_parser("paper-parity-report")
+    paper_parity_report.add_argument("--config", required=True)
+    paper_parity_report.add_argument("--local-state-dir", required=True)
+    paper_parity_report.add_argument("--shadow-state-dir", required=True)
+    paper_parity_report.add_argument("--start", required=True)
+    paper_parity_report.add_argument("--end", required=True)
+    paper_parity_report.add_argument("--min-trading-days", type=int, default=10)
+    paper_parity_report.add_argument("--explanations")
+    paper_parity_report.add_argument("--report-path")
+    paper_parity_report.add_argument("--markdown-path")
 
     paper_service_bus_receive = subparsers.add_parser("paper-service-bus-receive")
     paper_service_bus_receive.add_argument("--config", required=True)
@@ -556,6 +568,35 @@ def _run_paper_state_import_command(
     return 0, "applied" if apply else "dry_run"
 
 
+def _run_paper_parity_report_command(
+    config,
+    *,
+    local_state_dir: str,
+    shadow_state_dir: str,
+    start_date: str,
+    end_date: str,
+    min_trading_days: int,
+    explanations_path: str | None,
+    report_path: str | None,
+    markdown_path: str | None,
+    execution_context: ExecutionContext,
+) -> tuple[int, str | None]:
+    del execution_context
+    report = build_paper_parity_report(
+        config,
+        local_state_dir=local_state_dir,
+        shadow_state_dir=shadow_state_dir,
+        start_date=start_date,
+        end_date=end_date,
+        min_trading_days=min_trading_days,
+        explanations_path=explanations_path,
+        report_path=report_path,
+        markdown_path=markdown_path,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0, "accepted" if report["accepted"] else "needs_review"
+
+
 def _run_paper_service_bus_receive_command(
     config,
     *,
@@ -767,6 +808,26 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         except ValueError as exc:
+            parser.error(str(exc))
+
+    if args.command == "paper-parity-report":
+        try:
+            return _run_logged_paper_command(
+                args.command,
+                action=lambda execution_context: _run_paper_parity_report_command(
+                    config,
+                    local_state_dir=args.local_state_dir,
+                    shadow_state_dir=args.shadow_state_dir,
+                    start_date=args.start,
+                    end_date=args.end,
+                    min_trading_days=args.min_trading_days,
+                    explanations_path=args.explanations,
+                    report_path=args.report_path,
+                    markdown_path=args.markdown_path,
+                    execution_context=execution_context,
+                ),
+            )
+        except (PaperParityReportError, ValueError) as exc:
             parser.error(str(exc))
 
     if args.command == "paper-service-bus-receive":
