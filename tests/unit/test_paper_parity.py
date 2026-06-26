@@ -141,6 +141,21 @@ def test_paper_parity_report_requires_explanations_for_differences(
     assert explained["unresolved_difference_count"] == 0
     assert explained["differences"][0]["explanation_status"] == "accepted"
 
+    _seed_trade_day(shadow_root, "2026-06-03", target_weight=0.5)
+    changed_payload = build_paper_parity_report(
+        config,
+        local_state_dir=local_root,
+        shadow_state_dir=shadow_root,
+        start_date="2026-06-01",
+        end_date="2026-06-12",
+        explanations_path=explanations_path,
+    )
+
+    assert changed_payload["accepted"] is False
+    assert changed_payload["unresolved_difference_count"] == 1
+    assert changed_payload["differences"][0]["id"] != difference["id"]
+    assert changed_payload["differences"][0]["explanation_status"] == "unexplained"
+
 
 def test_paper_parity_report_rejects_short_evidence_window(tmp_path: Path) -> None:
     config = build_phase7_paper_config(tmp_path, symbol="QQQ")
