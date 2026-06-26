@@ -322,6 +322,103 @@ docker compose --env-file .env -f docker/compose.paper.yml up -d --build
 Production cutover requires P9-13 approval, local scheduler stop, in-flight
 state checks, final delta import, and explicit Azure job enablement.
 
+## P9-12 QQQ UAT Parity Runbooks
+
+P9-12 records ten-trading-day QQQ UAT parity evidence and supervised failure
+drills. It does not start a live UAT session by itself, enable Azure schedules,
+consume Service Bus messages, call providers, send Telegram notifications,
+submit broker orders, change strategy behavior, run Terraform plan/apply, or
+perform paper-prod cutover. P9-13 owns production cutover, local scheduler
+stop, final state delta import, and Azure job enablement.
+
+### Pre-UAT Checklist
+
+- confirm P9-10 dev infrastructure exists with schedules disabled unless a
+  separate supervised UAT session explicitly approves them
+- confirm P9-11 import and restore runbooks are complete and accepted
+- confirm `configs/experiment.qqq_paper_daily.yaml` remains the canonical QQQ
+  paper config
+- confirm local QQQ artifacts and the shadow/UAT artifact export are complete
+  for the reviewed date range
+- confirm no broker-facing Azure submission job is enabled during the parity
+  window
+- record operator, commit SHA, config path, source artifact roots, and reviewed
+  date range outside tracked files
+
+### Generate Parity Report
+
+Run the report against explicit local and shadow artifact roots:
+
+```bash
+python scripts/run_marketlab.py paper-parity-report \
+  --config configs/experiment.qqq_paper_daily.yaml \
+  --local-state-dir artifacts/paper/state \
+  --shadow-state-dir "<shadow-export-root>/state" \
+  --start "<yyyy-mm-dd>" \
+  --end "<yyyy-mm-dd>" \
+  --report-path artifacts/paper/uat/qqq-parity.json \
+  --markdown-path artifacts/paper/uat/qqq-parity.md
+```
+
+The default minimum evidence window is `10` consecutive weekdays with proposal
+and evidence artifacts present on both sides. The command compares proposal,
+evidence, approval, submission, order preview, account snapshot, order status,
+status, notification inventory, and report inventory surfaces. It writes local
+report artifacts only.
+
+### Difference Explanations
+
+If a difference is expected or accepted by review, record it in an untracked
+explanations file keyed by the report difference ID:
+
+```json
+{
+  "<difference-id>": {
+    "status": "accepted",
+    "explanation": "<operator-reviewed reason>"
+  }
+}
+```
+
+Allowed statuses are `accepted`, `expected`, and `blocking`. Re-run the report
+with the explanations file:
+
+```bash
+python scripts/run_marketlab.py paper-parity-report \
+  --config configs/experiment.qqq_paper_daily.yaml \
+  --local-state-dir artifacts/paper/state \
+  --shadow-state-dir "<shadow-export-root>/state" \
+  --start "<yyyy-mm-dd>" \
+  --end "<yyyy-mm-dd>" \
+  --explanations artifacts/paper/uat/qqq-parity-explanations.json \
+  --report-path artifacts/paper/uat/qqq-parity-reviewed.json \
+  --markdown-path artifacts/paper/uat/qqq-parity-reviewed.md
+```
+
+The report is accepted only when the ten-day evidence window passes and every
+difference is absent, `accepted`, or `expected`. A `blocking` or unexplained
+difference must stop cutover preparation.
+
+### Failure-Drill Evidence
+
+Store supervised drill notes and artifacts outside tracked files. P9-12
+acceptance requires reviewed evidence for:
+
+- duplicate delivery
+- provider timeout
+- broker timeout
+- rejected order
+- partial fill
+- stale data
+- missing bar
+- queue retry
+- dead-letter recovery
+- PostgreSQL restore
+- Blob restore
+
+Do not use live Azure resource names, DSNs, tfvars, backend files, Terraform
+state, Terraform plans, or secret values in tracked documentation.
+
 ## Alpaca Environment
 
 Keep credentials in environment variables, not YAML. For local runs, copy `.env.example` to `.env` in the repo root and fill in the paper credentials:
