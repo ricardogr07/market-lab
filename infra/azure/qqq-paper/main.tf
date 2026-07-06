@@ -74,7 +74,7 @@ locals {
       ]
     }
     paper-agent-approve = {
-      name = "agent-approve"
+      name = "approve"
       args = [
         "paper-agent-approve",
         "--config",
@@ -91,7 +91,7 @@ locals {
       ]
     }
     paper-notifications = {
-      name = "notifications"
+      name = "notify"
       args = [
         "paper-notifications-deliver",
         "--config",
@@ -107,7 +107,7 @@ locals {
       ]
     }
     paper-service-bus-receive = {
-      name = "service-bus-receive"
+      name = "sb-receive"
       args = [
         "paper-service-bus-receive",
         "--config",
