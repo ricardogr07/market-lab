@@ -378,6 +378,9 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
         "enable_telegram_notifications",
         "postgres_firewall_rules",
         "create_jobs requires at least one operator-approved PostgreSQL firewall rule",
+        "zone = var.postgres_zone",
+        'default = "1"',
+        "postgres_zone must be 1, 2, or 3",
         "MARKETLAB_PAPER_TELEGRAM_ENABLED",
         "AZURE_CLIENT_ID",
         'path = "/app/artifacts/paper/state"',
@@ -433,6 +436,7 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         "local_auth_enabled = false",
         "rbac_authorization_enabled = true",
         "requires_duplicate_detection = true",
+        'duplicate_detection_history_time_window = "P1D"',
         "dead_lettering_on_message_expiration = true",
         "configs/experiment.qqq_paper_daily.yaml",
         "passwordless PostgreSQL managed-identity authentication",
@@ -453,6 +457,16 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
 
     assert all(clause in main or clause in variables or clause in runbook for clause in required)
     assert all(clause.lower() not in main_content.lower() for clause in forbidden)
+
+
+def test_docker_image_installs_azure_runtime_dependencies() -> None:
+    dockerfile = _normalized(ROOT / "Dockerfile")
+    smoke = (ROOT / "scripts" / "check_mcp_docker.py").read_text(encoding="utf-8")
+
+    assert '".[azure,mcp]"' in dockerfile
+    assert "azure.identity" in smoke
+    assert "azure.servicebus" in smoke
+    assert "azure.storage.blob" in smoke
 
 
 def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:

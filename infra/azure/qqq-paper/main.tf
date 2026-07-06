@@ -324,7 +324,7 @@ resource "azurerm_servicebus_queue" "paper_events" {
   name                                    = "qqq-paper-events"
   namespace_id                            = azurerm_servicebus_namespace.qqq.id
   requires_duplicate_detection            = true
-  duplicate_detection_history_time_window = "PT24H"
+  duplicate_detection_history_time_window = "P1D"
   dead_lettering_on_message_expiration    = true
   max_delivery_count                      = 10
 }
@@ -357,6 +357,7 @@ resource "azurerm_postgresql_flexible_server" "qqq" {
   administrator_login           = var.postgres_admin_login
   administrator_password        = var.postgres_admin_password
   sku_name                      = var.postgres_sku_name
+  zone                          = var.postgres_zone
   storage_mb                    = var.postgres_storage_mb
   backup_retention_days         = 7
   geo_redundant_backup_enabled  = false

@@ -397,6 +397,17 @@ variable "postgres_sku_name" {
   default     = "B_Standard_B1ms"
 }
 
+variable "postgres_zone" {
+  description = "Availability zone pinned to prevent post-create drift in PostgreSQL Flexible Server."
+  type        = string
+  default     = "1"
+
+  validation {
+    condition     = contains(["1", "2", "3"], var.postgres_zone)
+    error_message = "postgres_zone must be 1, 2, or 3."
+  }
+}
+
 variable "postgres_storage_mb" {
   description = "PostgreSQL storage in MB for dev."
   type        = number

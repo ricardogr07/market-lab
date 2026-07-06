@@ -58,6 +58,18 @@ def _docker_user_args() -> list[str]:
     return ["--user", f"{os.getuid()}:{os.getgid()}"]
 
 
+def _verify_azure_runtime_dependencies() -> None:
+    modules = (
+        "azure.identity",
+        "azure.servicebus",
+        "azure.storage.blob",
+        "psycopg",
+    )
+    script = "; ".join(f"import {module}" for module in modules)
+    _call_docker("exec", CONTAINER_NAME, "python", "-c", script)
+    print("Verified Docker Azure runtime dependencies:", ", ".join(modules))
+
+
 def _load_vscode_server_config(server_name: str) -> dict[str, object]:
     document = json.loads(VSCODE_SAMPLE_PATH.read_text(encoding="utf-8"))
     return document["servers"][server_name]
@@ -257,6 +269,7 @@ def main() -> int:
             IMAGE_TAG,
             "infinity",
         )
+        _verify_azure_runtime_dependencies()
         anyio.run(_exercise_container_mcp)
         return 0
     finally:
