@@ -434,6 +434,7 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         'role_definition_name = "Key Vault Secrets User"',
         "shared_access_key_enabled = true",
         "default_to_oauth_authentication = true",
+        "Keep Azure-compatible SMB defaults for the Container Apps CSI client.",
         "qqq-paper-state",
         "Container Apps Jobs mount the `qqq-paper-state` Azure Files share",
         "local_auth_enabled = false",
@@ -456,6 +457,7 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         "terraform apply",
         "terraform destroy",
         "terraform import",
+        "channel_encryption_type",
     ]
 
     assert all(clause in main or clause in variables or clause in runbook for clause in required)
@@ -470,6 +472,7 @@ def test_docker_image_installs_azure_runtime_dependencies() -> None:
     assert "azure.identity" in smoke
     assert "azure.servicebus" in smoke
     assert "azure.storage.blob" in smoke
+    assert "load_postgres_migrations" in smoke
 
 
 def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:

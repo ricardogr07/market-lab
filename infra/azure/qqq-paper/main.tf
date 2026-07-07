@@ -247,12 +247,8 @@ resource "azurerm_storage_account" "qqq" {
       days = 30
     }
 
-    smb {
-      versions                        = ["SMB3.1.1"]
-      authentication_types            = ["NTLMv2"]
-      kerberos_ticket_encryption_type = ["AES-256"]
-      channel_encryption_type         = ["AES-256-GCM"]
-    }
+    # Keep Azure-compatible SMB defaults for the Container Apps CSI client.
+    # Restricting channel encryption to AES-256-GCM makes the managed mount fail.
   }
 
   tags = local.tags

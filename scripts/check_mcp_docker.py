@@ -65,9 +65,18 @@ def _verify_azure_runtime_dependencies() -> None:
         "azure.storage.blob",
         "psycopg",
     )
-    script = "; ".join(f"import {module}" for module in modules)
-    _call_docker("exec", CONTAINER_NAME, "python", "-c", script)
-    print("Verified Docker Azure runtime dependencies:", ", ".join(modules))
+    statements = [
+        *(f"import {module}" for module in modules),
+        "from marketlab.paper.persistence.postgres import load_postgres_migrations",
+        "migrations = load_postgres_migrations()",
+        "assert [migration.version for migration in migrations] == [1, 2, 3]",
+    ]
+    script = "; ".join(statements)
+    result = _call_docker("exec", CONTAINER_NAME, "python", "-c", script, check=False)
+    if result.returncode != 0:
+        diagnostic = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"Docker Azure runtime verification failed:\n{diagnostic}")
+    print("Verified Docker Azure runtime dependencies and packaged migrations:", ", ".join(modules))
 
 
 def _load_vscode_server_config(server_name: str) -> dict[str, object]:

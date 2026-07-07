@@ -35,7 +35,7 @@ from marketlab.paper.state import PaperStateStore, _json_dump
 
 POSTGRES_DSN_ENV = "MARKETLAB_PAPER_POSTGRES_DSN"
 _MIGRATIONS_PACKAGE = "marketlab.paper.persistence.migrations"
-_MIGRATION_PATTERN = re.compile(r"^(?P<version>[1-9][0-9]*)_(?P<name>[a-z0-9_]+)\\.sql$")
+_MIGRATION_PATTERN = re.compile(r"^(?P<version>0*[1-9][0-9]*)_(?P<name>[a-z0-9_]+)\.sql$")
 _MIGRATION_LOCK_KEY = int.from_bytes(
     hashlib.sha256(b"marketlab.paper.postgres.migrations").digest()[:8],
     byteorder="big",
