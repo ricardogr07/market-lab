@@ -111,10 +111,10 @@ RBAC operations.
 
 The checked-in config keeps `paper.state_dir` at `artifacts/paper/state`.
 Container Apps Jobs mount the `qqq-paper-state` Azure Files share at
-`/app/artifacts/paper/state` so separately invoked producer, delivery, and
-`paper-blob-sync` jobs operate on the same local review surface. Blob remains
-the review/archive destination; PostgreSQL remains the transactional state
-backend.
+`/app/artifacts/paper` with the non-root application UID and GID so the state,
+approval inbox, notification, and report paths share one writable review
+surface across separately invoked jobs. Blob remains the review/archive
+destination; PostgreSQL remains the transactional state backend.
 
 ## Job Activation Order
 

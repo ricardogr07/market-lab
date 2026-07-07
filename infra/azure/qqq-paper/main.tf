@@ -544,14 +544,15 @@ resource "azurerm_container_app_job" "qqq" {
 
       volume_mounts {
         name = "paper-state"
-        path = "/app/artifacts/paper/state"
+        path = "/app/artifacts/paper"
       }
     }
 
     volume {
-      name         = "paper-state"
-      storage_name = azurerm_container_app_environment_storage.paper_state.name
-      storage_type = "AzureFile"
+      name          = "paper-state"
+      storage_name  = azurerm_container_app_environment_storage.paper_state.name
+      storage_type  = "AzureFile"
+      mount_options = "uid=10001,gid=10001,file_mode=0660,dir_mode=0770,mfsymlinks,nosharesock"
     }
   }
 
