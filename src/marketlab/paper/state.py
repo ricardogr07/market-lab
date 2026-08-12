@@ -16,8 +16,11 @@ def _load_paper_state(path: Path, logger: logging.Logger) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"expected JSON object, got {type(data).__name__}")
+        return data
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         quarantine_path = path.with_name(f"{path.name}.corrupt-{timestamp}")
         while quarantine_path.exists():
