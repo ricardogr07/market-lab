@@ -25,6 +25,7 @@ postgres_firewall_rules = {
 }
 
 paper_state_share_quota_gb = 10
+postgres_zone              = "1"
 
 # Required before enabling paper-prod scheduler or Service Bus approval triggers.
 p9_12_parity_evidence_uri   = ""

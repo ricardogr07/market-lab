@@ -74,7 +74,7 @@ locals {
       ]
     }
     paper-agent-approve = {
-      name = "agent-approve"
+      name = "approve"
       args = [
         "paper-agent-approve",
         "--config",
@@ -91,7 +91,7 @@ locals {
       ]
     }
     paper-notifications = {
-      name = "notifications"
+      name = "notify"
       args = [
         "paper-notifications-deliver",
         "--config",
@@ -107,7 +107,7 @@ locals {
       ]
     }
     paper-service-bus-receive = {
-      name = "service-bus-receive"
+      name = "sb-receive"
       args = [
         "paper-service-bus-receive",
         "--config",
@@ -247,12 +247,8 @@ resource "azurerm_storage_account" "qqq" {
       days = 30
     }
 
-    smb {
-      versions                        = ["SMB3.1.1"]
-      authentication_types            = ["NTLMv2"]
-      kerberos_ticket_encryption_type = ["AES-256"]
-      channel_encryption_type         = ["AES-256-GCM"]
-    }
+    # Keep Azure-compatible SMB defaults for the Container Apps CSI client.
+    # Restricting channel encryption to AES-256-GCM makes the managed mount fail.
   }
 
   tags = local.tags
@@ -324,7 +320,7 @@ resource "azurerm_servicebus_queue" "paper_events" {
   name                                    = "qqq-paper-events"
   namespace_id                            = azurerm_servicebus_namespace.qqq.id
   requires_duplicate_detection            = true
-  duplicate_detection_history_time_window = "PT24H"
+  duplicate_detection_history_time_window = "P1D"
   dead_lettering_on_message_expiration    = true
   max_delivery_count                      = 10
 }
@@ -357,6 +353,7 @@ resource "azurerm_postgresql_flexible_server" "qqq" {
   administrator_login           = var.postgres_admin_login
   administrator_password        = var.postgres_admin_password
   sku_name                      = var.postgres_sku_name
+  zone                          = var.postgres_zone
   storage_mb                    = var.postgres_storage_mb
   backup_retention_days         = 7
   geo_redundant_backup_enabled  = false
@@ -547,14 +544,15 @@ resource "azurerm_container_app_job" "qqq" {
 
       volume_mounts {
         name = "paper-state"
-        path = "/app/artifacts/paper/state"
+        path = "/app/artifacts/paper"
       }
     }
 
     volume {
-      name         = "paper-state"
-      storage_name = azurerm_container_app_environment_storage.paper_state.name
-      storage_type = "AzureFile"
+      name          = "paper-state"
+      storage_name  = azurerm_container_app_environment_storage.paper_state.name
+      storage_type  = "AzureFile"
+      mount_options = "uid=10001,gid=10001,file_mode=0660,dir_mode=0770,mfsymlinks,nosharesock"
     }
   }
 

@@ -58,6 +58,27 @@ def _docker_user_args() -> list[str]:
     return ["--user", f"{os.getuid()}:{os.getgid()}"]
 
 
+def _verify_azure_runtime_dependencies() -> None:
+    modules = (
+        "azure.identity",
+        "azure.servicebus",
+        "azure.storage.blob",
+        "psycopg",
+    )
+    statements = [
+        *(f"import {module}" for module in modules),
+        "from marketlab.paper.persistence.postgres import load_postgres_migrations",
+        "migrations = load_postgres_migrations()",
+        "assert [migration.version for migration in migrations] == [1, 2, 3]",
+    ]
+    script = "; ".join(statements)
+    result = _call_docker("exec", CONTAINER_NAME, "python", "-c", script, check=False)
+    if result.returncode != 0:
+        diagnostic = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"Docker Azure runtime verification failed:\n{diagnostic}")
+    print("Verified Docker Azure runtime dependencies and packaged migrations:", ", ".join(modules))
+
+
 def _load_vscode_server_config(server_name: str) -> dict[str, object]:
     document = json.loads(VSCODE_SAMPLE_PATH.read_text(encoding="utf-8"))
     return document["servers"][server_name]
@@ -257,6 +278,7 @@ def main() -> int:
             IMAGE_TAG,
             "infinity",
         )
+        _verify_azure_runtime_dependencies()
         anyio.run(_exercise_container_mcp)
         return 0
     finally:

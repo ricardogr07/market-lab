@@ -367,6 +367,9 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
         "paper-notifications-deliver",
         "paper-blob-sync",
         "paper-service-bus-receive",
+        'name = "approve"',
+        'name = "notify"',
+        'name = "sb-receive"',
         "MARKETLAB_PAPER_RUNTIME_ENV_OVERRIDES",
         "MARKETLAB_PAPER_POSTGRES_DSN",
         "enable_scheduler_schedule requires create_jobs",
@@ -378,9 +381,13 @@ def test_qqq_paper_azure_jobs_and_triggers_default_disabled() -> None:
         "enable_telegram_notifications",
         "postgres_firewall_rules",
         "create_jobs requires at least one operator-approved PostgreSQL firewall rule",
+        "zone = var.postgres_zone",
+        'default = "1"',
+        "postgres_zone must be 1, 2, or 3",
         "MARKETLAB_PAPER_TELEGRAM_ENABLED",
         "AZURE_CLIENT_ID",
-        'path = "/app/artifacts/paper/state"',
+        'path = "/app/artifacts/paper"',
+        'mount_options = "uid=10001,gid=10001,file_mode=0660,dir_mode=0770,mfsymlinks,nosharesock"',
         'storage_type = "AzureFile"',
         "false",
         "terraform-disabled-template",
@@ -428,11 +435,13 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         'role_definition_name = "Key Vault Secrets User"',
         "shared_access_key_enabled = true",
         "default_to_oauth_authentication = true",
+        "Keep Azure-compatible SMB defaults for the Container Apps CSI client.",
         "qqq-paper-state",
         "Container Apps Jobs mount the `qqq-paper-state` Azure Files share",
         "local_auth_enabled = false",
         "rbac_authorization_enabled = true",
         "requires_duplicate_detection = true",
+        'duplicate_detection_history_time_window = "P1D"',
         "dead_lettering_on_message_expiration = true",
         "configs/experiment.qqq_paper_daily.yaml",
         "passwordless PostgreSQL managed-identity authentication",
@@ -449,10 +458,22 @@ def test_qqq_paper_azure_security_and_runtime_seams_are_locked() -> None:
         "terraform apply",
         "terraform destroy",
         "terraform import",
+        "channel_encryption_type",
     ]
 
     assert all(clause in main or clause in variables or clause in runbook for clause in required)
     assert all(clause.lower() not in main_content.lower() for clause in forbidden)
+
+
+def test_docker_image_installs_azure_runtime_dependencies() -> None:
+    dockerfile = _normalized(ROOT / "Dockerfile")
+    smoke = (ROOT / "scripts" / "check_mcp_docker.py").read_text(encoding="utf-8")
+
+    assert '".[azure,mcp]"' in dockerfile
+    assert "azure.identity" in smoke
+    assert "azure.servicebus" in smoke
+    assert "azure.storage.blob" in smoke
+    assert "load_postgres_migrations" in smoke
 
 
 def test_qqq_paper_backend_provider_and_tox_validation_are_locked() -> None:
