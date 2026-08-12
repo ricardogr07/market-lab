@@ -42,7 +42,7 @@ from marketlab.paper.service import (
     read_paper_evidence,
     validate_paper_trading_config,
 )
-from marketlab.paper.state import PaperStateStore
+from marketlab.paper.state import PaperStateStore, _load_paper_state
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,10 +58,7 @@ def _worker_state_path(config: ExperimentConfig) -> Path:
 
 
 def _load_worker_state(config: ExperimentConfig) -> dict[str, Any]:
-    path = _worker_state_path(config)
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _load_paper_state(_worker_state_path(config), LOGGER)
 
 
 def _save_worker_state(config: ExperimentConfig, payload: dict[str, Any]) -> Path:

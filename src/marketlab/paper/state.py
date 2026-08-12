@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from marketlab.config import ExperimentConfig
+from marketlab.log import emit_structured_log
 from marketlab.paper.core import _now_utc
+
+
+def _load_paper_state(path: Path, logger: logging.Logger) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        quarantine_path = path.with_name(f"{path.name}.corrupt-{timestamp}")
+        while quarantine_path.exists():
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            quarantine_path = path.with_name(f"{path.name}.corrupt-{timestamp}")
+        path.rename(quarantine_path)
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            f"Quarantined corrupt paper state file {path} as {quarantine_path}.",
+            event="paper.state.corrupt",
+        )
+        return {}
 
 
 def _json_dump(path: Path, payload: dict[str, Any]) -> Path:
