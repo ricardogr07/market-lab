@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.3.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.2.0...marketlab-v0.3.0) (2026-08-12)
+
+
+### Features
+
+* add autonomous single-ETF paper loop with LLM approvals ([#64](https://github.com/ricardogr07/market-lab/issues/64)) ([b7a3f46](https://github.com/ricardogr07/market-lab/commit/b7a3f46b9d465a021deb131ca3d11899ab225033))
+* add MarketLab MCP server and Docker sidecar ([#62](https://github.com/ricardogr07/market-lab/issues/62)) ([e2d84fb](https://github.com/ricardogr07/market-lab/commit/e2d84fbd926e1d6bfc1c785891f8ca7b74e3da81))
+* add sqlite paper control-store adapter behind persistence ports ([#82](https://github.com/ricardogr07/market-lab/issues/82)) ([b29663c](https://github.com/ricardogr07/market-lab/commit/b29663c105cf86574356f2941d6087b7aa438f57))
+* **contracts:** add typed paper contract module ([18a7d85](https://github.com/ricardogr07/market-lab/commit/18a7d85e5fab8f3f1cfd8a48fe5a048c8c253533))
+* **crypto:** add chart pattern catalog ([#89](https://github.com/ricardogr07/market-lab/issues/89)) ([a34b7cf](https://github.com/ricardogr07/market-lab/commit/a34b7cfb7f867bd9ff623fa0571f7f2b5aa46dd4))
+* **crypto:** add indicator stack baseline module ([#88](https://github.com/ricardogr07/market-lab/issues/88)) ([8170765](https://github.com/ricardogr07/market-lab/commit/81707657ae6b2fdd4a50f03f40ee084c34e1d667))
+* **crypto:** add indicator stack ML features ([#93](https://github.com/ricardogr07/market-lab/issues/93)) ([be16928](https://github.com/ricardogr07/market-lab/commit/be16928d9bc2c3d4f1edd8ec80ec311398b70f77))
+* **crypto:** add intraday data foundation ([#86](https://github.com/ricardogr07/market-lab/issues/86)) ([fbcfd42](https://github.com/ricardogr07/market-lab/commit/fbcfd42db1449068ad12b0128fc59146af46cac6))
+* **crypto:** add pattern exit overlays ([#90](https://github.com/ricardogr07/market-lab/issues/90)) ([6359df2](https://github.com/ricardogr07/market-lab/commit/6359df2fc931f667a82614df343bb6f093f496c4))
+* **crypto:** add phase 8 research config surfaces ([#87](https://github.com/ricardogr07/market-lab/issues/87)) ([341bdc8](https://github.com/ricardogr07/market-lab/commit/341bdc8d986b648199c3dab99929379e13353dd3))
+* **crypto:** add phase 8 research configs ([#95](https://github.com/ricardogr07/market-lab/issues/95)) ([228b0ef](https://github.com/ricardogr07/market-lab/commit/228b0ef0200d044b437090144b395d196092129e))
+* **crypto:** wire phase 8 research artifacts ([#97](https://github.com/ricardogr07/market-lab/issues/97)) ([426d3b2](https://github.com/ricardogr07/market-lab/commit/426d3b23df7d1684d5205c910213fff3b548f2c8))
+* **mcp:** finalize paper-sidecar MCP samples and docs ([c995db2](https://github.com/ricardogr07/market-lab/commit/c995db243022d78ca1ef0498c7f58f92c2636daa))
+* **paper:** add decision and approval service classes ([fa4f88d](https://github.com/ricardogr07/market-lab/commit/fa4f88de0d0c4ef43814c16459dfcffcdcedb219))
+* **paper:** add isolated BTC paper lane ([9b59d65](https://github.com/ricardogr07/market-lab/commit/9b59d6572be308739231680e477b1d84913c2453))
+* **paper:** add QQQ parity report command ([c9bb9de](https://github.com/ricardogr07/market-lab/commit/c9bb9de76dd4f6d3718178a4707ed1f3284385ee))
+* **paper:** add QQQ state import command ([8f85979](https://github.com/ricardogr07/market-lab/commit/8f85979e5b54a68cc56688a9ee7360b967987a40))
+* **paper:** add Telegram ops feed and harden paper loops ([0abd300](https://github.com/ricardogr07/market-lab/commit/0abd300f71f5427f6f95b23c53f0dc869523c276))
+* **phase8:** add artifact diagnostic commands ([26ca5a3](https://github.com/ricardogr07/market-lab/commit/26ca5a32b06687521425ad09203a9123fed55768))
+* **phase8:** add BTC research policy and reporting platform ([16334c6](https://github.com/ricardogr07/market-lab/commit/16334c601a03a4df49b045171a72291fe380a01f))
+* **phase8:** add regime fallback challengers ([0de1180](https://github.com/ricardogr07/market-lab/commit/0de1180dd52f0b7e7d4ed413040e5f065f11c098))
+* **phase9:** add BTC shadow Azure launch gate ([#107](https://github.com/ricardogr07/market-lab/issues/107)) ([58c2a4c](https://github.com/ricardogr07/market-lab/commit/58c2a4c8040c7955b957adb1ae18468cc4ab8daf))
+* **phase9:** add BTC shadow decision journal ([#105](https://github.com/ricardogr07/market-lab/issues/105)) ([9bfa4f3](https://github.com/ricardogr07/market-lab/commit/9bfa4f3edd80c2628dce568439656a4111a758a0))
+* **phase9:** add hosted paper execution registry ([#108](https://github.com/ricardogr07/market-lab/issues/108)) ([f752e69](https://github.com/ricardogr07/market-lab/commit/f752e69af503e55531e5c56f71cf74c17201c85d))
+* **phase9:** add paper Azure runtime seams ([#110](https://github.com/ricardogr07/market-lab/issues/110)) ([9b17090](https://github.com/ricardogr07/market-lab/commit/9b17090dd896fb28073a52c95963302d09055c2d))
+* **phase9:** add PostgreSQL paper persistence ([#109](https://github.com/ricardogr07/market-lab/issues/109)) ([7955e29](https://github.com/ricardogr07/market-lab/commit/7955e295b23d8f425c8294893f4254dd96fccc5c))
+* **phase9:** add QQQ paper Azure dev deployment ([b0264bc](https://github.com/ricardogr07/market-lab/commit/b0264bc39fd9e75248f57f10d60c90a3b5bf2d4a))
+* **phase9:** add QQQ paper-prod cutover gates ([#113](https://github.com/ricardogr07/market-lab/issues/113)) ([81a5fa3](https://github.com/ricardogr07/market-lab/commit/81a5fa35ca91de428e04e8570c0b99f01e3b2b9a))
+* **phase9:** add QQQ post-cutover closeout gates ([#114](https://github.com/ricardogr07/market-lab/issues/114)) ([f1bac4d](https://github.com/ricardogr07/market-lab/commit/f1bac4d7adb75b582d61e1bbbfc13e274bd18d5f))
+* **phase9:** freeze btc shadow contract ([#104](https://github.com/ricardogr07/market-lab/issues/104)) ([b7e6aff](https://github.com/ricardogr07/market-lab/commit/b7e6aff269d7729420c360893b4e0f048b50717a))
+* **readiness:** define service extraction rules ([#84](https://github.com/ricardogr07/market-lab/issues/84)) ([62815c2](https://github.com/ricardogr07/market-lab/commit/62815c2b4cc57152f18012f5ba932d7e71e5ca69))
+* **reports:** add crypto signal plots ([#92](https://github.com/ricardogr07/market-lab/issues/92)) ([d997012](https://github.com/ricardogr07/market-lab/commit/d997012d13dbe2e617c627031f4f891626d90ba7))
+
+
+### Bug Fixes
+
+* guard paper state loaders against corrupt JSON ([#116](https://github.com/ricardogr07/market-lab/issues/116)) ([e5e59b3](https://github.com/ricardogr07/market-lab/commit/e5e59b34ef1b2aecb6beb8dfe376297c18b06ba9))
+* **paper:** anchor submit gate to local run date ([a45db14](https://github.com/ricardogr07/market-lab/commit/a45db1467eb04096466b05739fb7f4b082d7e4f2))
+* **paper:** bind parity explanations to checksums ([c951be9](https://github.com/ricardogr07/market-lab/commit/c951be9da15638a22325fe610a6d1130b483a4c5))
+* **paper:** floor fractional sell submissions ([7bf3e74](https://github.com/ricardogr07/market-lab/commit/7bf3e74d33462fa87faf39a0e99a3aa6ea9e3e4d))
+* **paper:** gate Telegram delivery by env and experiment ([#85](https://github.com/ricardogr07/market-lab/issues/85)) ([92a6c5e](https://github.com/ricardogr07/market-lab/commit/92a6c5ecec31cd4972c1aa94a70ac728898fdb8d))
+* **paper:** harden approval guardrails and launch checks ([ba036c2](https://github.com/ricardogr07/market-lab/commit/ba036c277ec7a4239bf59ce868c5a3f758572d6d))
+* **paper:** hold existing longs on repeat signals ([0265f07](https://github.com/ricardogr07/market-lab/commit/0265f079a54e84fd006297528d766e7852e88d5d))
+* **paper:** narrow approval guardrail overrides ([6d5129a](https://github.com/ricardogr07/market-lab/commit/6d5129a3b499ce74c5caf958b644da25eec1d4dd))
+* **paper:** preserve once-loop failure exits ([c49ad61](https://github.com/ricardogr07/market-lab/commit/c49ad6181d10cafb0abfe910fc9c54d9881e832e))
+* **paper:** reconcile broker terminal status and preserve retry recovery ([1002823](https://github.com/ricardogr07/market-lab/commit/1002823036360fd352f8e16a00122093ba060afb))
+* **paper:** size long paper entries with notional-safe buys ([16f9571](https://github.com/ricardogr07/market-lab/commit/16f95713aac75da5b63e594b039a8e7648cbc495))
+* **paper:** tighten submit side selection and reconciliation target ([cc586f6](https://github.com/ricardogr07/market-lab/commit/cc586f616ee081ebef9c7b6a0402449ec7974f24))
+* **paper:** tolerate missing evidence for existing proposals ([436ab8c](https://github.com/ricardogr07/market-lab/commit/436ab8c8e737564c592e2980b464894f50c148ff))
+* **paper:** use signed exposure for long submit sizing ([10aa5dd](https://github.com/ricardogr07/market-lab/commit/10aa5ddbe2db9d895b9591228cc930105c783985))
+* **reports:** respect configured annualization ([#91](https://github.com/ricardogr07/market-lab/issues/91)) ([99fb7bc](https://github.com/ricardogr07/market-lab/commit/99fb7bc29f9c58e03bea9e0679235c1be109ff73))
+
+
+### Performance Improvements
+
+* **models:** parallelize tree classifiers ([#94](https://github.com/ricardogr07/market-lab/issues/94)) ([337484b](https://github.com/ricardogr07/market-lab/commit/337484b5d8905470655f7d53204aca964700a378))
+
+
+### Documentation
+
+* align docs with current codebase ([#99](https://github.com/ricardogr07/market-lab/issues/99)) ([d945dc2](https://github.com/ricardogr07/market-lab/commit/d945dc23c5c1e716131323c82d29e4df9fda03a5))
+* **architecture:** add cloud migration and solid audit plans ([78b712f](https://github.com/ricardogr07/market-lab/commit/78b712f4b7b3e6265358b367d1ff7fc8dfd48d63))
+* **crypto:** document phase 8 research plan ([#96](https://github.com/ricardogr07/market-lab/issues/96)) ([b730924](https://github.com/ricardogr07/market-lab/commit/b730924046780f4e7707f3131f5a19516d017e25))
+* **nav:** link architecture planning documents ([c8c9324](https://github.com/ricardogr07/market-lab/commit/c8c9324fe2b64943b4e29b83248a7da0f0d71cee))
+* **paper:** document safe submit and broker reconciliation behavior ([e1c7257](https://github.com/ricardogr07/market-lab/commit/e1c725707ac27ce244e4c1f0fb76666ee732179d))
+* **phase9:** add P9-11 import runbook plan ([6c9930d](https://github.com/ricardogr07/market-lab/commit/6c9930dad393caef91f0fac51d091461dba2381e))
+* **phase9:** add P9-12 UAT validation plan ([63a70b0](https://github.com/ricardogr07/market-lab/commit/63a70b0a9e0ec541782f669651a566bfa9272c66))
+* **roadmap:** add tracked hardening phases 1 to 6 ([0635dd7](https://github.com/ricardogr07/market-lab/commit/0635dd74ea8acb544b9697b4222394b2d63b9440))
+
 ## [0.2.0](https://github.com/ricardogr07/market-lab/compare/marketlab-v0.1.0...marketlab-v0.2.0) (2026-04-10)
 
 
